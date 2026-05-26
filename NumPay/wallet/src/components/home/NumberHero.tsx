@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useMyNumber } from "@/hooks/useMyNumber";
 import {
   useGetAllMappings,
@@ -8,19 +8,38 @@ import {
   isValidBANPNumber,
   useRegisterNumber,
 } from "@/hooks/useBPANRegistry";
-import { useWallet } from "@/context/WalletContext";
-import { CopyIcon, QRIcon, ShareIcon, CheckIcon, ArrowUpRight, LinkIcon } from "../icons/Icon";
+import { CopyIcon, QRIcon, ShareIcon, CheckIcon, ArrowUpRight } from "../icons/Icon";
 import { BPANDisplay } from "../primitives/BPANDisplay";
-import { ChainStack } from "../primitives/Chain";
+import { ChainChip } from "../primitives/Chain";
 import { formatEther } from "viem";
+
+// Maps BPAN chain name strings to ChainChip display IDs
+function toChipId(name: string): string {
+  const map: Record<string, string> = {
+    ethereum: "eth", polygon: "poly", arbitrum: "arb",
+    optimism: "opt", base: "base", avalanche: "avax",
+    solana: "sol", bitcoin: "btc", sui: "sui",
+    tron: "tron", xrp: "xrp", litecoin: "ltc",
+    bnb: "bnb", "polygon-zkevm": "zkevm",
+  };
+  return map[name] ?? name;
+}
 
 export function NumberHero({ onShowQR }: { onShowQR: () => void }) {
   const { number, parsed, isRegistered, isOwnedByMe } = useMyNumber();
-  const { address } = useWallet();
   const { data: mappingsData } = useGetAllMappings(parsed);
   const [copied, setCopied] = useState<"bpan" | "addr" | null>(null);
+  const [selectedChain, setSelectedChain] = useState<string | "all">("all");
 
   const chains = (mappingsData?.[0] as readonly string[] | undefined) ?? [];
+  const wallets = (mappingsData?.[1] as readonly string[] | undefined) ?? [];
+
+  const chainWalletMap = useMemo(
+    () => Object.fromEntries(chains.map((c, i) => [c, wallets[i] ?? ""])),
+    [chains, wallets],
+  );
+
+  const selectedWallet = selectedChain !== "all" ? (chainWalletMap[selectedChain] ?? "") : "";
 
   // Show the claim/link card only when nothing is linked locally. If a number
   // is already linked on this device, always show the BPAN hero — the on-chain
@@ -43,8 +62,8 @@ export function NumberHero({ onShowQR }: { onShowQR: () => void }) {
   };
 
   const copyAddr = async () => {
-    if (!address) return;
-    await navigator.clipboard.writeText(address);
+    if (!selectedWallet) return;
+    await navigator.clipboard.writeText(selectedWallet);
     setCopied("addr");
     setTimeout(() => setCopied(null), 1400);
   };
@@ -56,13 +75,6 @@ export function NumberHero({ onShowQR }: { onShowQR: () => void }) {
       copyBpan();
     }
   };
-
-  // Map chain count to a representative stack of chain ids (visual only)
-  const chainIds = ["eth", "arb", "base", "opt", "poly", "sol", "btc", "avax"].slice(
-    0,
-    Math.min(8, Math.max(chains.length, 5)),
-  );
-  const extra = Math.max(0, chains.length - 5);
 
   return (
     <div className="bpan-hero p-7">
@@ -81,26 +93,65 @@ export function NumberHero({ onShowQR }: { onShowQR: () => void }) {
           <div className="mt-4">
             <BPANDisplay digits={number} size={48} gap={18} />
           </div>
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <ChainStack ids={chainIds} extra={extra} size={20} />
-            <span className="text-[13px]" style={{ color: "var(--muted)" }}>
-              Mapped to{" "}
-              <b className="font-semibold" style={{ color: "var(--text)" }}>
-                {chains.length} {chains.length === 1 ? "chain" : "chains"}
-              </b>
-            </span>
+
+          {/* Chain toggle — sits directly below the BPAN number */}
+          <div className="mt-4">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => setSelectedChain("all")}
+                className="inline-flex items-center rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors"
+                style={{
+                  background: selectedChain === "all" ? "var(--brand)" : "rgba(42,36,80,.5)",
+                  color: selectedChain === "all" ? "white" : "var(--muted)",
+                  border: "1px solid",
+                  borderColor: selectedChain === "all" ? "var(--brand)" : "var(--border)",
+                }}
+              >
+                All
+              </button>
+              {chains.map((chain) => (
+                <button
+                  key={chain}
+                  onClick={() => setSelectedChain(chain)}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-medium transition-colors"
+                  style={{
+                    background: selectedChain === chain ? "var(--brand)" : "rgba(42,36,80,.5)",
+                    color: selectedChain === chain ? "white" : "var(--muted)",
+                    border: "1px solid",
+                    borderColor: selectedChain === chain ? "var(--brand)" : "var(--border)",
+                  }}
+                >
+                  <ChainChip id={toChipId(chain)} size={14} />
+                  <span className="capitalize">{chain}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Address shown only when a specific chain is selected */}
+            {selectedChain !== "all" && selectedWallet && (
+              <div className="mt-2.5 flex items-center gap-2">
+                <span className="mono text-[12px]" style={{ color: "var(--muted)" }}>
+                  {selectedWallet.length > 16
+                    ? `${selectedWallet.slice(0, 8)}…${selectedWallet.slice(-6)}`
+                    : selectedWallet}
+                </span>
+                <button
+                  onClick={copyAddr}
+                  title="Copy address"
+                  className="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] transition-opacity hover:opacity-70"
+                  style={{ color: "var(--muted-2)" }}
+                >
+                  {copied === "addr" ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                </button>
+              </div>
+            )}
           </div>
         </div>
+
         <div className="flex flex-shrink-0 flex-wrap justify-end gap-1.5">
           <HeroBtn onClick={copyBpan} title="Copy BPAN">
             {copied === "bpan" ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
             <span className="hidden sm:inline">{copied === "bpan" ? "Copied" : "Copy BPAN"}</span>
-          </HeroBtn>
-          <HeroBtn onClick={copyAddr} title="Copy wallet address">
-            {copied === "addr" ? <CheckIcon size={14} /> : <LinkIcon size={14} />}
-            <span className="hidden sm:inline">
-              {copied === "addr" ? "Copied" : "Copy address"}
-            </span>
           </HeroBtn>
           <HeroBtn onClick={onShowQR} title="Show QR">
             <QRIcon size={14} />

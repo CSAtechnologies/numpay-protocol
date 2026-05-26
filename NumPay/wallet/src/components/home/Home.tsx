@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useWallet } from "@/context/WalletContext";
 import { NumberHero } from "./NumberHero";
 import { BalanceCard } from "./BalanceCard";
 import { ActionGrid } from "./ActionGrid";
@@ -17,7 +16,6 @@ interface Props {
 }
 
 export function Home({ onSend }: Props) {
-  const { address } = useWallet();
   const [qrOpen, setQrOpen] = useState(false);
 
   return (
@@ -26,11 +24,6 @@ export function Home({ onSend }: Props) {
         <div>
           <div className="text-[13px]" style={{ color: "var(--muted)" }}>
             Welcome back
-            {address && (
-              <span className="mono ml-1.5" style={{ color: "var(--muted-2)" }}>
-                ({address.slice(0, 6)}…{address.slice(-4)})
-              </span>
-            )}
           </div>
           <h1 className="mt-1 text-[22px] font-semibold tracking-tight">Your money, anywhere.</h1>
         </div>
