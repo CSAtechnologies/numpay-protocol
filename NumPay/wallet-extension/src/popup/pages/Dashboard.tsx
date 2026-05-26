@@ -550,45 +550,8 @@ export default function Dashboard({ onLock }: Props) {
           )}
         </div>
 
-        {/* Address + BPAN pills */}
+        {/* Chain toggle + BPAN pill — single row, address removed */}
         <div className="flex items-center justify-center gap-2 mb-4">
-          <button
-            onClick={() => displayAddr && handleCopy(displayAddr, "addr")}
-            className="pill"
-            style={{ fontSize: 11, padding: "5px 11px" }}
-          >
-            <span className="font-mono">{shortAddr}</span>
-            {copied === "addr"
-              ? <CheckIcon size={10} className="text-accent-green" />
-              : <CopyIcon size={10} />}
-          </button>
-
-          {bpanFormatted ? (
-            <button
-              onClick={() => bpan && handleCopy(bpan, "bpan")}
-              className="pill pill-brand"
-              style={{ fontSize: 11, padding: "5px 11px" }}
-            >
-              <HashIcon size={9} />
-              <span className="font-mono">{bpanFormatted}</span>
-              {copied === "bpan"
-                ? <CheckIcon size={10} className="text-accent-green" />
-                : <CopyIcon size={10} />}
-            </button>
-          ) : (
-            <button
-              onClick={() => navigate("/bpan")}
-              className="pill"
-              style={{ fontSize: 11, padding: "5px 11px", borderStyle: "dashed" }}
-            >
-              <HashIcon size={9} />
-              <span>Get BPAN</span>
-            </button>
-          )}
-        </div>
-
-        {/* Network / filter selector */}
-        <div className="flex justify-center mb-4">
           <button
             onClick={() => { setShowNetworks(!showNetworks); setShowAddWallet(false); }}
             className="pill"
@@ -616,6 +579,29 @@ export default function Dashboard({ onLock }: Props) {
               className={`text-muted transition-transform duration-200 ${showNetworks ? "rotate-180" : ""}`}
             />
           </button>
+
+          {bpanFormatted ? (
+            <button
+              onClick={() => bpan && handleCopy(bpan, "bpan")}
+              className="pill pill-brand"
+              style={{ fontSize: 11, padding: "5px 11px" }}
+            >
+              <HashIcon size={9} />
+              <span className="font-mono">{bpanFormatted}</span>
+              {copied === "bpan"
+                ? <CheckIcon size={10} className="text-accent-green" />
+                : <CopyIcon size={10} />}
+            </button>
+          ) : (
+            <button
+              onClick={() => navigate("/bpan")}
+              className="pill"
+              style={{ fontSize: 11, padding: "5px 11px", borderStyle: "dashed" }}
+            >
+              <HashIcon size={9} />
+              <span>Get BPAN</span>
+            </button>
+          )}
         </div>
 
         {/* Network / filter dropdown */}
