@@ -1,0 +1,39 @@
+name: Contracts CI
+
+on:
+  push:
+    branches: [main]
+    paths: [contracts/**]
+  pull_request:
+    branches: [main]
+    paths: [contracts/**]
+
+jobs:
+  test:
+    name: Compile & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: contracts/package-lock.json
+
+      - name: Install dependencies
+        working-directory: contracts
+        run: npm install
+
+      - name: Compile contracts
+        working-directory: contracts
+        run: npx hardhat compile
+
+      - name: Run tests
+        working-directory: contracts
+        run: npx hardhat test
+
+      - name: Check contract sizes
+        working-directory: contracts
+        run: npx hardhat compile --force

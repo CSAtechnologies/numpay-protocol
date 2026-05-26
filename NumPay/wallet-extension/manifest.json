@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "NumPay",
+  "version": "0.1.0",
+  "description": "Multi-chain crypto wallet with BPAN support. Send crypto using simple account numbers.",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": ["https://*/*"],
+  "action": {
+    "default_popup": "index.html",
+    "default_icon": "logo.png"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "icons": {
+    "128": "logo.png"
+  }
+}

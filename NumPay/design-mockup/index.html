@@ -1,0 +1,1239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>NumPay — Redesign Mockup</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:         #0a0912;
+    --bg-2:       #110f1e;
+    --card:       #181530;
+    --card-2:     #201b3d;
+    --border:     #2a2450;
+    --border-2:   #3a3268;
+    --text:       #f2f0ff;
+    --muted:      #8a83b8;
+    --muted-2:    #6b6590;
+    --brand:      #7c6df0;
+    --brand-2:    #a394ff;
+    --brand-glow: rgba(124,109,240,.35);
+    --success:    #34d399;
+    --amber:      #fbbf24;
+    --danger:     #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background:
+      radial-gradient(1200px 600px at 10% -10%, rgba(124,109,240,.15), transparent 60%),
+      radial-gradient(900px 500px at 100% 20%, rgba(163,148,255,.08), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: 'Geist', system-ui, -apple-system, sans-serif;
+    font-feature-settings: "ss01","cv11";
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: 'Geist Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+  /* ====== Page shell ====== */
+  .page {
+    max-width: 1480px;
+    margin: 0 auto;
+    padding: 40px 32px 80px;
+  }
+  .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 32px; }
+  .page-title { font-size: 14px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+  .page-title b { color: var(--text); letter-spacing: 0; text-transform: none; font-size: 18px; margin-right: 10px; }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); }
+  .legend span::before {
+    content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--brand); margin-right: 6px; vertical-align: middle;
+  }
+
+  .showcase {
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    gap: 32px;
+    align-items: start;
+  }
+  @media (max-width: 1100px) {
+    .showcase { grid-template-columns: 1fr; }
+  }
+
+  .frame-label {
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--muted-2); margin-bottom: 10px;
+  }
+
+  /* ====== Device frames ====== */
+  .desktop-frame {
+    background: linear-gradient(180deg, #16132b 0%, #0f0d1f 100%);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 40px 120px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.02) inset;
+  }
+  .desktop-chrome {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 14px;
+    background: #0c0a1a;
+    border-bottom: 1px solid var(--border);
+  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .dot.r { background: #ff5f57; } .dot.y { background: #febc2e; } .dot.g { background: #28c840; }
+  .addr {
+    margin-left: 14px; background: #1a1730; border-radius: 6px;
+    padding: 4px 10px; font-size: 12px; color: var(--muted);
+  }
+  .addr b { color: var(--text); font-weight: 500; }
+
+  .phone-frame {
+    width: 390px;
+    background: #05040c;
+    border-radius: 44px;
+    padding: 14px;
+    border: 1px solid #1f1b38;
+    box-shadow: 0 40px 100px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.03) inset;
+    margin: 0 auto;
+  }
+  .phone-inner {
+    background: var(--bg);
+    border-radius: 32px;
+    overflow: hidden;
+    height: 820px;
+    position: relative;
+  }
+  .notch {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    width: 110px; height: 28px; background: #05040c; border-radius: 999px;
+    z-index: 20;
+  }
+  .statusbar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 28px 6px; font-size: 13px; font-weight: 600;
+    position: relative; z-index: 10;
+  }
+  .statusbar-icons { display: flex; gap: 6px; align-items: center; font-size: 11px; }
+
+  /* ====== App header ====== */
+  .app-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 20px;
+    border-bottom: 1px solid rgba(42,36,80,.5);
+  }
+  .logo { display: flex; align-items: center; gap: 10px; }
+  .logo-mark {
+    width: 32px; height: 32px; border-radius: 10px;
+    background: linear-gradient(135deg, #a394ff 0%, #7c6df0 50%, #5b4cdb 100%);
+    display: grid; place-items: center;
+    font-weight: 700; font-size: 15px; color: white;
+    box-shadow: 0 6px 20px var(--brand-glow);
+  }
+  .logo-text { font-weight: 700; font-size: 17px; letter-spacing: -.02em; }
+  .header-actions { display: flex; gap: 8px; align-items: center; }
+  .icon-btn {
+    width: 36px; height: 36px; border-radius: 10px;
+    background: var(--card); border: 1px solid var(--border);
+    display: grid; place-items: center; color: var(--muted);
+    cursor: pointer; transition: all .15s;
+  }
+  .icon-btn:hover { color: var(--text); border-color: var(--border-2); }
+  .wallet-pill {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 12px 7px 7px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 999px; font-size: 13px;
+  }
+  .wallet-pill .ava {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: linear-gradient(135deg,#ff8fb4,#7c6df0);
+  }
+
+  /* ====== Desktop grid ====== */
+  .desktop-body {
+    display: grid;
+    grid-template-columns: 240px 1fr 340px;
+    min-height: 680px;
+  }
+  .sidebar {
+    border-right: 1px solid rgba(42,36,80,.5);
+    padding: 20px 14px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px; border-radius: 10px;
+    color: var(--muted); font-size: 14px; font-weight: 500;
+    cursor: pointer; transition: all .15s;
+  }
+  .nav-item:hover { background: rgba(42,36,80,.4); color: var(--text); }
+  .nav-item.active {
+    background: linear-gradient(90deg, rgba(124,109,240,.2), rgba(124,109,240,.04));
+    color: var(--text);
+    box-shadow: inset 2px 0 0 var(--brand);
+  }
+  .nav-item .ic { width: 18px; height: 18px; opacity: .9; }
+  .nav-section {
+    font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted-2); padding: 16px 12px 6px;
+  }
+  .nav-badge {
+    margin-left: auto; font-size: 11px;
+    background: var(--brand); color: white;
+    padding: 2px 7px; border-radius: 999px;
+  }
+
+  .main {
+    padding: 28px 32px;
+    overflow-y: auto;
+  }
+
+  .greeting { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  .greeting b { color: var(--text); font-weight: 600; }
+
+  /* ====== Number hero ====== */
+  .number-hero {
+    position: relative;
+    background:
+      radial-gradient(600px 200px at 0% 0%, rgba(124,109,240,.25), transparent 60%),
+      radial-gradient(400px 200px at 100% 100%, rgba(163,148,255,.15), transparent 60%),
+      linear-gradient(135deg, #1d1840 0%, #15122d 100%);
+    border: 1px solid var(--border-2);
+    border-radius: 20px;
+    padding: 24px;
+    margin-top: 16px;
+    overflow: hidden;
+  }
+  .number-hero::before {
+    content: ""; position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(124,109,240,.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(124,109,240,.04) 1px, transparent 1px);
+    background-size: 24px 24px;
+    mask: linear-gradient(180deg, black, transparent 70%);
+    pointer-events: none;
+  }
+  .nh-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; position: relative; }
+  .nh-label {
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--brand-2); font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .nh-label::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--success); box-shadow: 0 0 8px var(--success);
+  }
+  .nh-actions { display: flex; gap: 6px; }
+  .chip {
+    font-size: 12px; padding: 6px 10px; border-radius: 8px;
+    background: rgba(42,36,80,.6); border: 1px solid var(--border);
+    color: var(--muted); cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .chip:hover { color: var(--text); border-color: var(--brand); }
+
+  .number-display {
+    font-family: 'Geist Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    font-size: 42px;
+    letter-spacing: .02em;
+    background: linear-gradient(180deg, #ffffff 0%, #b8acff 100%);
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+    display: flex; gap: 14px;
+    position: relative;
+  }
+  .number-display span { display: inline-block; }
+  .number-sub {
+    margin-top: 10px; font-size: 13px; color: var(--muted);
+    display: flex; align-items: center; gap: 10px;
+    position: relative;
+  }
+  .number-sub b { color: var(--text); font-weight: 500; }
+
+  /* ====== Balance row ====== */
+  .balance-row {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+    margin-top: 14px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px;
+    transition: border-color .15s;
+  }
+  .card:hover { border-color: var(--border-2); }
+  .card-label {
+    font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--muted-2); margin-bottom: 8px;
+  }
+  .balance-value {
+    font-size: 30px; font-weight: 700; letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .balance-value .cents { color: var(--muted); font-weight: 600; }
+  .balance-change {
+    font-size: 12px; color: var(--success); font-weight: 500; margin-top: 4px;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .tokens { display: flex; flex-direction: column; gap: 10px; }
+  .token {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13px;
+  }
+  .token-ic {
+    width: 26px; height: 26px; border-radius: 50%;
+    display: grid; place-items: center; font-weight: 700; font-size: 11px;
+    color: white;
+  }
+  .token-ic.usdc { background: linear-gradient(135deg,#2775ca,#1e5a9e); }
+  .token-ic.eth  { background: linear-gradient(135deg,#627eea,#3c5bd4); }
+  .token-ic.dai  { background: linear-gradient(135deg,#f4b731,#c8921a); }
+  .token .amt { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .token .amt b { color: var(--text); font-weight: 500; }
+
+  /* ====== Action grid ====== */
+  .actions {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+    margin-top: 18px;
+  }
+  .action {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px; cursor: pointer;
+    transition: all .15s;
+    position: relative; overflow: hidden;
+  }
+  .action:hover { border-color: var(--brand); transform: translateY(-2px); }
+  .action.primary {
+    background: linear-gradient(135deg, #7c6df0 0%, #5b4cdb 100%);
+    border-color: transparent;
+    box-shadow: 0 8px 24px var(--brand-glow);
+  }
+  .action-ic {
+    width: 38px; height: 38px; border-radius: 10px;
+    background: rgba(124,109,240,.15); color: var(--brand-2);
+    display: grid; place-items: center; margin-bottom: 10px;
+  }
+  .action.primary .action-ic { background: rgba(255,255,255,.18); color: white; }
+  .action-title { font-size: 14px; font-weight: 600; }
+  .action-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .action.primary .action-sub { color: rgba(255,255,255,.75); }
+
+  /* ====== Activity feed ====== */
+  .section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin: 24px 0 10px;
+  }
+  .section-title { font-size: 15px; font-weight: 600; }
+  .section-link { font-size: 13px; color: var(--brand-2); cursor: pointer; }
+
+  .activity {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 16px; overflow: hidden;
+  }
+  .act-row {
+    display: grid; grid-template-columns: 38px 1fr auto auto;
+    gap: 14px; align-items: center;
+    padding: 14px 18px;
+    border-bottom: 1px solid rgba(42,36,80,.5);
+  }
+  .act-row:last-child { border-bottom: 0; }
+  .act-ic {
+    width: 38px; height: 38px; border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 15px;
+  }
+  .act-ic.in  { background: rgba(52,211,153,.12); color: var(--success); }
+  .act-ic.out { background: rgba(248,113,113,.12); color: var(--danger); }
+  .act-ic.sys { background: rgba(251,191,36,.12); color: var(--amber); }
+  .act-main .t { font-size: 14px; font-weight: 500; }
+  .act-main .s { font-size: 12px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .act-amount { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; font-size: 14px; }
+  .act-amount.in  { color: var(--success); }
+  .act-amount.out { color: var(--text); }
+  .act-amount .sub { font-size: 11px; color: var(--muted); font-weight: 400; display: block; margin-top: 2px; }
+  .act-time { font-size: 12px; color: var(--muted-2); }
+
+  /* ====== Right rail ====== */
+  .rail {
+    border-left: 1px solid rgba(42,36,80,.5);
+    padding: 28px 22px;
+    display: flex; flex-direction: column; gap: 20px;
+  }
+  .rail-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px;
+  }
+  .rail-card h4 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .contact {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0;
+  }
+  .contact .ava {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: linear-gradient(135deg,#ffa8c5,#7c6df0);
+    display: grid; place-items: center; font-size: 13px; font-weight: 600;
+  }
+  .contact .ava.b { background: linear-gradient(135deg,#34d399,#0ea5e9); }
+  .contact .ava.c { background: linear-gradient(135deg,#fbbf24,#f472b6); }
+  .contact .n { font-size: 13px; font-weight: 500; }
+  .contact .num { font-size: 11px; color: var(--muted); font-family: 'Geist Mono', monospace; }
+  .contact .send {
+    margin-left: auto; width: 28px; height: 28px; border-radius: 8px;
+    background: rgba(124,109,240,.15); color: var(--brand-2);
+    display: grid; place-items: center; cursor: pointer;
+  }
+
+  .qr-card { text-align: center; }
+  .qr {
+    width: 160px; height: 160px; margin: 6px auto 10px;
+    background:
+      conic-gradient(from 0deg at 50% 50%, #ffffff 0 25%, #ffffff 0 50%, #ffffff 0 75%, #ffffff 0 100%);
+    background-color: white;
+    border-radius: 12px;
+    display: grid; place-items: center;
+    position: relative;
+    /* fake QR pattern */
+    background-image:
+      radial-gradient(circle at 16px 16px, #0a0912 0 6px, transparent 7px),
+      radial-gradient(circle at 144px 16px, #0a0912 0 6px, transparent 7px),
+      radial-gradient(circle at 16px 144px, #0a0912 0 6px, transparent 7px),
+      repeating-conic-gradient(#0a0912 0 25%, white 0 50%);
+    background-size: auto, auto, auto, 10px 10px;
+    background-repeat: no-repeat, no-repeat, no-repeat, repeat;
+    background-position: 0 0, 0 0, 0 0, 30px 30px;
+  }
+  .qr::after {
+    content: ""; position: absolute; inset: 50% auto auto 50%;
+    transform: translate(-50%,-50%);
+    width: 38px; height: 38px; border-radius: 10px;
+    background: linear-gradient(135deg,#a394ff,#5b4cdb);
+    box-shadow: 0 0 0 4px white;
+  }
+  .qr-card .sub { font-size: 12px; color: var(--muted); }
+
+  /* ====== Mobile ====== */
+  .m-body { padding: 14px 18px 100px; overflow-y: auto; height: calc(100% - 66px - 34px); }
+  .m-greeting { font-size: 13px; color: var(--muted); margin-bottom: 2px; }
+  .m-greeting b { color: var(--text); font-weight: 600; }
+
+  .m-hero {
+    background:
+      radial-gradient(400px 160px at 0% 0%, rgba(124,109,240,.3), transparent 60%),
+      radial-gradient(300px 160px at 100% 100%, rgba(163,148,255,.18), transparent 60%),
+      linear-gradient(135deg, #1d1840 0%, #15122d 100%);
+    border: 1px solid var(--border-2);
+    border-radius: 20px;
+    padding: 18px;
+    margin-top: 10px;
+    position: relative; overflow: hidden;
+  }
+  .m-hero::before {
+    content: ""; position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(124,109,240,.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(124,109,240,.05) 1px, transparent 1px);
+    background-size: 20px 20px;
+    mask: linear-gradient(180deg, black, transparent 70%);
+    pointer-events: none;
+  }
+  .m-number {
+    font-family: 'Geist Mono', monospace; font-variant-numeric: tabular-nums;
+    font-weight: 700; font-size: 28px; letter-spacing: .01em;
+    background: linear-gradient(180deg, #fff 0%, #b8acff 100%);
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+    display: flex; gap: 10px; margin-top: 10px;
+    position: relative;
+  }
+  .m-balance-card {
+    margin-top: 12px; padding: 18px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 18px;
+  }
+  .m-balance-val { font-size: 32px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .m-balance-val .cents { color: var(--muted); }
+
+  .m-actions {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+    margin-top: 14px;
+  }
+  .m-action {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; padding: 12px 8px;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    cursor: pointer;
+  }
+  .m-action .ic {
+    width: 36px; height: 36px; border-radius: 10px;
+    background: rgba(124,109,240,.15); color: var(--brand-2);
+    display: grid; place-items: center;
+  }
+  .m-action.primary .ic { background: var(--brand); color: white; box-shadow: 0 6px 16px var(--brand-glow); }
+  .m-action .lbl { font-size: 12px; font-weight: 500; }
+
+  .m-activity { margin-top: 18px; }
+  .m-act-row {
+    display: grid; grid-template-columns: 36px 1fr auto;
+    gap: 12px; align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(42,36,80,.5);
+  }
+  .m-act-row:last-child { border-bottom: 0; }
+  .m-act-ic { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-size: 14px; }
+  .m-act-ic.in  { background: rgba(52,211,153,.12); color: var(--success); }
+  .m-act-ic.out { background: rgba(248,113,113,.12); color: var(--danger); }
+  .m-act-ic.sys { background: rgba(251,191,36,.12); color: var(--amber); }
+  .m-act-t { font-size: 14px; font-weight: 500; }
+  .m-act-s { font-size: 11px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .m-act-amt { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+  .m-act-amt.in { color: var(--success); }
+  .m-act-amt .sub { font-size: 11px; color: var(--muted-2); font-weight: 400; display: block; margin-top: 2px; }
+
+  /* ====== Mobile tab bar ====== */
+  .m-tabbar {
+    position: absolute; left: 14px; right: 14px; bottom: 16px;
+    background: rgba(17,15,30,.85);
+    backdrop-filter: blur(18px);
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    display: grid; grid-template-columns: 1fr 1fr 64px 1fr 1fr;
+    padding: 8px; gap: 2px;
+    z-index: 5;
+  }
+  .m-tab {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 8px 0;
+    color: var(--muted-2); font-size: 10px; font-weight: 500;
+    cursor: pointer;
+  }
+  .m-tab.active { color: var(--brand-2); }
+  .m-tab.fab {
+    background: linear-gradient(135deg, #a394ff 0%, #7c6df0 50%, #5b4cdb 100%);
+    color: white;
+    border-radius: 18px;
+    box-shadow: 0 8px 24px var(--brand-glow);
+    margin: -14px 2px 0;
+    padding: 14px 0 8px;
+  }
+  .m-tab.fab .lbl { font-weight: 600; }
+
+  /* ====== Send sheet (desktop modal overlay sample) ====== */
+  .notes-block {
+    margin-top: 48px;
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;
+  }
+  @media (max-width: 900px) { .notes-block { grid-template-columns: 1fr; } }
+  .note {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 18px;
+  }
+  .note h5 { margin: 0 0 6px; font-size: 13px; color: var(--brand-2); letter-spacing: .08em; text-transform: uppercase; font-weight: 600; }
+  .note p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .note p b { color: var(--text); font-weight: 500; }
+
+  /* ====== Secondary screen: Send sheet ====== */
+  .showcase-2 { margin-top: 56px; display: grid; grid-template-columns: 1fr 400px; gap: 32px; align-items: start; }
+  @media (max-width: 1100px) { .showcase-2 { grid-template-columns: 1fr; } }
+
+  .send-sheet {
+    background: linear-gradient(180deg, #16132b 0%, #0f0d1f 100%);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    overflow: hidden;
+  }
+  .sheet-head {
+    padding: 18px 22px; border-bottom: 1px solid rgba(42,36,80,.5);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .sheet-title { font-size: 16px; font-weight: 600; }
+  .sheet-steps { display: flex; gap: 6px; }
+  .step-dot { width: 22px; height: 4px; border-radius: 2px; background: var(--border); }
+  .step-dot.active { background: var(--brand); }
+  .step-dot.done   { background: var(--success); }
+
+  .sheet-body { padding: 26px 32px; display: grid; grid-template-columns: 1fr 320px; gap: 28px; }
+  .recipient-input {
+    background: var(--card-2); border: 1px solid var(--border-2);
+    border-radius: 14px; padding: 18px;
+  }
+  .recipient-input label {
+    font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600;
+  }
+  .recipient-number {
+    font-family: 'Geist Mono', monospace; font-variant-numeric: tabular-nums;
+    font-weight: 700; font-size: 32px; margin-top: 10px;
+    color: var(--text);
+    display: flex; align-items: baseline; gap: 10px;
+    letter-spacing: .02em;
+  }
+  .recipient-number .cursor {
+    display: inline-block; width: 2px; height: 28px;
+    background: var(--brand);
+    animation: blink 1s infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .resolved {
+    margin-top: 14px; padding: 14px;
+    background: rgba(52,211,153,.08);
+    border: 1px solid rgba(52,211,153,.3);
+    border-radius: 12px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .resolved .ava {
+    width: 44px; height: 44px; border-radius: 50%;
+    background: linear-gradient(135deg,#34d399,#0ea5e9);
+    display: grid; place-items: center; font-weight: 700;
+  }
+  .resolved .n { font-size: 15px; font-weight: 600; }
+  .resolved .s { font-size: 12px; color: var(--muted); font-family: 'Geist Mono', monospace; margin-top: 2px; }
+  .resolved .check { margin-left: auto; color: var(--success); font-size: 20px; }
+
+  .amount-input {
+    text-align: center;
+    padding: 20px;
+    background: var(--card-2); border: 1px solid var(--border-2);
+    border-radius: 14px;
+  }
+  .amount-value {
+    font-family: 'Geist Mono', monospace;
+    font-size: 52px; font-weight: 700; letter-spacing: -.02em;
+    background: linear-gradient(180deg,#fff 0%, #b8acff 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    font-variant-numeric: tabular-nums;
+  }
+  .amount-value .dim { color: var(--muted); -webkit-text-fill-color: var(--muted); }
+  .amount-sub { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+  .token-picker {
+    margin-top: 14px; display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+  .token-picker .amt { margin-left: auto; text-align: right; font-size: 12px; color: var(--muted); }
+  .token-picker .amt b { color: var(--text); font-weight: 500; }
+
+  .send-cta {
+    margin-top: 18px;
+    background: linear-gradient(135deg,#7c6df0 0%, #5b4cdb 100%);
+    color: white; border: 0; border-radius: 14px;
+    padding: 16px; font-size: 15px; font-weight: 600;
+    width: 100%; cursor: pointer;
+    box-shadow: 0 10px 28px var(--brand-glow);
+  }
+  .send-cta .hint { display: block; font-size: 11px; font-weight: 400; opacity: .8; margin-top: 2px; }
+
+  .tx-summary { display: flex; flex-direction: column; gap: 10px; }
+  .tx-row {
+    display: flex; justify-content: space-between; font-size: 13px;
+    padding: 8px 0; border-bottom: 1px dashed rgba(42,36,80,.7);
+  }
+  .tx-row:last-child { border-bottom: 0; }
+  .tx-row .k { color: var(--muted); }
+  .tx-row .v { font-variant-numeric: tabular-nums; }
+  .tx-row.total .k { color: var(--text); font-weight: 600; }
+  .tx-row.total .v { color: var(--text); font-weight: 700; }
+
+  /* icons */
+  svg { display: block; }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <div class="page-header">
+    <div class="page-title"><b>NumPay</b> Redesign preview · v1</div>
+    <div class="legend">
+      <span>Brand #7C6DF0</span>
+      <span style="--brand: #34d399">Success #34D399</span>
+      <span style="--brand: #fbbf24">Pending #FBBF24</span>
+    </div>
+  </div>
+
+  <!-- ========== HOME / DASHBOARD ========== -->
+  <div class="frame-label">1. Home — Dashboard</div>
+  <div class="showcase">
+
+    <!-- Desktop -->
+    <div class="desktop-frame">
+      <div class="desktop-chrome">
+        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="addr">numpay.app/<b>dashboard</b></span>
+      </div>
+      <div class="desktop-body">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+          <div class="logo" style="padding: 4px 8px 16px;">
+            <div class="logo-mark">N</div>
+            <div class="logo-text">NumPay</div>
+          </div>
+          <div class="nav-item active">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l2-2 7-7 7 7 2 2"/><path d="M5 10v10h14V10"/></svg>
+            Home
+          </div>
+          <div class="nav-item">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+            Send
+          </div>
+          <div class="nav-item">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>
+            Request
+          </div>
+          <div class="nav-item">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            Lookup
+          </div>
+          <div class="nav-item">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/></svg>
+            Activity
+            <span class="nav-badge">3</span>
+          </div>
+
+          <div class="nav-section">Account</div>
+          <div class="nav-item">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/></svg>
+            Profile
+          </div>
+          <div class="nav-item">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.65 1.65 0 004.6 15a1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 4.6a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09A1.65 1.65 0 0015 4.6a1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+            Settings
+          </div>
+        </aside>
+
+        <!-- Main -->
+        <section class="main">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <div>
+              <div class="greeting">Welcome back, <b>Jordan</b></div>
+              <div style="font-size:22px; font-weight:700; letter-spacing:-.02em;">Your money, anywhere.</div>
+            </div>
+            <div class="header-actions">
+              <div class="icon-btn">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0112 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 004 0"/></svg>
+              </div>
+              <div class="wallet-pill">
+                <div class="ava"></div>
+                <span class="mono" style="color:var(--muted)">0x3f8a…c2e4</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Number hero -->
+          <div class="number-hero">
+            <div class="nh-head">
+              <div class="nh-label">Your NumPay number · Active</div>
+              <div class="nh-actions">
+                <div class="chip">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h10"/></svg>
+                  Copy
+                </div>
+                <div class="chip">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3"/><path d="M21 14v3"/><path d="M14 21h3"/><path d="M21 17v4"/></svg>
+                  QR
+                </div>
+                <div class="chip">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><path d="M16 6l-4-4-4 4"/><path d="M12 2v13"/></svg>
+                  Share
+                </div>
+              </div>
+            </div>
+            <div class="number-display">
+              <span>204</span><span>817</span><span>365</span><span>41</span>
+            </div>
+            <div class="number-sub">
+              <span>Primary chain · <b>Base</b></span>
+              <span style="color:var(--muted-2)">•</span>
+              <span>Mapped to <b>3 chains</b></span>
+              <span style="color:var(--muted-2)">•</span>
+              <span>Claimed <b>Mar 2026</b></span>
+            </div>
+          </div>
+
+          <!-- Balance row -->
+          <div class="balance-row">
+            <div class="card">
+              <div class="card-label">Total Balance</div>
+              <div class="balance-value">$1,284<span class="cents">.50</span></div>
+              <div class="balance-change">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17l10-10"/><path d="M17 7H8v9"/></svg>
+                +2.1% today · +$26.40
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-label">Holdings</div>
+              <div class="tokens">
+                <div class="token">
+                  <div class="token-ic usdc">$</div>
+                  <span>USDC</span>
+                  <span class="amt"><b>1,040.50</b> · $1,040.50</span>
+                </div>
+                <div class="token">
+                  <div class="token-ic eth">Ξ</div>
+                  <span>ETH</span>
+                  <span class="amt"><b>0.0621</b> · $198.60</span>
+                </div>
+                <div class="token">
+                  <div class="token-ic dai">◈</div>
+                  <span>DAI</span>
+                  <span class="amt"><b>45.40</b> · $45.40</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div class="actions">
+            <div class="action primary">
+              <div class="action-ic">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+              </div>
+              <div class="action-title">Send</div>
+              <div class="action-sub">To any 11-digit number</div>
+            </div>
+            <div class="action">
+              <div class="action-ic">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>
+              </div>
+              <div class="action-title">Request</div>
+              <div class="action-sub">Share your number</div>
+            </div>
+            <div class="action">
+              <div class="action-ic">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+              </div>
+              <div class="action-title">Lookup</div>
+              <div class="action-sub">Check a number</div>
+            </div>
+            <div class="action">
+              <div class="action-ic">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>
+              </div>
+              <div class="action-title">Swap</div>
+              <div class="action-sub">Between tokens</div>
+            </div>
+          </div>
+
+          <!-- Activity -->
+          <div class="section-head">
+            <div class="section-title">Recent activity</div>
+            <div class="section-link">See all →</div>
+          </div>
+          <div class="activity">
+            <div class="act-row">
+              <div class="act-ic in">↓</div>
+              <div class="act-main">
+                <div class="t">Received from <b>Alice</b></div>
+                <div class="s">from 998 112 044 73 · Base</div>
+              </div>
+              <div class="act-amount in">+50.00 USDC
+                <span class="sub">≈ $50.00</span>
+              </div>
+              <div class="act-time">2m ago</div>
+            </div>
+            <div class="act-row">
+              <div class="act-ic out">↑</div>
+              <div class="act-main">
+                <div class="t">Sent to <b>204 771 009 18</b></div>
+                <div class="s">coffee · Base</div>
+              </div>
+              <div class="act-amount out">−12.00 USDC
+                <span class="sub">≈ $12.00</span>
+              </div>
+              <div class="act-time">1h ago</div>
+            </div>
+            <div class="act-row">
+              <div class="act-ic sys">⟳</div>
+              <div class="act-main">
+                <div class="t">Swap <b>ETH → USDC</b></div>
+                <div class="s">0.05 ETH · via 1inch</div>
+              </div>
+              <div class="act-amount out">+160.20 USDC
+                <span class="sub">rate 3,204</span>
+              </div>
+              <div class="act-time">yesterday</div>
+            </div>
+            <div class="act-row">
+              <div class="act-ic sys">✓</div>
+              <div class="act-main">
+                <div class="t">Number <b>204 817 365 41</b> claimed</div>
+                <div class="s">tx 0x8f…c31 · Base</div>
+              </div>
+              <div class="act-amount out" style="color:var(--muted)">—</div>
+              <div class="act-time">Mar 2</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Right rail -->
+        <aside class="rail">
+          <div class="rail-card qr-card">
+            <h4>Receive</h4>
+            <div class="qr"></div>
+            <div class="sub">Scan to pay <b class="mono" style="color:var(--text)">204 817 365 41</b></div>
+          </div>
+          <div class="rail-card">
+            <h4>Frequent</h4>
+            <div class="contact">
+              <div class="ava">A</div>
+              <div>
+                <div class="n">Alice</div>
+                <div class="num">998 112 044 73</div>
+              </div>
+              <div class="send">↑</div>
+            </div>
+            <div class="contact">
+              <div class="ava b">M</div>
+              <div>
+                <div class="n">Marco</div>
+                <div class="num">204 771 009 18</div>
+              </div>
+              <div class="send">↑</div>
+            </div>
+            <div class="contact">
+              <div class="ava c">S</div>
+              <div>
+                <div class="n">Sam</div>
+                <div class="num">553 408 192 60</div>
+              </div>
+              <div class="send">↑</div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <!-- Phone -->
+    <div>
+      <div class="phone-frame">
+        <div class="phone-inner">
+          <div class="notch"></div>
+          <div class="statusbar">
+            <span class="mono">9:41</span>
+            <div class="statusbar-icons">
+              <span>●●●●</span>
+              <svg width="14" height="10" viewBox="0 0 14 10" fill="currentColor"><path d="M2 0l3 5L2 10h10V0z"/></svg>
+              <svg width="18" height="10" viewBox="0 0 18 10" fill="none" stroke="currentColor"><rect x="0.5" y="1.5" width="14" height="7" rx="2"/><rect x="2" y="3" width="11" height="4" fill="currentColor"/><rect x="15.5" y="3.5" width="1.5" height="3"/></svg>
+            </div>
+          </div>
+
+          <div class="app-header" style="padding: 6px 18px 12px; border-bottom: 0;">
+            <div class="logo">
+              <div class="logo-mark" style="width:28px; height:28px; border-radius:9px; font-size:13px;">N</div>
+              <div class="logo-text" style="font-size:15px;">NumPay</div>
+            </div>
+            <div class="header-actions">
+              <div class="icon-btn" style="width:32px; height:32px;">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0112 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 004 0"/></svg>
+              </div>
+              <div class="icon-btn" style="width:32px; height:32px;">
+                <div class="ava" style="width:22px; height:22px; border-radius:50%; background:linear-gradient(135deg,#ff8fb4,#7c6df0);"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="m-body">
+            <div class="m-greeting">Welcome back, <b>Jordan</b></div>
+
+            <div class="m-hero">
+              <div class="nh-label" style="position:relative;">Your number · Active</div>
+              <div class="m-number">
+                <span>204</span><span>817</span><span>365</span><span>41</span>
+              </div>
+              <div class="number-sub" style="margin-top:8px; font-size:12px;">
+                <span>Base · <b>3 chains</b></span>
+                <span style="color:var(--muted-2)">•</span>
+                <span>Tap to copy</span>
+              </div>
+            </div>
+
+            <div class="m-balance-card">
+              <div class="card-label">Total Balance</div>
+              <div class="m-balance-val">$1,284<span class="cents">.50</span></div>
+              <div class="balance-change">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17l10-10"/><path d="M17 7H8v9"/></svg>
+                +2.1% today
+              </div>
+              <div class="tokens" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
+                <div class="token">
+                  <div class="token-ic usdc">$</div>
+                  <span>USDC</span>
+                  <span class="amt"><b>1,040.50</b></span>
+                </div>
+                <div class="token">
+                  <div class="token-ic eth">Ξ</div>
+                  <span>ETH</span>
+                  <span class="amt"><b>0.0621</b></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="m-actions">
+              <div class="m-action primary">
+                <div class="ic">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+                </div>
+                <div class="lbl">Send</div>
+              </div>
+              <div class="m-action">
+                <div class="ic">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>
+                </div>
+                <div class="lbl">Request</div>
+              </div>
+              <div class="m-action">
+                <div class="ic">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                </div>
+                <div class="lbl">QR</div>
+              </div>
+              <div class="m-action">
+                <div class="ic">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/></svg>
+                </div>
+                <div class="lbl">Swap</div>
+              </div>
+            </div>
+
+            <div class="m-activity">
+              <div class="section-head" style="margin:18px 0 2px">
+                <div class="section-title" style="font-size:14px;">Activity</div>
+                <div class="section-link" style="font-size:12px;">See all →</div>
+              </div>
+              <div class="m-act-row">
+                <div class="m-act-ic in">↓</div>
+                <div>
+                  <div class="m-act-t">Alice</div>
+                  <div class="m-act-s">998 112 044 73</div>
+                </div>
+                <div class="m-act-amt in">+50.00
+                  <span class="sub">USDC</span>
+                </div>
+              </div>
+              <div class="m-act-row">
+                <div class="m-act-ic out">↑</div>
+                <div>
+                  <div class="m-act-t">204 771 009 18</div>
+                  <div class="m-act-s">coffee</div>
+                </div>
+                <div class="m-act-amt">−12.00
+                  <span class="sub">USDC</span>
+                </div>
+              </div>
+              <div class="m-act-row">
+                <div class="m-act-ic sys">⟳</div>
+                <div>
+                  <div class="m-act-t">Swap ETH → USDC</div>
+                  <div class="m-act-s">via 1inch</div>
+                </div>
+                <div class="m-act-amt">+160.20
+                  <span class="sub">USDC</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tab bar -->
+          <div class="m-tabbar">
+            <div class="m-tab active">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l9-9 9 9"/><path d="M5 10v10h14V10"/></svg>
+              <span class="lbl">Home</span>
+            </div>
+            <div class="m-tab">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/></svg>
+              <span class="lbl">Activity</span>
+            </div>
+            <div class="m-tab fab">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+              <span class="lbl">Send</span>
+            </div>
+            <div class="m-tab">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+              <span class="lbl">Lookup</span>
+            </div>
+            <div class="m-tab">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/></svg>
+              <span class="lbl">Profile</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ========== SEND SHEET ========== -->
+  <div class="frame-label" style="margin-top:56px;">2. Send flow — live number resolution</div>
+  <div class="showcase-2">
+    <div class="send-sheet">
+      <div class="sheet-head">
+        <div class="sheet-title">Send payment</div>
+        <div class="sheet-steps">
+          <div class="step-dot done"></div>
+          <div class="step-dot active"></div>
+          <div class="step-dot"></div>
+        </div>
+      </div>
+      <div class="sheet-body">
+        <div>
+          <div class="recipient-input">
+            <label>Recipient number</label>
+            <div class="recipient-number">
+              <span>998</span><span>112</span><span>044</span><span>73</span>
+              <span class="cursor"></span>
+            </div>
+            <div class="resolved">
+              <div class="ava">A</div>
+              <div>
+                <div class="n">Alice Chen</div>
+                <div class="s">0x7b2f…c881 · Base, Optimism, Arbitrum</div>
+              </div>
+              <div class="check">✓</div>
+            </div>
+          </div>
+
+          <div class="amount-input" style="margin-top:18px;">
+            <div class="amount-value"><span class="dim">$</span>50<span class="dim">.00</span></div>
+            <div class="amount-sub">≈ 50.00 USDC · 1 USDC = $1.00</div>
+          </div>
+
+          <div class="token-picker">
+            <div class="token-ic usdc" style="width:30px; height:30px;">$</div>
+            <div>
+              <div style="font-weight:500; font-size:14px;">USDC on Base</div>
+              <div style="font-size:12px; color:var(--muted)">Stablecoin · fastest</div>
+            </div>
+            <div class="amt">Balance<br><b class="mono">1,040.50</b></div>
+          </div>
+        </div>
+
+        <div>
+          <div class="card-label" style="margin-bottom:12px;">Transaction summary</div>
+          <div class="tx-summary">
+            <div class="tx-row"><span class="k">Amount</span><span class="v mono">50.00 USDC</span></div>
+            <div class="tx-row"><span class="k">Network fee</span><span class="v mono">~$0.002</span></div>
+            <div class="tx-row"><span class="k">Route</span><span class="v">Direct · Base</span></div>
+            <div class="tx-row"><span class="k">Estimated time</span><span class="v">~2 sec</span></div>
+            <div class="tx-row total"><span class="k">You send</span><span class="v mono">50.00 USDC</span></div>
+          </div>
+          <button class="send-cta">
+            Hold to send
+            <span class="hint">Press and hold for 1s to confirm</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mobile send sheet -->
+    <div>
+      <div class="phone-frame">
+        <div class="phone-inner">
+          <div class="notch"></div>
+          <div class="statusbar">
+            <span class="mono">9:41</span>
+            <div class="statusbar-icons">
+              <span>●●●●</span>
+              <svg width="14" height="10" viewBox="0 0 14 10" fill="currentColor"><path d="M2 0l3 5L2 10h10V0z"/></svg>
+              <svg width="18" height="10" viewBox="0 0 18 10" fill="none" stroke="currentColor"><rect x="0.5" y="1.5" width="14" height="7" rx="2"/><rect x="2" y="3" width="11" height="4" fill="currentColor"/></svg>
+            </div>
+          </div>
+
+          <div style="padding: 4px 18px 10px; display:flex; align-items:center; justify-content:space-between;">
+            <div style="display:flex; align-items:center; gap:10px;">
+              <div class="icon-btn" style="width:34px; height:34px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+              </div>
+              <div style="font-size:16px; font-weight:600;">Send</div>
+            </div>
+            <div class="sheet-steps">
+              <div class="step-dot done"></div>
+              <div class="step-dot active"></div>
+              <div class="step-dot"></div>
+            </div>
+          </div>
+
+          <div class="m-body" style="padding-top:6px;">
+            <div class="recipient-input" style="padding:16px;">
+              <label>To</label>
+              <div class="recipient-number" style="font-size:26px; gap:8px; margin-top:8px;">
+                <span>998</span><span>112</span><span>044</span><span>73</span>
+                <span class="cursor" style="height:22px;"></span>
+              </div>
+              <div class="resolved" style="padding:10px; margin-top:10px;">
+                <div class="ava" style="width:36px; height:36px; font-size:13px;">A</div>
+                <div>
+                  <div class="n" style="font-size:14px;">Alice Chen</div>
+                  <div class="s">0x7b2f…c881</div>
+                </div>
+                <div class="check">✓</div>
+              </div>
+            </div>
+
+            <div class="amount-input" style="margin-top:14px; padding:24px 16px;">
+              <div class="amount-value" style="font-size:44px;"><span class="dim">$</span>50<span class="dim">.00</span></div>
+              <div class="amount-sub">≈ 50.00 USDC</div>
+            </div>
+
+            <div class="token-picker" style="margin-top:12px;">
+              <div class="token-ic usdc" style="width:28px; height:28px;">$</div>
+              <div>
+                <div style="font-weight:500; font-size:13px;">USDC · Base</div>
+                <div style="font-size:11px; color:var(--muted)">Balance 1,040.50</div>
+              </div>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:auto; color:var(--muted);"><path d="M6 9l6 6 6-6"/></svg>
+            </div>
+
+            <div class="tx-summary" style="margin-top:18px; padding: 14px; background: var(--card); border:1px solid var(--border); border-radius:14px;">
+              <div class="tx-row"><span class="k">Network fee</span><span class="v mono">~$0.002</span></div>
+              <div class="tx-row"><span class="k">Time</span><span class="v">~2 sec</span></div>
+              <div class="tx-row total"><span class="k">Total</span><span class="v mono">50.00 USDC</span></div>
+            </div>
+
+            <button class="send-cta" style="margin-top:16px;">
+              Hold to send
+              <span class="hint">Press and hold to confirm</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ========== DESIGN NOTES ========== -->
+  <div class="notes-block">
+    <div class="note">
+      <h5>Palette</h5>
+      <p>Deep violet-black <b>#0A0912</b> base, warm over the current blue-black. Primary accent shifts slightly to <b>#7C6DF0</b> for better contrast on dark. Success <b>green</b> and pending <b>amber</b> added.</p>
+    </div>
+    <div class="note">
+      <h5>Typography</h5>
+      <p>Interface in <b>Geist</b> (sans). All digits — number, balances, amounts — in <b>Geist Mono</b> with tabular figures so nothing shifts as values change.</p>
+    </div>
+    <div class="note">
+      <h5>Layout</h5>
+      <p>Desktop: persistent <b>sidebar nav</b> + main + right rail with QR & frequent contacts. Mobile: floating glass tab bar with a raised <b>Send FAB</b> at center. Same components reflow between them.</p>
+    </div>
+    <div class="note">
+      <h5>Interaction</h5>
+      <p>Send is a <b>3-step sheet</b>: number → amount → review. Recipient resolves the moment 11 digits are entered — you see who you're paying before you commit.</p>
+    </div>
+    <div class="note">
+      <h5>Safety</h5>
+      <p><b>Hold-to-send</b> instead of tap. Small UX friction at the exact point of irreversibility. Resolved recipient card uses a green outline to confirm the match is real.</p>
+    </div>
+    <div class="note">
+      <h5>What's new vs today</h5>
+      <p>Adds <b>balance</b>, <b>activity feed</b>, <b>QR receive</b>, <b>frequent contacts</b>. Removes the flat tab bar. Register becomes onboarding, Lookup merges into Send.</p>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

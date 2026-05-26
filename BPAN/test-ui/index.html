@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BPAN Tester</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.9.0/dist/ethers.umd.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; background: #0a0a0f; color: #f0f0f5; min-height: 100vh; }
+    .header { background: #12121a; border-bottom: 1px solid #2a2a40; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 20px; } .header h1 span { color: #6366f1; }
+    .connect-btn { background: #6366f1; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; }
+    .connect-btn:hover { background: #818cf8; }
+    .connect-btn.connected { background: #22c55e; }
+    .container { max-width: 800px; margin: 24px auto; padding: 0 16px; }
+    .status-bar { background: #12121a; border: 1px solid #2a2a40; border-radius: 10px; padding: 16px; margin-bottom: 20px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; text-align: center; }
+    .status-bar .stat-label { font-size: 11px; color: #8888aa; text-transform: uppercase; letter-spacing: 1px; }
+    .status-bar .stat-value { font-size: 18px; font-weight: 700; margin-top: 4px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card { background: #1a1a2e; border: 1px solid #2a2a40; border-radius: 12px; padding: 20px; }
+    .card h2 { font-size: 16px; margin-bottom: 4px; }
+    .card .desc { font-size: 12px; color: #8888aa; margin-bottom: 16px; }
+    .card.full { grid-column: 1 / -1; }
+    label { display: block; font-size: 12px; color: #8888aa; margin-bottom: 6px; font-weight: 500; }
+    input, select { width: 100%; background: #12121a; border: 1px solid #2a2a40; color: #f0f0f5; padding: 10px 12px; border-radius: 8px; font-size: 14px; outline: none; margin-bottom: 12px; }
+    input:focus { border-color: #6366f1; }
+    input::placeholder { color: #555; }
+    button.action { width: 100%; background: #6366f1; color: white; border: none; padding: 10px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; }
+    button.action:hover { background: #818cf8; }
+    button.action:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.action.danger { background: #dc2626; } button.action.danger:hover { background: #ef4444; }
+    .log { background: #0a0a0f; border: 1px solid #2a2a40; border-radius: 8px; padding: 12px; margin-top: 12px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.8; }
+    .log .entry { padding: 2px 0; border-bottom: 1px solid #1a1a2e; }
+    .log .success { color: #22c55e; } .log .error { color: #ef4444; } .log .info { color: #6366f1; } .log .pending { color: #eab308; }
+    .result-box { background: #12121a; border: 1px solid #2a2a40; border-radius: 8px; padding: 12px; margin-top: 12px; }
+    .result-box .chain-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #1a1a2e; font-size: 13px; }
+    .result-box .chain-name { color: #6366f1; font-weight: 600; }
+    .result-box .wallet-addr { color: #8888aa; font-family: monospace; font-size: 11px; word-break: break-all; max-width: 70%; text-align: right; }
+    @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } .status-bar { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span>BPAN</span> Tester</h1>
+  <button class="connect-btn" id="connectBtn" onclick="connectWallet()">Connect MetaMask</button>
+</div>
+
+<div class="container">
+  <div class="status-bar" id="statusBar">
+    <div><div class="stat-label">Network</div><div class="stat-value" id="networkName">—</div></div>
+    <div><div class="stat-label">Your Balance</div><div class="stat-value" id="userBalance">—</div></div>
+    <div><div class="stat-label">Total Registered</div><div class="stat-value" id="totalRegistered">—</div></div>
+  </div>
+
+  <div class="grid">
+
+    <!-- Register -->
+    <div class="card">
+      <h2>Register Number</h2>
+      <div class="desc">Mint an 11-digit BPAN number as an NFT (costs 0.01 ETH)</div>
+      <label>BPAN Number</label>
+      <input type="text" id="regNumber" placeholder="e.g. 48290173462" maxlength="11" oninput="this.value=this.value.replace(/\D/g,'')">
+      <button class="action" onclick="registerNumber()">Register</button>
+    </div>
+
+    <!-- Set Mapping -->
+    <div class="card">
+      <h2>Set Mapping</h2>
+      <div class="desc">Link a chain wallet address to your BPAN number</div>
+      <label>BPAN Number</label>
+      <input type="text" id="mapNumber" placeholder="e.g. 48290173462" maxlength="11" oninput="this.value=this.value.replace(/\D/g,'')">
+      <label>Chain</label>
+      <select id="mapChain">
+        <option>ethereum</option><option>solana</option><option>bitcoin</option>
+        <option>polygon</option><option>arbitrum</option><option>optimism</option>
+        <option>base</option><option>sui</option><option>aptos</option><option>avalanche</option>
+      </select>
+      <label>Wallet Address</label>
+      <input type="text" id="mapWallet" placeholder="0x... or native address">
+      <button class="action" onclick="setMapping()">Set Mapping</button>
+    </div>
+
+    <!-- Resolve / Lookup -->
+    <div class="card">
+      <h2>Lookup Number</h2>
+      <div class="desc">Resolve a BPAN number to see owner and all linked wallets</div>
+      <label>BPAN Number</label>
+      <input type="text" id="lookupNumber" placeholder="e.g. 12345678901" maxlength="11" oninput="this.value=this.value.replace(/\D/g,'')">
+      <button class="action" onclick="lookupNumber()">Lookup</button>
+      <div class="result-box" id="lookupResult" style="display:none"></div>
+    </div>
+
+    <!-- Remove Mapping -->
+    <div class="card">
+      <h2>Remove Mapping</h2>
+      <div class="desc">Remove a chain mapping from your BPAN number</div>
+      <label>BPAN Number</label>
+      <input type="text" id="rmNumber" placeholder="e.g. 48290173462" maxlength="11" oninput="this.value=this.value.replace(/\D/g,'')">
+      <label>Chain to Remove</label>
+      <select id="rmChain">
+        <option>ethereum</option><option>solana</option><option>bitcoin</option>
+        <option>polygon</option><option>arbitrum</option><option>optimism</option>
+        <option>base</option><option>sui</option><option>aptos</option><option>avalanche</option>
+      </select>
+      <button class="action danger" onclick="removeMapping()">Remove Mapping</button>
+    </div>
+
+    <!-- Activity Log -->
+    <div class="card full">
+      <h2>Activity Log</h2>
+      <div class="log" id="log"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const CONTRACT = "0xB57A18C0ebfF1fa9610C2D06985cbB9761685C83";
+const ABI = [
+  "function registerNumber(uint256 number) payable",
+  "function setWalletMapping(uint256 number, string chain, string wallet)",
+  "function removeWalletMapping(uint256 number, string chain)",
+  "function getWalletMapping(uint256 number, string chain) view returns (string)",
+  "function getAllMappings(uint256 number) view returns (string[], string[])",
+  "function isRegistered(uint256 number) view returns (bool)",
+  "function ownerOf(uint256 tokenId) view returns (address)",
+  "function registrationFee() view returns (uint256)",
+  "function totalRegistered() view returns (uint256)",
+];
+
+let provider, signer, contract;
+
+function log(msg, type = "info") {
+  const el = document.getElementById("log");
+  const time = new Date().toLocaleTimeString();
+  el.innerHTML = `<div class="entry ${type}">[${time}] ${msg}</div>` + el.innerHTML;
+}
+
+async function connectWallet() {
+  if (!window.ethereum) { alert("Install MetaMask first!"); return; }
+  try {
+    // Switch to Sepolia first
+    try {
+      await window.ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: "0xaa36a7" }], // 11155111 = Sepolia
+      });
+    } catch (switchErr) {
+      // If Sepolia not added, add it
+      if (switchErr.code === 4902) {
+        await window.ethereum.request({
+          method: "wallet_addEthereumChain",
+          params: [{
+            chainId: "0xaa36a7",
+            chainName: "Sepolia Testnet",
+            nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+            rpcUrls: ["https://rpc.sepolia.org"],
+            blockExplorerUrls: ["https://sepolia.etherscan.io"],
+          }],
+        });
+      }
+    }
+
+    provider = new ethers.BrowserProvider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    signer = await provider.getSigner();
+    contract = new ethers.Contract(CONTRACT, ABI, signer);
+
+    const address = await signer.getAddress();
+    const network = await provider.getNetwork();
+    const balance = await provider.getBalance(address);
+    const total = await contract.totalRegistered();
+
+    document.getElementById("connectBtn").textContent = address.slice(0, 6) + "..." + address.slice(-4);
+    document.getElementById("connectBtn").classList.add("connected");
+    document.getElementById("networkName").textContent = network.name;
+    document.getElementById("userBalance").textContent = parseFloat(ethers.formatEther(balance)).toFixed(4) + " ETH";
+    document.getElementById("totalRegistered").textContent = total.toString();
+
+    log(`Connected: ${address}`, "success");
+    log(`Network: ${network.name} (chainId: ${network.chainId})`, "info");
+  } catch (e) {
+    log(`Connection failed: ${e.message}`, "error");
+  }
+}
+
+async function registerNumber() {
+  const num = document.getElementById("regNumber").value;
+  if (!num || num.length !== 11) { log("Enter a valid 11-digit number", "error"); return; }
+  try {
+    const fee = await contract.registrationFee();
+    log(`Registering #${num} (fee: ${ethers.formatEther(fee)} ETH)...`, "pending");
+    const tx = await contract.registerNumber(BigInt(num), { value: fee });
+    log(`Tx sent: ${tx.hash}`, "pending");
+    await tx.wait();
+    log(`#${num} registered successfully!`, "success");
+    refreshStats();
+  } catch (e) {
+    log(`Register failed: ${e.shortMessage || e.message}`, "error");
+  }
+}
+
+async function setMapping() {
+  const num = document.getElementById("mapNumber").value;
+  const chain = document.getElementById("mapChain").value;
+  const wallet = document.getElementById("mapWallet").value;
+  if (!num || num.length !== 11) { log("Enter a valid 11-digit number", "error"); return; }
+  if (!wallet) { log("Enter a wallet address", "error"); return; }
+  try {
+    log(`Setting ${chain} mapping for #${num}...`, "pending");
+    const tx = await contract.setWalletMapping(BigInt(num), chain, wallet);
+    log(`Tx sent: ${tx.hash}`, "pending");
+    await tx.wait();
+    log(`Mapped #${num} → ${chain} → ${wallet.slice(0, 20)}...`, "success");
+  } catch (e) {
+    log(`Set mapping failed: ${e.shortMessage || e.message}`, "error");
+  }
+}
+
+async function removeMapping() {
+  const num = document.getElementById("rmNumber").value;
+  const chain = document.getElementById("rmChain").value;
+  if (!num || num.length !== 11) { log("Enter a valid 11-digit number", "error"); return; }
+  try {
+    log(`Removing ${chain} mapping from #${num}...`, "pending");
+    const tx = await contract.removeWalletMapping(BigInt(num), chain);
+    log(`Tx sent: ${tx.hash}`, "pending");
+    await tx.wait();
+    log(`Removed ${chain} from #${num}`, "success");
+  } catch (e) {
+    log(`Remove failed: ${e.shortMessage || e.message}`, "error");
+  }
+}
+
+async function lookupNumber() {
+  const num = document.getElementById("lookupNumber").value;
+  const resultEl = document.getElementById("lookupResult");
+  if (!num || num.length !== 11) { log("Enter a valid 11-digit number", "error"); return; }
+  try {
+    const readContract = new ethers.Contract(CONTRACT, ABI, provider || new ethers.JsonRpcProvider("https://eth-sepolia.g.alchemy.com/v2/REDACTED_ROTATE_ME"));
+    const registered = await readContract.isRegistered(BigInt(num));
+    if (!registered) {
+      resultEl.style.display = "block";
+      resultEl.innerHTML = '<div style="color:#8888aa;text-align:center;padding:8px">Number not registered</div>';
+      log(`#${num} is not registered`, "info");
+      return;
+    }
+    const owner = await readContract.ownerOf(BigInt(num));
+    const [chains, wallets] = await readContract.getAllMappings(BigInt(num));
+    let html = `<div style="margin-bottom:8px;font-size:12px;color:#8888aa">Owner: <span style="color:#f0f0f5;font-family:monospace">${owner}</span></div>`;
+    if (chains.length === 0) {
+      html += '<div style="color:#8888aa;text-align:center">No mappings set</div>';
+    } else {
+      chains.forEach((chain, i) => {
+        html += `<div class="chain-row"><span class="chain-name">${chain}</span><span class="wallet-addr">${wallets[i]}</span></div>`;
+      });
+    }
+    resultEl.style.display = "block";
+    resultEl.innerHTML = html;
+    log(`Looked up #${num}: ${chains.length} mappings found`, "success");
+  } catch (e) {
+    log(`Lookup failed: ${e.shortMessage || e.message}`, "error");
+  }
+}
+
+async function refreshStats() {
+  if (!contract) return;
+  const total = await contract.totalRegistered();
+  const balance = await provider.getBalance(await signer.getAddress());
+  document.getElementById("totalRegistered").textContent = total.toString();
+  document.getElementById("userBalance").textContent = parseFloat(ethers.formatEther(balance)).toFixed(4) + " ETH";
+}
+
+if (window.ethereum) {
+  window.ethereum.on("accountsChanged", () => location.reload());
+  window.ethereum.on("chainChanged", () => location.reload());
+}
+</script>
+
+</body>
+</html>

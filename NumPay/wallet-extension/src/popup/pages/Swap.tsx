@@ -1,0 +1,1046 @@
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { ethers } from "ethers";
+import { useWallet } from "../hooks/useWallet";
+import { useCurrency } from "../hooks/useCurrency";
+import { usdToDisplayCurrency } from "@/lib/currency";
+import { NETWORKS } from "@/lib/networks";
+import { DEFAULT_TOKENS } from "@/lib/tokens";
+import { type NonEvmChain } from "@/lib/chains";
+import { getSigner } from "@/lib/wallet";
+import { getItem, setItem } from "@/lib/storage";
+import Layout from "../components/Layout";
+import {
+  SwapIcon, ChevronDownIcon, SettingsIcon, TokenIcon, ChainIcon,
+  SearchIcon, ArrowLeftIcon, AlertIcon, ExternalLinkIcon, RefreshIcon, CheckIcon,
+  LayersIcon,
+} from "../components/Icons";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface SwapToken {
+  symbol: string;
+  name: string;
+  logo?: string;
+  address?: string;
+  decimals: number;
+  balance: string;
+  chainId: string;
+  chainName: string;
+  custom?: boolean;
+}
+
+interface RouteOption {
+  provider: "paraswap" | "kyberswap";
+  label: string;
+  logo: string;
+  destAmount: string;
+  destAmountRaw: string;
+  gasCostUSD: string;
+  tag?: string;
+  priceRoute?: any;
+  routeSummary?: any;
+  kyberRouterAddress?: string;
+}
+
+interface BridgeRoute {
+  id: string;
+  gasCostUSD: string;
+  tags: string[];
+  toAmount: string;
+  steps: Array<{
+    tool?: string;
+    toolDetails?: { name: string; logoURI: string };
+    estimate?: { executionDuration?: number; approvalAddress?: string };
+    transactionRequest?: { to: string; data: string; value: string; gasLimit?: string };
+  }>;
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const PARASWAP_API     = "https://apiv5.paraswap.io";
+const LIFI_API         = "https://li.quest/v1";
+const LIFI_ROUTES_URL  = `${LIFI_API}/advanced/routes`;
+const NATIVE_ADDR      = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
+const LIFI_NATIVE      = "0x0000000000000000000000000000000000000000";
+const CUSTOM_TOKENS_KEY = "numpay_custom_tokens";
+
+const ERC20_ABI = [
+  "function name() view returns (string)",
+  "function symbol() view returns (string)",
+  "function decimals() view returns (uint8)",
+  "function balanceOf(address) view returns (uint256)",
+];
+
+const KYBERSWAP_CHAIN: Record<number, string> = {
+  1: "ethereum", 137: "polygon", 42161: "arbitrum", 10: "optimism",
+  8453: "base", 43114: "avalanche", 56: "bsc", 534352: "scroll",
+  59144: "linea", 5000: "mantle", 81457: "blast", 250: "fantom",
+  324: "zksync", 1101: "polygon-zkevm", 25: "cronos",
+};
+
+// LI.FI chain IDs — EVM chains use their numeric chainId, non-EVM use LI.FI's own IDs
+const LIFI_CHAIN_ID: Record<string, number> = {
+  ethereum: 1, polygon: 137, arbitrum: 42161, optimism: 10,
+  base: 8453, avalanche: 43114, bsc: 56, zksync: 324,
+  scroll: 534352, linea: 59144, mantle: 5000, blast: 81457,
+  polygonzkevm: 1101, fantom: 250, cronos: 25, celo: 42220,
+  gnosis: 100, moonbeam: 1284, aurora: 1313161554, sei: 1329,
+  klaytn: 8217, metis: 1088, sepolia: 11155111,
+  solana: 1151111081099710,
+};
+
+// Native token address LI.FI uses for each chain (EVM chains share 0x0000...)
+const LIFI_NATIVE_TOKEN: Record<string, string> = {
+  solana: "So11111111111111111111111111111111111111112",
+};
+
+const TAG_STYLE: Record<string, string> = {
+  RECOMMENDED: "bg-brand-500/15 text-brand-400",
+  CHEAPEST:    "bg-accent-green/15 text-accent-green",
+  FASTEST:     "bg-amber/15 text-amber",
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const isAddress = (s: string) => /^0x[0-9a-fA-F]{40}$/.test(s.trim());
+
+function buildAllSwapTokens(
+  chainBals: any[], currentTokens: any[], currentNetId: string,
+  customTokens: SwapToken[], nonEvmChains: NonEvmChain[],
+): SwapToken[] {
+  const items: SwapToken[] = [];
+  const seen = new Set<string>();
+
+  // Native token for every EVM mainnet
+  for (const net of Object.values(NETWORKS)) {
+    if (net.id === "sepolia") continue;
+    const key = `${net.id}::`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const cb = chainBals.find((c: any) => c.networkId === net.id);
+    items.push({
+      symbol: net.symbol, name: net.name, logo: net.logo, decimals: net.decimals,
+      balance: cb?.balance || "0", chainId: net.id, chainName: net.name,
+    });
+  }
+
+  // Native token for every non-EVM chain (Solana, Bitcoin, Tron, XRP, Sui, Litecoin)
+  for (const nev of nonEvmChains) {
+    const key = `${nev.id}::`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push({
+      symbol: nev.symbol, name: nev.name, logo: nev.logo,
+      decimals: nev.decimals, balance: nev.balance > 0 ? nev.balance.toFixed(nev.decimals > 6 ? 6 : nev.decimals) : "0",
+      chainId: nev.id, chainName: nev.name,
+    });
+  }
+
+  // ERC-20 tokens from DEFAULT_TOKENS for each chain
+  for (const [chainIdStr, tokenArr] of Object.entries(DEFAULT_TOKENS)) {
+    const numId = parseInt(chainIdStr);
+    const net = Object.values(NETWORKS).find((n) => n.chainId === numId && n.id !== "sepolia");
+    if (!net) continue;
+    for (const t of tokenArr as any[]) {
+      const key = `${net.id}:${t.address.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const bal = net.id === currentNetId
+        ? currentTokens.find((tk: any) => tk.address?.toLowerCase() === t.address.toLowerCase())?.balance || "0"
+        : "0";
+      items.push({
+        symbol: t.symbol, name: t.name, logo: t.logo, address: t.address,
+        decimals: t.decimals, balance: bal, chainId: net.id, chainName: net.name,
+      });
+    }
+  }
+
+  // Custom imported tokens (skip if already present)
+  for (const ct of customTokens) {
+    const key = ct.address ? `${ct.chainId}:${ct.address.toLowerCase()}` : `${ct.chainId}::`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const bal = ct.chainId === currentNetId && ct.address
+      ? currentTokens.find((tk: any) => tk.address?.toLowerCase() === ct.address!.toLowerCase())?.balance || ct.balance
+      : ct.balance;
+    items.push({ ...ct, balance: bal });
+  }
+
+  return items;
+}
+
+// ── Quote fetchers ────────────────────────────────────────────────────────────
+
+async function fetchParaswapQuote(chainId: number, from: SwapToken, to: SwapToken, amt: string): Promise<RouteOption | null> {
+  try {
+    const url = `${PARASWAP_API}/prices?srcToken=${from.address || NATIVE_ADDR}&srcDecimals=${from.decimals}` +
+      `&destToken=${to.address || NATIVE_ADDR}&destDecimals=${to.decimals}` +
+      `&amount=${ethers.parseUnits(amt, from.decimals)}&network=${chainId}&partner=numpay`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data?.priceRoute) return null;
+    const pr = data.priceRoute;
+    return {
+      provider: "paraswap", label: "ParaSwap",
+      logo: "https://assets.coingecko.com/coins/images/14929/small/paraswap.png",
+      destAmount: parseFloat(ethers.formatUnits(pr.destAmount, to.decimals)).toFixed(Math.min(to.decimals, 6)),
+      destAmountRaw: pr.destAmount, gasCostUSD: pr.gasCostUSD || "0", priceRoute: pr,
+    };
+  } catch { return null; }
+}
+
+async function fetchKyberQuote(chainId: number, from: SwapToken, to: SwapToken, amt: string): Promise<RouteOption | null> {
+  const chain = KYBERSWAP_CHAIN[chainId];
+  if (!chain) return null;
+  try {
+    const url = `https://aggregator-api.kyberswap.com/${chain}/api/v1/routes` +
+      `?tokenIn=${from.address || NATIVE_ADDR}&tokenOut=${to.address || NATIVE_ADDR}` +
+      `&amountIn=${ethers.parseUnits(amt, from.decimals)}&saveGas=0&gasInclude=1`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data?.code !== 0 || !data?.data?.routeSummary) return null;
+    const rs = data.data.routeSummary;
+    return {
+      provider: "kyberswap", label: "KyberSwap",
+      logo: "https://assets.coingecko.com/coins/images/14899/small/RwdVsGcw_400x400.jpg",
+      destAmount: parseFloat(ethers.formatUnits(rs.amountOut, to.decimals)).toFixed(Math.min(to.decimals, 6)),
+      destAmountRaw: rs.amountOut, gasCostUSD: rs.gasUsd || "0",
+      routeSummary: rs, kyberRouterAddress: data.data.routerAddress,
+    };
+  } catch { return null; }
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
+export default function Swap() {
+  const { wallet, network, balance, tokens, chainBalances, nonEvmWallet, nonEvmChains } = useWallet();
+  const { currencyCode, currency, rates } = useCurrency();
+
+  // Custom tokens (persisted)
+  const [customTokens, setCustomTokens] = useState<SwapToken[]>([]);
+  useEffect(() => {
+    getItem(CUSTOM_TOKENS_KEY).then((raw) => {
+      if (raw) try { setCustomTokens(JSON.parse(raw)); } catch {}
+    });
+  }, []);
+
+  const allTokens = useMemo(
+    () => buildAllSwapTokens(chainBalances, tokens, network.id, customTokens, nonEvmChains),
+    [chainBalances, tokens, network.id, customTokens, nonEvmChains],
+  );
+
+  // Default tokens
+  const makeDefault = useCallback((side: "from" | "to"): SwapToken => {
+    const net = NETWORKS[network.id] || NETWORKS["ethereum"];
+    if (side === "from") {
+      const cb = chainBalances.find((c) => c.networkId === net.id);
+      return { symbol: net.symbol, name: net.name, logo: net.logo, decimals: net.decimals,
+        balance: cb?.balance || balance || "0", chainId: net.id, chainName: net.name };
+    }
+    const usdc = (DEFAULT_TOKENS[net.chainId] || []).find((t) => t.symbol === "USDC");
+    if (usdc) return { symbol: usdc.symbol, name: usdc.name, logo: usdc.logo, address: usdc.address,
+      decimals: usdc.decimals, balance: "0", chainId: net.id, chainName: net.name };
+    const arb = NETWORKS["arbitrum"];
+    return { symbol: arb.symbol, name: arb.name, logo: arb.logo, decimals: arb.decimals,
+      balance: "0", chainId: "arbitrum", chainName: arb.name };
+  }, [network.id, balance, chainBalances]);
+
+  const [fromToken,    setFromToken]    = useState<SwapToken>(() => makeDefault("from"));
+  const [toToken,      setToToken]      = useState<SwapToken>(() => makeDefault("to"));
+  const [fromAmount,   setFromAmount]   = useState("");
+  const [slippage,     setSlippage]     = useState("0.5");
+  const [showSettings, setShowSettings] = useState(false);
+
+  // Picker state
+  const [pickerMode,   setPickerMode]   = useState<"from" | "to" | null>(null);
+  const [pickerSearch, setPickerSearch] = useState("");
+  const [pickerChain,  setPickerChain]  = useState<string | null>(null);
+
+  // Import state (inside picker)
+  const [importState, setImportState] = useState<"idle" | "loading" | "preview">("idle");
+  const [importToken, setImportToken] = useState<SwapToken | null>(null);
+  const [importError, setImportError] = useState("");
+
+  // Swap routes
+  const [routeOptions,  setRouteOptions]  = useState<RouteOption[]>([]);
+  const [selectedRoute, setSelectedRoute] = useState(0);
+  const [loadingQuote,  setLoadingQuote]  = useState(false);
+  const [quoteError,    setQuoteError]    = useState("");
+  const [swapping,      setSwapping]      = useState(false);
+  const [txHash,        setTxHash]        = useState("");
+  const [swapError,     setSwapError]     = useState("");
+
+  // Bridge routes
+  const [bridgeRoutes,  setBridgeRoutes]  = useState<BridgeRoute[]>([]);
+  const [selBridge,     setSelBridge]     = useState(0);
+  const [loadingBridge, setLoadingBridge] = useState(false);
+  const [bridgeError,   setBridgeError]   = useState("");
+  const [bridging,      setBridging]      = useState(false);
+  const [bridgeTxHash,  setBridgeTxHash]  = useState("");
+
+  const quoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sync native balances from chainBalances
+  useEffect(() => {
+    const sync = (prev: SwapToken): SwapToken => {
+      if (prev.address) return prev;
+      const cb = chainBalances.find((c) => c.networkId === prev.chainId);
+      return cb ? { ...prev, balance: cb.balance } : prev;
+    };
+    setFromToken(sync);
+    setToToken(sync);
+  }, [chainBalances]);
+
+  // Sync ERC-20 balances for current network
+  useEffect(() => {
+    const sync = (prev: SwapToken): SwapToken => {
+      if (!prev.address || prev.chainId !== network.id) return prev;
+      const found = tokens.find((t: any) => t.address?.toLowerCase() === prev.address!.toLowerCase());
+      return found ? { ...prev, balance: found.balance || "0" } : prev;
+    };
+    setFromToken(sync);
+    setToToken(sync);
+  }, [tokens, network.id]);
+
+  const isBridge = fromToken.chainId !== toToken.chainId;
+
+  function clearRoutes() {
+    setRouteOptions([]); setSelectedRoute(0); setQuoteError("");
+    setBridgeRoutes([]); setSelBridge(0); setBridgeError("");
+    setTxHash(""); setBridgeTxHash(""); setSwapError("");
+  }
+
+  // ── Unified quote fetch ───────────────────────────────────────────────────
+
+  const fetchQuotesForPair = useCallback(async (amt: string, from: SwapToken, to: SwapToken) => {
+    if (!amt || parseFloat(amt) <= 0 || !wallet) return;
+
+    if (from.chainId !== to.chainId) {
+      const fromLifiId = LIFI_CHAIN_ID[from.chainId];
+      const toLifiId   = LIFI_CHAIN_ID[to.chainId];
+      if (!fromLifiId || !toLifiId) {
+        setBridgeError(`Bridge not supported for ${from.chainName} → ${to.chainName} yet`);
+        return;
+      }
+      // Resolve the correct wallet address for each side (EVM vs Solana)
+      const fromAddr = from.chainId === "solana" ? (nonEvmWallet?.solana.address || "") : wallet.address;
+      const toAddr   = to.chainId   === "solana" ? (nonEvmWallet?.solana.address || "") : wallet.address;
+      const fromTokenAddr = from.address || LIFI_NATIVE_TOKEN[from.chainId] || LIFI_NATIVE;
+      const toTokenAddr   = to.address   || LIFI_NATIVE_TOKEN[to.chainId]   || LIFI_NATIVE;
+
+      setLoadingBridge(true); setBridgeError(""); setBridgeRoutes([]); setSelBridge(0);
+      try {
+        const res = await fetch(LIFI_ROUTES_URL, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fromChainId:      fromLifiId,
+            toChainId:        toLifiId,
+            fromTokenAddress: fromTokenAddr,
+            toTokenAddress:   toTokenAddr,
+            fromAmount:       ethers.parseUnits(amt, from.decimals).toString(),
+            fromAddress: fromAddr, toAddress: toAddr,
+            options: { slippage: parseFloat(slippage) / 100, order: "RECOMMENDED", integrator: "numpay" },
+          }),
+        });
+        if (!res.ok) {
+          const errBody = await res.text().catch(() => "");
+          throw new Error(`Bridge API error (${res.status})${errBody ? ": " + errBody.slice(0, 120) : ""}`);
+        }
+        const data = await res.json();
+        if (!data?.routes?.length) {
+          setBridgeError("No bridge routes found. Try a larger amount or different token pair.");
+          return;
+        }
+        setBridgeRoutes(data.routes.slice(0, 4).map((r: any) => ({
+          id: r.id, gasCostUSD: r.gasCostUSD || "0", tags: r.tags || [],
+          toAmount: r.toAmountMin || r.toAmount || "0", steps: r.steps || [],
+        })));
+      } catch (e: any) {
+        setBridgeError(e.message || "Failed to fetch bridge routes");
+      } finally {
+        setLoadingBridge(false);
+      }
+    } else {
+      const net = NETWORKS[from.chainId];
+      if (!net) return;
+      setLoadingQuote(true); setQuoteError(""); setRouteOptions([]); setSelectedRoute(0);
+      try {
+        const [ps, ky] = await Promise.all([
+          fetchParaswapQuote(net.chainId, from, to, amt),
+          fetchKyberQuote(net.chainId, from, to, amt),
+        ]);
+        const routes = [ps, ky].filter(Boolean) as RouteOption[];
+        if (routes.length > 0) {
+          routes.sort((a, b) => parseFloat(b.destAmount) - parseFloat(a.destAmount));
+          routes[0].tag = "Best";
+        }
+        setRouteOptions(routes);
+        if (routes.length === 0) setQuoteError("No swap routes found for this pair");
+      } catch (e: any) {
+        setQuoteError(e.message || "Quote failed");
+      } finally {
+        setLoadingQuote(false);
+      }
+    }
+  }, [wallet, slippage, nonEvmWallet]);
+
+  function scheduleQuote(amt: string, from: SwapToken, to: SwapToken) {
+    if (quoteTimer.current) clearTimeout(quoteTimer.current);
+    if (amt && parseFloat(amt) > 0)
+      quoteTimer.current = setTimeout(() => fetchQuotesForPair(amt, from, to), 700);
+  }
+
+  function handleFromAmountChange(val: string) {
+    const clean = val.replace(/[^0-9.]/g, "");
+    setFromAmount(clean); clearRoutes();
+    scheduleQuote(clean, fromToken, toToken);
+  }
+
+  function handleSwapDir() {
+    setFromToken(toToken); setToToken(fromToken);
+    setFromAmount(""); clearRoutes();
+  }
+
+  // ── Token picker: select ──────────────────────────────────────────────────
+
+  function selectToken(t: SwapToken) {
+    const newFrom = pickerMode === "from" ? t : fromToken;
+    const newTo   = pickerMode === "to"   ? t : toToken;
+    setFromToken(newFrom); setToToken(newTo);
+    setPickerMode(null); setPickerSearch(""); setPickerChain(null);
+    setImportState("idle"); setImportToken(null); setImportError("");
+    clearRoutes();
+    // Keep the existing amount and immediately re-fetch quotes for the new pair
+    if (fromAmount && parseFloat(fromAmount) > 0) {
+      scheduleQuote(fromAmount, newFrom, newTo);
+    }
+  }
+
+  // ── Custom token import ───────────────────────────────────────────────────
+
+  const importChainId = pickerChain || network.id;
+
+  async function handleImport() {
+    const addr = pickerSearch.trim().toLowerCase();
+    const net  = NETWORKS[importChainId];
+    if (!net || !wallet) return;
+    setImportState("loading"); setImportError("");
+    try {
+      const provider = new ethers.JsonRpcProvider(net.rpcUrl);
+      const c = new ethers.Contract(addr, ERC20_ABI, provider);
+      const [name, symbol, decimals, balRaw] = await Promise.all([
+        c.name(), c.symbol(), c.decimals(), c.balanceOf(wallet.address),
+      ]);
+      setImportToken({
+        symbol: String(symbol), name: String(name), address: addr,
+        decimals: Number(decimals),
+        balance: ethers.formatUnits(balRaw as bigint, Number(decimals)),
+        chainId: importChainId, chainName: net.name, custom: true,
+      });
+      setImportState("preview");
+    } catch {
+      setImportError("Could not fetch token info. Check the address and selected network.");
+      setImportState("idle");
+    }
+  }
+
+  async function confirmImport() {
+    if (!importToken) return;
+    const raw = await getItem(CUSTOM_TOKENS_KEY);
+    const existing: SwapToken[] = raw ? JSON.parse(raw) : [];
+    const deduped = existing.filter(
+      (t) => !(t.address?.toLowerCase() === importToken.address?.toLowerCase() && t.chainId === importToken.chainId),
+    );
+    const updated = [...deduped, importToken];
+    await setItem(CUSTOM_TOKENS_KEY, JSON.stringify(updated));
+    setCustomTokens(updated);
+    selectToken(importToken);
+  }
+
+  // ── Swap execute ──────────────────────────────────────────────────────────
+
+  async function executeSwap() {
+    const route = routeOptions[selectedRoute];
+    if (!wallet || !route || !fromAmount) return;
+    const net = NETWORKS[fromToken.chainId];
+    if (!net) return;
+    setSwapping(true); setSwapError(""); setTxHash("");
+    try {
+      const signer    = getSigner(wallet.privateKey, net.rpcUrl);
+      const srcAmount = ethers.parseUnits(fromAmount, fromToken.decimals).toString();
+      if (route.provider === "paraswap") {
+        const txRes = await fetch(`${PARASWAP_API}/transactions/${net.chainId}?ignoreChecks=true`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            srcToken: fromToken.address || NATIVE_ADDR, destToken: toToken.address || NATIVE_ADDR,
+            srcAmount,
+            slippage: Math.round(parseFloat(slippage) * 100),
+            userAddress: wallet.address, priceRoute: route.priceRoute, partner: "numpay",
+          }),
+        });
+        if (!txRes.ok) { const e = await txRes.json().catch(() => ({})); throw new Error(e.error || `Build failed (${txRes.status})`); }
+        const txData = await txRes.json();
+        if (fromToken.address && route.priceRoute?.tokenTransferProxy) {
+          const erc20 = new ethers.Contract(fromToken.address, ["function approve(address,uint256) returns (bool)"], signer);
+          await (await erc20.approve(route.priceRoute.tokenTransferProxy, srcAmount)).wait();
+        }
+        const tx = await signer.sendTransaction({
+          to: txData.to, data: txData.data,
+          value: txData.value ? BigInt(txData.value) : 0n,
+          gasLimit: txData.gas ? BigInt(txData.gas) : undefined,
+        });
+        setTxHash(tx.hash);
+      } else {
+        const kyberChain = KYBERSWAP_CHAIN[net.chainId];
+        const buildRes = await fetch(`https://aggregator-api.kyberswap.com/${kyberChain}/api/v1/route/build`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            routeSummary: route.routeSummary, sender: wallet.address, recipient: wallet.address,
+            slippageTolerance: Math.round(parseFloat(slippage) * 100),
+            deadline: Math.floor(Date.now() / 1000) + 1800, source: "numpay",
+          }),
+        });
+        if (!buildRes.ok) throw new Error(`KyberSwap build failed (${buildRes.status})`);
+        const bd = await buildRes.json();
+        if (!bd?.data) throw new Error("No transaction data from KyberSwap");
+        const { routerAddress, data } = bd.data;
+        if (fromToken.address) {
+          const erc20 = new ethers.Contract(fromToken.address, ["function approve(address,uint256) returns (bool)"], signer);
+          await (await erc20.approve(routerAddress, srcAmount)).wait();
+        }
+        const tx = await signer.sendTransaction({
+          to: routerAddress, data, value: !fromToken.address ? BigInt(srcAmount) : 0n,
+        });
+        setTxHash(tx.hash);
+      }
+    } catch (e: any) { setSwapError(e.message || "Swap failed"); }
+    finally { setSwapping(false); }
+  }
+
+  // ── Bridge execute ────────────────────────────────────────────────────────
+
+  async function executeBridge() {
+    if (!wallet || !bridgeRoutes[selBridge] || !fromAmount) return;
+    const fromNet = NETWORKS[fromToken.chainId];
+    if (!fromNet) { setBridgeError("Bridge execution only supported from EVM chains"); return; }
+    setBridging(true); setBridgeError(""); setBridgeTxHash("");
+    try {
+      // /advanced/routes gives display data only; /quote gives the actual transactionRequest
+      const fromLifiId  = LIFI_CHAIN_ID[fromToken.chainId];
+      const toLifiId    = LIFI_CHAIN_ID[toToken.chainId];
+      const fromAddr    = fromToken.chainId === "solana" ? (nonEvmWallet?.solana.address || "") : wallet.address;
+      const toAddr      = toToken.chainId   === "solana" ? (nonEvmWallet?.solana.address || "") : wallet.address;
+      const fromTokAddr = fromToken.address || LIFI_NATIVE_TOKEN[fromToken.chainId] || LIFI_NATIVE;
+      const toTokAddr   = toToken.address   || LIFI_NATIVE_TOKEN[toToken.chainId]   || LIFI_NATIVE;
+      const fromAmtRaw  = ethers.parseUnits(fromAmount, fromToken.decimals).toString();
+
+      const quoteUrl = `${LIFI_API}/quote?fromChain=${fromLifiId}&toChain=${toLifiId}` +
+        `&fromToken=${encodeURIComponent(fromTokAddr)}&toToken=${encodeURIComponent(toTokAddr)}` +
+        `&fromAmount=${fromAmtRaw}&fromAddress=${fromAddr}&toAddress=${toAddr}&integrator=numpay`;
+      const qRes = await fetch(quoteUrl);
+      if (!qRes.ok) {
+        const err = await qRes.text().catch(() => "");
+        throw new Error(`Could not build transaction (${qRes.status})${err ? ": " + err.slice(0, 120) : ""}`);
+      }
+      const qData = await qRes.json();
+      const txReq = qData?.transactionRequest;
+      if (!txReq?.to || !txReq?.data) throw new Error("Bridge provider returned incomplete transaction data");
+
+      const signer = getSigner(wallet.privateKey, fromNet.rpcUrl);
+      // Approve the bridge contract if spending an ERC-20
+      const approvalAddr = qData?.estimate?.approvalAddress;
+      if (fromToken.address && approvalAddr) {
+        const erc20 = new ethers.Contract(fromToken.address, ["function approve(address,uint256) returns (bool)"], signer);
+        await (await erc20.approve(approvalAddr, fromAmtRaw)).wait();
+      }
+      const tx = await signer.sendTransaction({
+        to:       txReq.to,
+        data:     txReq.data,
+        value:    txReq.value    ? BigInt(txReq.value)    : 0n,
+        gasLimit: txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined,
+      });
+      setBridgeTxHash(tx.hash);
+    } catch (e: any) { setBridgeError(e.message || "Bridge failed"); }
+    finally { setBridging(false); }
+  }
+
+  // ── Derived values ────────────────────────────────────────────────────────
+
+  const fromBalance = useMemo(() => {
+    if (!fromToken.address) {
+      const cb = chainBalances.find((c) => c.networkId === fromToken.chainId);
+      const multiChainBal = parseFloat(cb?.balance || "0");
+      // When the from-token is on the currently active network, also check the
+      // direct single-network balance (fetched without a race timeout), and use
+      // whichever is larger — avoids showing 0 when multiChain fetch timed out.
+      const directBal = fromToken.chainId === network.id ? parseFloat(balance) : 0;
+      return Math.max(multiChainBal, directBal) || parseFloat(fromToken.balance) || 0;
+    }
+    return parseFloat(fromToken.balance) || 0;
+  }, [fromToken, chainBalances, network.id, balance]);
+
+  const receiveAmt = useMemo(() => {
+    if (isBridge) {
+      const br = bridgeRoutes[selBridge];
+      if (!br) return "";
+      try { return parseFloat(ethers.formatUnits(br.toAmount, toToken.decimals)).toFixed(Math.min(toToken.decimals, 6)); }
+      catch { return ""; }
+    }
+    return routeOptions[selectedRoute]?.destAmount || "";
+  }, [isBridge, bridgeRoutes, selBridge, routeOptions, selectedRoute, toToken]);
+
+  const isLoading    = isBridge ? loadingBridge : loadingQuote;
+  const routeError   = isBridge ? bridgeError   : quoteError;
+  const activeTxHash = isBridge ? bridgeTxHash  : txHash;
+  const activeExecErr= isBridge ? bridgeError   : swapError;
+  const isExecuting  = isBridge ? bridging       : swapping;
+  const hasRoutes    = isBridge ? bridgeRoutes.length > 0 : routeOptions.length > 0;
+
+  // Picker data — always grouped by chain so every chain is visible up front
+  const pickerChains = useMemo(() => {
+    const seen = new Set<string>();
+    return allTokens.reduce<Array<{ id: string; name: string; logo?: string }>>((acc, t) => {
+      if (!seen.has(t.chainId)) { seen.add(t.chainId); acc.push({ id: t.chainId, name: t.chainName, logo: NETWORKS[t.chainId]?.logo }); }
+      return acc;
+    }, []);
+  }, [allTokens]);
+
+  const pickerGrouped = useMemo(() => {
+    let list = allTokens;
+    if (pickerChain) list = list.filter((t) => t.chainId === pickerChain);
+    if (pickerSearch && !isAddress(pickerSearch)) {
+      const q = pickerSearch.toLowerCase();
+      list = list.filter((t) => t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q));
+    }
+
+    // Group by chain
+    const groups: Record<string, { chainId: string; chainName: string; tokens: SwapToken[] }> = {};
+    for (const t of list) {
+      if (!groups[t.chainId]) groups[t.chainId] = { chainId: t.chainId, chainName: t.chainName, tokens: [] };
+      groups[t.chainId].tokens.push(t);
+    }
+    // Sort tokens within each chain: highest balance first
+    for (const g of Object.values(groups)) {
+      g.tokens.sort((a, b) => (parseFloat(b.balance) || 0) - (parseFloat(a.balance) || 0));
+    }
+    // Sort chains: active network first, then by any nonzero balance, then rest
+    return Object.values(groups).sort((a, b) => {
+      if (a.chainId === network.id) return -1;
+      if (b.chainId === network.id) return 1;
+      const bA = a.tokens.reduce((s, t) => s + (parseFloat(t.balance) || 0), 0);
+      const bB = b.tokens.reduce((s, t) => s + (parseFloat(t.balance) || 0), 0);
+      return bB - bA;
+    });
+  }, [allTokens, pickerChain, pickerSearch, network.id]);
+
+  const isAddrSearch = isAddress(pickerSearch.trim());
+
+  // ── Token picker overlay ──────────────────────────────────────────────────
+
+  if (pickerMode) {
+    const renderTokenRow = (t: SwapToken) => {
+      const key   = `${t.chainId}:${t.symbol}:${t.address || ""}`;
+      const isSel = pickerMode === "from"
+        ? t.symbol === fromToken.symbol && t.chainId === fromToken.chainId && t.address === fromToken.address
+        : t.symbol === toToken.symbol   && t.chainId === toToken.chainId   && t.address === toToken.address;
+      const bal = parseFloat(t.balance) || 0;
+      return (
+        <button key={key} onClick={() => selectToken(t)}
+          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-surface-1 transition-colors mb-0.5 ${isSel ? "bg-brand-500/5" : ""}`}>
+          <div className="flex-shrink-0"><TokenIcon symbol={t.symbol} logo={t.logo} size={36} /></div>
+          <div className="text-left flex-1 min-w-0">
+            <div className="flex items-center gap-1.5">
+              <p className={`text-[13px] font-semibold truncate ${isSel ? "text-brand-400" : "text-text-primary"}`}>{t.symbol}</p>
+              {t.custom && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-surface-3 text-muted flex-shrink-0">Custom</span>}
+            </div>
+            <p className="text-[11px] text-muted truncate">{t.name}</p>
+          </div>
+          {bal > 0 && (
+            <p className="text-[12px] font-semibold text-text-primary tabular-nums flex-shrink-0">{bal.toFixed(Math.min(4, t.decimals))}</p>
+          )}
+          {isSel && <CheckIcon size={14} className="text-brand-400 flex-shrink-0" />}
+        </button>
+      );
+    };
+
+    return (
+      <Layout showNav={false}>
+        {/* Sticky header */}
+        <div className="sticky top-0 z-10 bg-surface-0 px-4 pt-3 pb-2 border-b border-border">
+          <div className="flex items-center gap-3 mb-3">
+            <button onClick={() => { setPickerMode(null); setPickerSearch(""); setPickerChain(null); setImportState("idle"); setImportToken(null); setImportError(""); }}
+              className="p-1.5 rounded-lg text-muted hover:text-text-primary hover:bg-surface-1 transition-colors">
+              <ArrowLeftIcon size={16} />
+            </button>
+            <h3 className="text-[13px] font-semibold text-text-primary">
+              {pickerMode === "from" ? "Sell" : "Buy"} — Select Token
+            </h3>
+          </div>
+          <div className="relative mb-2.5">
+            <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+            <input value={pickerSearch} onChange={(e) => { setPickerSearch(e.target.value); setImportState("idle"); setImportToken(null); setImportError(""); }}
+              placeholder="Search or paste contract address…" autoFocus
+              className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-surface-1 border border-border text-[13px] text-text-primary outline-none placeholder:text-muted/50 focus:border-brand-500 transition-colors" />
+          </div>
+          {/* Chain filter tabs */}
+          <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none -mx-1 px-1">
+            <button onClick={() => setPickerChain(null)}
+              className={`flex-shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${!pickerChain ? "bg-brand-500 text-white" : "bg-surface-2 text-muted hover:text-text-secondary"}`}>
+              All
+            </button>
+            {pickerChains.map((c) => (
+              <button key={c.id} onClick={() => setPickerChain(c.id === pickerChain ? null : c.id)}
+                className={`flex-shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${pickerChain === c.id ? "bg-brand-500 text-white" : "bg-surface-2 text-muted hover:text-text-secondary"}`}>
+                <ChainIcon chainId={c.id} logo={c.logo} size={11} />
+                <span>{c.name.split(" ")[0]}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Token list — naturally scrolls via Layout's overflow-y-auto */}
+        <div className="px-4 py-2 pb-6">
+
+          {/* Import card (when search is a contract address) */}
+          {isAddrSearch && (
+            <div className="mb-3">
+              {importState === "idle" && (
+                <div className="premium-card p-3.5">
+                  <p className="text-[11px] text-muted mb-2">
+                    Import token on <span className="font-semibold text-text-primary">{NETWORKS[importChainId]?.name || importChainId}</span>
+                    {" "}— select a chain above to change network
+                  </p>
+                  <p className="text-[12px] text-text-secondary font-mono mb-3 break-all">
+                    {pickerSearch.slice(0, 10)}…{pickerSearch.slice(-8)}
+                  </p>
+                  {importError && <p className="text-[11px] mb-2" style={{ color: "var(--danger)" }}>{importError}</p>}
+                  <button onClick={handleImport}
+                    className="w-full py-2 rounded-xl bg-brand-500 text-white text-[12px] font-semibold hover:bg-brand-600 transition-colors">
+                    Fetch Token Info
+                  </button>
+                </div>
+              )}
+              {importState === "loading" && (
+                <div className="premium-card p-3.5 flex items-center gap-3">
+                  <div className="w-4 h-4 border-2 border-brand-500/30 border-t-brand-500 rounded-full animate-spin flex-shrink-0" />
+                  <p className="text-[12px] text-muted">Fetching token info…</p>
+                </div>
+              )}
+              {importState === "preview" && importToken && (
+                <div className="premium-card p-3.5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="relative flex-shrink-0">
+                      <TokenIcon symbol={importToken.symbol} logo={importToken.logo} size={40} />
+                      <div className="absolute -bottom-0.5 -right-0.5">
+                        <ChainIcon chainId={importToken.chainId} logo={NETWORKS[importToken.chainId]?.logo} size={14} />
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-[14px] font-bold text-text-primary">{importToken.symbol}</p>
+                      <p className="text-[11px] text-muted">{importToken.name} · {importToken.chainName}</p>
+                      {parseFloat(importToken.balance) > 0 && (
+                        <p className="text-[11px] text-accent-green font-semibold">Balance: {parseFloat(importToken.balance).toFixed(4)}</p>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-muted/60 font-mono break-all mb-3">{importToken.address}</p>
+                  <div className="flex gap-2">
+                    <button onClick={() => { setImportState("idle"); setImportToken(null); }}
+                      className="flex-1 py-2 rounded-xl bg-surface-2 text-muted text-[12px] font-semibold hover:bg-surface-3 transition-colors">
+                      Cancel
+                    </button>
+                    <button onClick={confirmImport}
+                      className="flex-1 py-2 rounded-xl bg-brand-500 text-white text-[12px] font-semibold hover:bg-brand-600 transition-colors">
+                      Add Token
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Chain-grouped token list */}
+          {!isAddrSearch && pickerGrouped.length === 0 && (
+            <div className="py-10 text-center">
+              <p className="text-muted text-[13px] mb-1">No tokens found</p>
+              <p className="text-muted/60 text-[11px]">Paste a contract address above to import</p>
+            </div>
+          )}
+
+          {!isAddrSearch && pickerGrouped.map((section) => (
+            <div key={section.chainId} className="mb-4">
+              {/* Chain section header */}
+              <div className="flex items-center gap-2 px-1 py-1.5 mb-1">
+                <ChainIcon chainId={section.chainId} logo={NETWORKS[section.chainId]?.logo} size={14} />
+                <p className="text-[11px] font-bold text-text-secondary uppercase tracking-wider">{section.chainName}</p>
+              </div>
+              {section.tokens.map(renderTokenRow)}
+            </div>
+          ))}
+        </div>
+      </Layout>
+    );
+  }
+
+  // ── Main UI ───────────────────────────────────────────────────────────────
+
+  const fromNetObj = NETWORKS[fromToken.chainId];
+  const toNet      = NETWORKS[toToken.chainId];
+
+  return (
+    <Layout>
+      <div className="app-bg min-h-full">
+        <div className="px-4 py-4">
+
+          {/* Header */}
+          <div className="flex items-center justify-between mb-5">
+            <div>
+              <h2 className="text-lg font-bold text-text-primary">{isBridge ? "Bridge" : "Swap"}</h2>
+              <p className="text-[10px] text-muted">{isBridge ? "Powered by LI.FI" : "ParaSwap · KyberSwap"}</p>
+            </div>
+            <button onClick={() => setShowSettings(!showSettings)}
+              className="p-2 rounded-lg text-muted hover:text-text-primary hover:bg-surface-1 transition-colors">
+              <SettingsIcon size={16} />
+            </button>
+          </div>
+
+          {/* Slippage settings */}
+          {showSettings && (
+            <div className="premium-card p-3 mb-4 animate-slide-up">
+              <p className="text-[11px] text-muted uppercase tracking-wider font-medium mb-2">Slippage Tolerance</p>
+              <div className="flex gap-2">
+                {["0.1", "0.5", "1.0"].map((s) => (
+                  <button key={s} onClick={() => setSlippage(s)}
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${slippage === s ? "bg-brand-500 text-white" : "bg-surface-2 text-text-secondary hover:bg-surface-3"}`}>
+                    {s}%
+                  </button>
+                ))}
+                <input value={slippage} onChange={(e) => setSlippage(e.target.value)}
+                  className="w-16 px-2 py-1.5 rounded-lg bg-surface-2 border border-border text-xs text-text-primary text-center outline-none focus:border-brand-500"
+                  placeholder="%" />
+              </div>
+            </div>
+          )}
+
+          {/* SELL box */}
+          <div className="premium-card p-4 mb-1.5">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[11px] font-semibold text-muted uppercase tracking-wider">Sell</p>
+              <p className="text-[11px] text-muted tabular-nums">
+                {fromBalance > 0 ? fromBalance.toFixed(6) : "0"} {fromToken.symbol}
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <input value={fromAmount} onChange={(e) => handleFromAmountChange(e.target.value)}
+                placeholder="0"
+                className="flex-1 bg-transparent text-[26px] font-bold text-text-primary outline-none placeholder:text-muted/25 min-w-0 tracking-tight" />
+              <button onClick={() => { setPickerSearch(""); setPickerChain(null); setPickerMode("from"); }}
+                className="flex items-center gap-2 pl-2 pr-3 py-2 rounded-2xl bg-surface-2 hover:bg-surface-3 transition-colors flex-shrink-0">
+                <div className="relative">
+                  <TokenIcon symbol={fromToken.symbol} logo={fromToken.logo} size={26} />
+                  <div className="absolute -bottom-0.5 -right-0.5">
+                    <ChainIcon chainId={fromToken.chainId} logo={fromNetObj?.logo} size={13} />
+                  </div>
+                </div>
+                <div className="text-left">
+                  <p className="text-[13px] font-bold text-text-primary leading-tight">{fromToken.symbol}</p>
+                  <p className="text-[10px] text-muted leading-tight">{fromToken.chainName.split(" ")[0]}</p>
+                </div>
+                <ChevronDownIcon size={12} className="text-muted" />
+              </button>
+            </div>
+            {fromBalance > 0 && (
+              <div className="flex gap-2 mt-3">
+                {[{ l: "25%", p: 0.25 }, { l: "50%", p: 0.5 }, { l: "75%", p: 0.75 }, { l: "MAX", p: 1 }].map(({ l, p }) => (
+                  <button key={l}
+                    onClick={() => handleFromAmountChange((fromBalance * p).toFixed(Math.min(fromToken.decimals, 8)))}
+                    className="px-3 py-1 rounded-full text-[11px] font-bold bg-brand-500/10 text-brand-400 hover:bg-brand-500/20 transition-colors">
+                    {l}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Swap / Bridge direction button */}
+          <div className="flex justify-center -my-[14px] relative z-[2]">
+            <button onClick={handleSwapDir}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border-[3px] border-surface-0 transition-all duration-150 ${
+                isBridge
+                  ? "bg-brand-500/15 text-brand-400 hover:bg-brand-500 hover:text-white"
+                  : "bg-surface-2 text-muted hover:bg-brand-500 hover:text-white"
+              }`}>
+              {isBridge
+                ? <><LayersIcon size={12} /><span className="text-[10px] font-bold uppercase tracking-wider">Bridge</span></>
+                : <SwapIcon size={14} />}
+            </button>
+          </div>
+
+          {/* BUY box */}
+          <div className="premium-card p-4 mb-5">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[11px] font-semibold text-muted uppercase tracking-wider">Buy</p>
+              {isLoading && <RefreshIcon size={12} className="text-brand-400 animate-spin" />}
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <p className="text-[26px] font-bold tracking-tight">
+                  {receiveAmt
+                    ? <span className="text-accent-green">{receiveAmt}</span>
+                    : <span className="text-muted/25">0</span>}
+                </p>
+                {receiveAmt && fromAmount && !isBridge && routeOptions[selectedRoute] && (
+                  <p className="text-[11px] text-muted tabular-nums mt-0.5">
+                    1 {fromToken.symbol} ≈ {(parseFloat(receiveAmt) / parseFloat(fromAmount)).toFixed(4)} {toToken.symbol}
+                  </p>
+                )}
+              </div>
+              <button onClick={() => { setPickerSearch(""); setPickerChain(null); setPickerMode("to"); }}
+                className="flex items-center gap-2 pl-2 pr-3 py-2 rounded-2xl bg-surface-2 hover:bg-surface-3 transition-colors flex-shrink-0">
+                <div className="relative">
+                  <TokenIcon symbol={toToken.symbol} logo={toToken.logo} size={26} />
+                  <div className="absolute -bottom-0.5 -right-0.5">
+                    <ChainIcon chainId={toToken.chainId} logo={toNet?.logo} size={13} />
+                  </div>
+                </div>
+                <div className="text-left">
+                  <p className="text-[13px] font-bold text-text-primary leading-tight">{toToken.symbol}</p>
+                  <p className="text-[10px] text-muted leading-tight">{toToken.chainName.split(" ")[0]}</p>
+                </div>
+                <ChevronDownIcon size={12} className="text-muted" />
+              </button>
+            </div>
+          </div>
+
+          {/* Swap route cards */}
+          {!isBridge && routeOptions.length > 0 && (
+            <div className="mb-4">
+              <p className="text-[10px] text-muted uppercase tracking-wider font-medium mb-2">Routes</p>
+              <div className="space-y-1.5">
+                {routeOptions.map((r, i) => (
+                  <button key={r.provider} onClick={() => setSelectedRoute(i)}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${selectedRoute === i ? "border-brand-500/40 bg-brand-500/5" : "border-border bg-surface-1 hover:border-border/60"}`}>
+                    <img src={r.logo} className="w-5 h-5 rounded-full flex-shrink-0"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+                    <div className="flex-1 text-left">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[12px] font-semibold text-text-primary">{r.label}</span>
+                        {r.tag && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-accent-green/15 text-accent-green">{r.tag}</span>}
+                      </div>
+                      <span className="text-[10px] text-muted">Gas ~{currency?.symbol || "$"}{usdToDisplayCurrency(parseFloat(r.gasCostUSD), currencyCode, rates).toFixed(2)}</span>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-[13px] font-bold text-text-primary tabular-nums">{r.destAmount}</p>
+                      <p className="text-[10px] text-muted">{toToken.symbol}</p>
+                    </div>
+                    {selectedRoute === i && <CheckIcon size={14} className="text-brand-400 flex-shrink-0" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Bridge route cards */}
+          {isBridge && bridgeRoutes.length > 0 && (
+            <div className="mb-4">
+              <p className="text-[10px] text-muted uppercase tracking-wider font-medium mb-2">Bridge Routes</p>
+              <div className="space-y-1.5">
+                {bridgeRoutes.map((r, i) => {
+                  const step     = r.steps[0];
+                  const toolName = step?.toolDetails?.name || step?.tool || "Bridge";
+                  const toolLogo = step?.toolDetails?.logoURI || "";
+                  const dur      = step?.estimate?.executionDuration;
+                  const mins     = dur ? Math.ceil(dur / 60) : null;
+                  const toAmt    = (() => { try { return parseFloat(ethers.formatUnits(r.toAmount, toToken.decimals)).toFixed(Math.min(toToken.decimals, 6)); } catch { return "—"; } })();
+                  return (
+                    <button key={r.id} onClick={() => setSelBridge(i)}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${selBridge === i ? "border-brand-500/40 bg-brand-500/5" : "border-border bg-surface-1 hover:border-border/60"}`}>
+                      {toolLogo
+                        ? <img src={toolLogo} className="w-5 h-5 rounded-full flex-shrink-0" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+                        : <div className="w-5 h-5 rounded-full bg-surface-3 flex items-center justify-center flex-shrink-0"><LayersIcon size={10} className="text-muted" /></div>}
+                      <div className="flex-1 text-left">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[12px] font-semibold text-text-primary">{toolName}</span>
+                          {r.tags.map((tag) => (
+                            <span key={tag} className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${TAG_STYLE[tag] || "bg-surface-3 text-muted"}`}>{tag}</span>
+                          ))}
+                        </div>
+                        <span className="text-[10px] text-muted">Gas ~{currency?.symbol || "$"}{usdToDisplayCurrency(parseFloat(r.gasCostUSD), currencyCode, rates).toFixed(2)}{mins ? ` · ~${mins} min` : ""}</span>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-[13px] font-bold text-text-primary tabular-nums">{toAmt}</p>
+                        <p className="text-[10px] text-muted">{toToken.symbol}</p>
+                      </div>
+                      {selBridge === i && <CheckIcon size={14} className="text-brand-400 flex-shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Loading */}
+          {isLoading && (
+            <div className="flex items-center gap-2 mb-4 px-3 py-2.5 rounded-xl bg-surface-1">
+              <RefreshIcon size={13} className="text-brand-400 animate-spin flex-shrink-0" />
+              <p className="text-[11px] text-muted">{isBridge ? "Searching bridge routes…" : "Getting quotes from ParaSwap and KyberSwap…"}</p>
+            </div>
+          )}
+
+          {/* Route error */}
+          {routeError && !isLoading && (
+            <div className="flex items-center gap-2 mb-4 px-3 py-2.5 rounded-xl bg-amber/5 border border-amber/20">
+              <AlertIcon size={13} style={{ color: "var(--amber)" }} className="flex-shrink-0" />
+              <p className="text-[11px]" style={{ color: "var(--amber)" }}>{routeError}</p>
+            </div>
+          )}
+
+          {/* Execution error */}
+          {activeExecErr && activeExecErr !== routeError && (
+            <div className="flex items-center gap-2 mb-4 px-3 py-2.5 rounded-xl bg-danger/5 border border-danger/20">
+              <AlertIcon size={13} className="flex-shrink-0" style={{ color: "var(--danger)" }} />
+              <p className="text-[11px]" style={{ color: "var(--danger)" }}>{activeExecErr}</p>
+            </div>
+          )}
+
+          {/* Success */}
+          {activeTxHash && (
+            <div className="mb-4 premium-card p-3">
+              <p className="text-accent-green text-xs font-semibold mb-1">{isBridge ? "Bridge submitted!" : "Swap submitted!"}</p>
+              <a href={`${fromNetObj?.explorer}/tx/${activeTxHash}`} target="_blank" rel="noopener noreferrer"
+                className="flex items-center gap-1 text-brand-400 text-[11px] hover:underline break-all">
+                {activeTxHash.slice(0, 20)}…{activeTxHash.slice(-8)} <ExternalLinkIcon size={10} />
+              </a>
+            </div>
+          )}
+
+          {/* CTA */}
+          <button onClick={isBridge ? executeBridge : executeSwap}
+            disabled={!hasRoutes || !fromAmount || parseFloat(fromAmount || "0") <= 0 || isExecuting || isLoading}
+            className="btn-primary-premium text-[13px]">
+            {isExecuting ? (
+              <span className="flex items-center justify-center gap-2">
+                <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                {isBridge ? "Bridging…" : "Swapping…"}
+              </span>
+            ) : isLoading ? (
+              <span className="flex items-center justify-center gap-2">
+                <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                Finding routes…
+              </span>
+            ) : !fromAmount || parseFloat(fromAmount) <= 0
+              ? "Enter an amount"
+              : !hasRoutes
+                ? "No routes available"
+                : isBridge
+                  ? `Bridge ${fromToken.symbol} → ${toNet?.name || toToken.chainId}`
+                  : `Swap ${fromToken.symbol} for ${toToken.symbol}`}
+          </button>
+
+        </div>
+      </div>
+    </Layout>
+  );
+}

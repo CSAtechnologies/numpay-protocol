@@ -1,0 +1,21 @@
+{
+  "name": "@banp/contracts",
+  "version": "0.1.0",
+  "description": "BANP Protocol - Smart Contracts",
+  "private": true,
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:local": "hardhat run deploy/deploy.ts --network hardhat",
+    "deploy:sepolia": "hardhat run deploy/deploy.ts --network sepolia",
+    "deploy:amoy": "hardhat run deploy/deploy.ts --network amoy",
+    "clean": "hardhat clean"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@openzeppelin/contracts": "^5.0.0",
+    "dotenv": "^16.3.1",
+    "hardhat": "^2.19.0",
+    "typescript": "^5.3.0"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@banp/wallet-integration-example",
+  "version": "0.1.0",
+  "description": "Example: How to integrate BANP into a wallet or dApp",
+  "private": true,
+  "scripts": {
+    "resolve": "ts-node src/resolve.ts",
+    "register": "ts-node src/register.ts",
+    "lookup": "ts-node src/lookup.ts"
+  },
+  "dependencies": {
+    "ethers": "^6.9.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.0"
+  }
+}
