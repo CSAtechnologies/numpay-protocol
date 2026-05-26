@@ -588,7 +588,7 @@ export default function TokenDetail() {
           Send
         </button>
         <button
-          onClick={() => navigate("/receive")}
+          onClick={() => navigate("/receive", { state: { chainId: token.chainId } })}
           className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold bg-surface-2 border border-border text-text-primary hover:border-brand-500/50 transition-colors"
         >
           <ReceiveIcon size={14} />

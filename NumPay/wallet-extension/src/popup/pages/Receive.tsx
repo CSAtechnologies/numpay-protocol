@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import QRCode from "qrcode";
+import { useLocation } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
 import Layout from "../components/Layout";
 import { CopyIcon, CheckIcon, ChevronDownIcon } from "../components/Icons";
@@ -45,11 +46,23 @@ const ALL_CHAINS: ReceiveChain[] = [...EVM_CHAINS, ...NON_EVM_CHAINS].sort((a, b
 
 export default function Receive() {
   const { wallet, nonEvmWallet, activeChainId, switchChain } = useWallet();
+  const location = useLocation();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [copied, setCopied] = useState(false);
   const [showChainPicker, setShowChainPicker] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+
+  // If a specific chainId was passed via navigation state (e.g. from TokenDetail),
+  // switch to that chain immediately so the correct address is shown.
+  useEffect(() => {
+    const requested = (location.state as { chainId?: string } | null)?.chainId;
+    if (requested && requested !== activeChainId) {
+      switchChain(requested);
+    }
+    // Only run on mount — we don't want to re-apply stale state on subsequent renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Use global chain selection — selectedChainId is just an alias for clarity
   const selectedChainId = activeChainId;
