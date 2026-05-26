@@ -805,45 +805,6 @@ export default function Dashboard({ onLock }: Props) {
         </div>
       </div>
 
-      {/* ── Active chain balance strip ── */}
-      {(activeEvmBalance !== null || activeNonEvmData !== null) && (
-        <div className="px-4 pt-3 pb-2 flex items-center gap-2.5">
-          {activeEvmNetwork && activeEvmBalance ? (
-            <>
-              <ChainIcon chainId={activeEvmNetwork.id} logo={activeEvmNetwork.logo} size={15} />
-              <span className="text-[14px] font-semibold text-text-primary tabular-nums">
-                {parseFloat(activeEvmBalance.balance) > 0
-                  ? parseFloat(activeEvmBalance.balance).toFixed(4)
-                  : "0.0000"
-                } {activeEvmBalance.symbol}
-              </span>
-            </>
-          ) : activeNonEvmData ? (
-            <>
-              <img
-                src={activeNonEvmChain?.logo}
-                alt={activeNonEvmChain?.name}
-                className="w-[15px] h-[15px] rounded-full flex-shrink-0"
-                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-              />
-              <span className="text-[14px] font-semibold text-text-primary tabular-nums">
-                {activeNonEvmData.balance > 0
-                  ? activeNonEvmData.balance.toFixed(activeNonEvmData.decimals <= 6 ? 4 : 6)
-                  : "0.0000"
-                } {activeNonEvmData.symbol}
-              </span>
-            </>
-          ) : null}
-          {activeChainUsd > 0 && (
-            <span className="text-[12px] text-muted tabular-nums">
-              · {sym}{activeChainUsd >= 1 ? activeChainUsd.toFixed(2) : activeChainUsd.toFixed(4)}
-            </span>
-          )}
-          {!activeEvmNetwork && nonEvmLoading && (
-            <span className="text-[11px] text-muted opacity-60">syncing…</span>
-          )}
-        </div>
-      )}
 
       {/* ── Assets section ── */}
       <div className="px-4 py-4">
