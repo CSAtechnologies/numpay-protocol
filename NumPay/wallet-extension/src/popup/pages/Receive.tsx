@@ -53,19 +53,12 @@ export default function Receive() {
   const [showChainPicker, setShowChainPicker] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // If a specific chainId was passed via navigation state (e.g. from TokenDetail),
-  // switch to that chain immediately so the correct address is shown.
-  useEffect(() => {
-    const requested = (location.state as { chainId?: string } | null)?.chainId;
-    if (requested && requested !== activeChainId) {
-      switchChain(requested);
-    }
-    // Only run on mount — we don't want to re-apply stale state on subsequent renders.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Use global chain selection — selectedChainId is just an alias for clarity
-  const selectedChainId = activeChainId;
+  // Local chain selection — initialised from navigation state so the correct
+  // chain is shown immediately on first render without waiting for any effect.
+  const navChainId = (location.state as { chainId?: string } | null)?.chainId;
+  const [selectedChainId, setSelectedChainId] = useState(
+    () => navChainId ?? activeChainId,
+  );
 
   const selectedChain = ALL_CHAINS.find((c) => c.id === selectedChainId) ?? ALL_CHAINS[0];
 
@@ -182,6 +175,7 @@ export default function Receive() {
                     key={c.id}
                     onClick={() => {
                       if (!isDisabled) {
+                        setSelectedChainId(c.id);
                         switchChain(c.id);
                         setShowChainPicker(false);
                         setCopied(false);
