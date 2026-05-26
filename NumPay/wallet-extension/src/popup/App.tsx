@@ -16,6 +16,7 @@ import Swap from "./pages/Swap";
 import DeFi from "./pages/DeFi";
 import Settings from "./pages/Settings";
 import ManageAssets from "./pages/ManageAssets";
+import TokenDetail from "./pages/TokenDetail";
 
 type AppState = "loading" | "onboarding" | "locked" | "unlocked";
 
@@ -71,6 +72,7 @@ export default function App() {
         <Route path="/defi" element={<DeFi />} />
         <Route path="/settings" element={<Settings onLock={() => setState("locked")} onReset={() => setState("onboarding")} />} />
         <Route path="/manage-assets" element={<ManageAssets />} />
+        <Route path="/token" element={<TokenDetail />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </CurrencyProvider>

@@ -841,7 +841,8 @@ export default function Dashboard({ onLock }: Props) {
           {visibleTokens.map((token, i) => (
             <div
               key={`${token.symbol}-${token.chainName}-${i}`}
-              className="token-row"
+              className="token-row cursor-pointer"
+              onClick={() => navigate("/token", { state: token })}
             >
               <div className="flex items-center gap-3">
                 <div className="relative flex-shrink-0">
