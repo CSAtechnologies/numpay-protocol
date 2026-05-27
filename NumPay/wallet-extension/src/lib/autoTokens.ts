@@ -208,7 +208,7 @@ async function fetchAnkrBatch(
   } catch { return {}; }
 }
 
-const CACHE_PFX = "numpay_autotok_";
+const CACHE_PFX = "numpay_autotok2_";
 const CACHE_TTL = 3 * 60 * 1000; // 3 minutes
 
 /**
