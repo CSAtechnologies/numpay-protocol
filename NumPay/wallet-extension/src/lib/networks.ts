@@ -34,7 +34,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   polygon: {
     id: "polygon", name: "Polygon", chainId: 137,
-    rpcUrl: "https://rpc.ankr.com/polygon",
+    rpcUrl: "https://polygon-mainnet.g.alchemy.com/v2/REDACTED_ROTATE_ME",
     symbol: "POL", decimals: 18,
     explorer: "https://polygonscan.com",
     logo: twLogo("polygon"),
@@ -118,7 +118,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   fantom: {
     id: "fantom", name: "Fantom", chainId: 250,
-    rpcUrl: "https://rpc.ankr.com/fantom",
+    rpcUrl: "https://rpc.ftm.tools",
     symbol: "FTM", decimals: 18,
     explorer: "https://ftmscan.com",
     logo: twLogo("fantom"),
@@ -167,7 +167,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   klaytn: {
     id: "klaytn", name: "Klaytn", chainId: 8217,
-    rpcUrl: "https://rpc.ankr.com/klaytn",
+    rpcUrl: "https://public-en-cypress.klaytn.net",
     symbol: "KLAY", decimals: 18,
     explorer: "https://scope.klaytn.com",
     logo: twLogo("klaytn"),

@@ -382,7 +382,8 @@ const CACHE_TTL = 3 * 60 * 1000; // 3 minutes
 
 /**
  * Sweep every supported EVM chain for ERC-20 tokens.
- * Alchemy (5 chains) + Ankr batch + Multicall3 fallback, all in parallel.
+ * Layer 1: Alchemy (ETH/POL/ARB/OPT/BASE) — full auto-detect via alchemy_getTokenBalances.
+ * Layer 2: Multicall3 balanceOf for all chains with DEFAULT_TOKENS — guaranteed fallback.
  * Serves stale cache immediately, then re-fetches in the background.
  */
 export async function sweepAllChainTokens(
@@ -424,21 +425,16 @@ export async function sweepAllChainTokens(
   };
 
   const alchemyChains = Object.keys(ALCHEMY_CHAINS);
-  const ankrChainIds  = Object.keys(ANKR_CHAINS);
 
   await Promise.all([
-    // Layer 1: Alchemy (ETH, Polygon, Arbitrum, Optimism, Base)
+    // Layer 1: Alchemy (ETH, Polygon, Arbitrum, Optimism, Base) — full auto-detect
     Promise.all(
       alchemyChains.map(async (chainId) => {
         const tokens = await fetchAlchemyERC20s(chainId, address);
         merge(chainId, tokens);
       }),
     ),
-    // Layer 2: Ankr batch (BSC, Avalanche, Fantom, etc.)
-    fetchAnkrBatch(address, ankrChainIds).then((ankrResults) => {
-      for (const [chainId, tokens] of Object.entries(ankrResults)) merge(chainId, tokens);
-    }),
-    // Layer 3: Multicall3 balanceOf for all non-Alchemy chains with known tokens
+    // Layer 2: Multicall3 balanceOf for all chains with known DEFAULT_TOKENS
     sweepTokensByRPC(address, (chainId, tokens) => merge(chainId, tokens)),
   ]);
 
