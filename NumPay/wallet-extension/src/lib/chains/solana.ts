@@ -253,6 +253,7 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
       if (uiAmount <= 0) continue;
       holdings.push({ mint: info.mint, balance: uiAmount, decimals: info.tokenAmount.decimals ?? 0 });
     }
+    console.log(`[NumPay] Solana tokens: ${holdings.length} holdings found`);
     if (holdings.length === 0) return [];
 
     const metaMap: Record<string, { symbol?: string; name?: string; logo?: string }> = {};
@@ -301,6 +302,7 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
 
     // ── Step 2: Jupiter Token List (covers all tradeable Solana tokens) ─────
     const missing1 = holdings.filter((h) => !metaMap[h.mint]?.name).map((h) => h.mint);
+    console.log(`[NumPay] Solana: after Token2022, ${missing1.length} mints still need metadata`);
     if (missing1.length > 0) {
       await Promise.allSettled(
         missing1.slice(0, 50).map(async (mint) => {
@@ -322,6 +324,7 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
 
     // ── Step 3: pump.fun API (bonding-curve tokens not yet on Jupiter) ───────
     const missing2 = holdings.filter((h) => !metaMap[h.mint]?.name).map((h) => h.mint);
+    console.log(`[NumPay] Solana: after Jupiter, ${missing2.length} mints still need metadata`);
     if (missing2.length > 0) {
       await Promise.allSettled(
         missing2.map(async (mint) => {
@@ -351,6 +354,7 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
 
     // ── Step 4: DexScreener (graduated tokens on Raydium / Orca / etc.) ──────
     const missing3 = holdings.filter((h) => !metaMap[h.mint]?.name).map((h) => h.mint);
+    console.log(`[NumPay] Solana: after pump.fun, ${missing3.length} mints still need metadata`);
     if (missing3.length > 0) {
       try {
         const r = await fetch(
@@ -371,6 +375,9 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
         }
       } catch {}
     }
+
+    const resolved = holdings.filter((h) => metaMap[h.mint]?.name).length;
+    console.log(`[NumPay] Solana: ${resolved}/${holdings.length} mints resolved with real metadata`);
 
     return holdings.map(({ mint, balance, decimals }) => {
       const meta = metaMap[mint] ?? {};

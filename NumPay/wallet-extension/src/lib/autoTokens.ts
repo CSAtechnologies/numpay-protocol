@@ -2,7 +2,7 @@
  * Auto-detect all ERC-20 tokens across every chain.
  * Layer 1: Alchemy (ETH/POL/ARB/OPT/BASE) — rich metadata.
  * Layer 2: Ankr multichain batch — free, no key, covers BSC etc.
- * Layer 3: Direct RPC balanceOf — guaranteed fallback for known tokens.
+ * Layer 3: Multicall3 balanceOf — guaranteed fallback for known tokens.
  */
 import { ethers } from "ethers";
 import { getItem, setItem } from "./storage";
@@ -60,6 +60,21 @@ export interface AutoToken {
   logo?: string;
 }
 
+// Multicall3 — deployed at the same address on all major EVM chains
+const MC3_ADDR = "0xcA11bde05977b3631167028862bE2a173976CA11";
+// zkSync Era uses a different deployment address
+const MC3_ZKSYNC = "0xF9cda624FBC7e059355ce98a31693d299FACd963";
+
+const MC3_IFACE = new ethers.Interface([
+  "function aggregate3(tuple(address target, bool allowFailure, bytes callData)[] calls) returns (tuple(bool success, bytes returnData)[] results)",
+]);
+const ERC20_IFACE = new ethers.Interface([
+  "function balanceOf(address owner) view returns (uint256)",
+]);
+
+// Alchemy chain IDs — handled by Layer 1, skip in Layer 3
+const ALCHEMY_CHAIN_IDS = new Set(["ethereum", "polygon", "arbitrum", "optimism", "base"]);
+
 async function fetchAlchemyERC20s(chainId: string, address: string): Promise<AutoToken[]> {
   const sub = ALCHEMY_CHAINS[chainId];
   if (!sub) return [];
@@ -75,8 +90,15 @@ async function fetchAlchemyERC20s(chainId: string, address: string): Promise<Aut
         params: [address, "erc20"],
       }),
     });
-    if (!balResp.ok) return [];
+    if (!balResp.ok) {
+      console.warn(`[NumPay] Alchemy ${chainId}: HTTP ${balResp.status}`);
+      return [];
+    }
     const balData = await balResp.json();
+    if (balData.error) {
+      console.warn(`[NumPay] Alchemy ${chainId}: API error`, balData.error);
+      return [];
+    }
     const balances: Array<{ contractAddress: string; tokenBalance: string }> =
       balData.result?.tokenBalances ?? [];
 
@@ -84,6 +106,7 @@ async function fetchAlchemyERC20s(chainId: string, address: string): Promise<Aut
       if (!b.tokenBalance || b.tokenBalance === "0x") return false;
       try { return BigInt(b.tokenBalance) > 0n; } catch { return false; }
     });
+    console.log(`[NumPay] Alchemy ${chainId}: ${balances.length} tokens, ${nonZero.length} non-zero`);
     if (nonZero.length === 0) return [];
 
     // Parallel metadata fetch for all non-zero tokens (cap 80)
@@ -115,8 +138,13 @@ async function fetchAlchemyERC20s(chainId: string, address: string): Promise<Aut
       } catch { return null; }
     }));
 
-    return results.filter((t): t is AutoToken => t !== null);
-  } catch { return []; }
+    const found = results.filter((t): t is AutoToken => t !== null);
+    console.log(`[NumPay] Alchemy ${chainId}: resolved ${found.length} tokens with metadata`);
+    return found;
+  } catch (e) {
+    console.error(`[NumPay] Alchemy ${chainId}: exception`, e);
+    return [];
+  }
 }
 
 async function fetchScanERC20s(chainId: string, address: string): Promise<AutoToken[]> {
@@ -173,6 +201,8 @@ async function fetchAnkrBatch(
   const blockchains = chainIds.map((id) => ANKR_CHAINS[id]).filter(Boolean);
   if (blockchains.length === 0) return {};
 
+  console.log("[NumPay] Ankr batch: querying", blockchains.length, "chains");
+
   try {
     const resp = await fetch("https://rpc.ankr.com/multichain", {
       method: "POST",
@@ -183,15 +213,26 @@ async function fetchAnkrBatch(
         params: { walletAddress: address, blockchain: blockchains, onlyWhitelisted: false },
       }),
     });
-    if (!resp.ok) return {};
+    if (!resp.ok) {
+      console.warn("[NumPay] Ankr batch: HTTP", resp.status);
+      return {};
+    }
     const data = await resp.json();
+
+    if (data.error) {
+      console.warn("[NumPay] Ankr batch: API error", data.error);
+      return {};
+    }
+
+    const assets: any[] = data?.result?.assets ?? [];
+    console.log("[NumPay] Ankr batch: received", assets.length, "assets");
 
     // Reverse-map Ankr blockchain slug → our chainId
     const ankrToChain: Record<string, string> = {};
     for (const [chainId, slug] of Object.entries(ANKR_CHAINS)) ankrToChain[slug] = chainId;
 
     const result: Record<string, AutoToken[]> = {};
-    for (const asset of (data?.result?.assets ?? [])) {
+    for (const asset of assets) {
       if (asset.tokenType === "NATIVE" || !asset.contractAddress) continue;
       const chainId = ankrToChain[asset.blockchain];
       if (!chainId) continue;
@@ -207,73 +248,141 @@ async function fetchAnkrBatch(
         logo:     asset.thumbnail || undefined,
       });
     }
+
+    const chainCount = Object.keys(result).length;
+    const tokenTotal = Object.values(result).reduce((s, t) => s + t.length, 0);
+    console.log(`[NumPay] Ankr batch: ${chainCount} chains with tokens, ${tokenTotal} total`);
     return result;
-  } catch { return {}; }
+  } catch (e) {
+    console.error("[NumPay] Ankr batch: exception", e);
+    return {};
+  }
 }
 
 /**
- * Build a networkId → RPC URL map for all chains that have DEFAULT_TOKENS.
- * Used by the direct-RPC fallback sweep.
+ * Build a networkId → RPC map for all non-Alchemy chains that have DEFAULT_TOKENS.
+ * Alchemy chains are already handled by Layer 1.
  */
-function buildChainRpcMap(): Record<string, { rpc: string; tokens: typeof DEFAULT_TOKENS[number] }> {
-  const map: Record<string, { rpc: string; tokens: typeof DEFAULT_TOKENS[number] }> = {};
+function buildChainRpcMap(): Record<string, { rpc: string; tokens: typeof DEFAULT_TOKENS[number]; mc3: string }> {
+  const map: Record<string, { rpc: string; tokens: typeof DEFAULT_TOKENS[number]; mc3: string }> = {};
   for (const [networkId, net] of Object.entries(NETWORKS)) {
+    if (ALCHEMY_CHAIN_IDS.has(networkId)) continue; // handled by Layer 1
     const tokens = DEFAULT_TOKENS[net.chainId];
     if (tokens && tokens.length > 0) {
-      map[networkId] = { rpc: net.rpcUrl, tokens };
+      map[networkId] = {
+        rpc: net.rpcUrl,
+        tokens,
+        mc3: networkId === "zksync" ? MC3_ZKSYNC : MC3_ADDR,
+      };
     }
   }
   return map;
 }
 
 /**
- * Check DEFAULT_TOKENS balances via direct chain RPC for every supported network.
- * This is the guaranteed fallback — no external API needed.
+ * Check DEFAULT_TOKENS balances via Multicall3 for every non-Alchemy chain.
+ * Falls back to individual balanceOf calls if Multicall3 is unavailable.
  */
 async function sweepTokensByRPC(
   address: string,
   onUpdate: (chainId: string, tokens: AutoToken[]) => void,
 ): Promise<void> {
   const chainMap = buildChainRpcMap();
+  console.log("[NumPay] RPC sweep: checking chains:", Object.keys(chainMap).join(", "));
 
   await Promise.all(
-    Object.entries(chainMap).map(async ([networkId, { rpc, tokens }]) => {
+    Object.entries(chainMap).map(async ([networkId, { rpc, tokens, mc3 }]) => {
+      console.log(`[NumPay] RPC sweep ${networkId}: ${tokens.length} known tokens to check`);
       try {
         const provider = new ethers.JsonRpcProvider(rpc);
-        const results = await Promise.all(
-          tokens.map(async (token) => {
+        const found: AutoToken[] = [];
+
+        // Try Multicall3 aggregate3 — 1 eth_call per chain
+        let multicallOk = false;
+        try {
+          const calls = tokens.map((t) => ({
+            target: t.address,
+            allowFailure: true,
+            callData: ERC20_IFACE.encodeFunctionData("balanceOf", [address]),
+          }));
+          const encoded = MC3_IFACE.encodeFunctionData("aggregate3", [calls]);
+
+          const raw = await Promise.race([
+            provider.call({ to: mc3, data: encoded }),
+            new Promise<never>((_, r) => setTimeout(() => r(new Error("mc3 timeout")), 8000)),
+          ]);
+
+          const decoded = MC3_IFACE.decodeFunctionResult("aggregate3", raw)[0] as Array<{
+            success: boolean; returnData: string;
+          }>;
+
+          for (let i = 0; i < tokens.length; i++) {
+            const r = decoded[i];
+            if (!r.success || !r.returnData || r.returnData === "0x") continue;
+            let raw256: bigint;
             try {
-              const balance = await Promise.race([
-                getTokenBalance(token.address, address, provider),
-                new Promise<never>((_, r) =>
-                  setTimeout(() => r(new Error("timeout")), 5000),
-                ),
-              ]);
-              if (parseFloat(balance) <= 0) return null;
-              return {
-                symbol:   token.symbol,
-                name:     token.name,
-                address:  token.address.toLowerCase(),
-                decimals: token.decimals,
-                balance,
-                logo:     token.logo,
-              } as AutoToken;
-            } catch { return null; }
-          }),
-        );
-        const found = results.filter((t): t is AutoToken => t !== null);
+              // returnData is 32 bytes (64 hex chars) for uint256
+              raw256 = BigInt(r.returnData);
+            } catch { continue; }
+            if (raw256 <= 0n) continue;
+            const token = tokens[i];
+            const balance = ethers.formatUnits(raw256, token.decimals);
+            if (parseFloat(balance) <= 0) continue;
+            found.push({
+              symbol:   token.symbol,
+              name:     token.name,
+              address:  token.address.toLowerCase(),
+              decimals: token.decimals,
+              balance,
+              logo:     token.logo,
+            });
+          }
+
+          multicallOk = true;
+          console.log(`[NumPay] RPC sweep ${networkId}: multicall3 OK → ${found.length} tokens`);
+        } catch (mcErr) {
+          console.warn(`[NumPay] RPC sweep ${networkId}: multicall3 failed (${(mcErr as Error).message}), trying individual calls`);
+        }
+
+        // Fallback: individual balanceOf calls if multicall3 unavailable
+        if (!multicallOk) {
+          const results = await Promise.all(
+            tokens.map(async (token) => {
+              try {
+                const balance = await Promise.race([
+                  getTokenBalance(token.address, address, provider),
+                  new Promise<never>((_, r) => setTimeout(() => r(new Error("timeout")), 5000)),
+                ]);
+                if (parseFloat(balance) <= 0) return null;
+                return {
+                  symbol:   token.symbol,
+                  name:     token.name,
+                  address:  token.address.toLowerCase(),
+                  decimals: token.decimals,
+                  balance,
+                  logo:     token.logo,
+                } as AutoToken;
+              } catch { return null; }
+            }),
+          );
+          for (const t of results) if (t) found.push(t);
+          console.log(`[NumPay] RPC sweep ${networkId}: individual calls → ${found.length} tokens`);
+        }
+
         if (found.length > 0) onUpdate(networkId, found);
-      } catch {}
+      } catch (e) {
+        console.error(`[NumPay] RPC sweep ${networkId}: fatal error`, e);
+      }
     }),
   );
 }
 
-const CACHE_PFX = "numpay_autotok2_";
+const CACHE_PFX = "numpay_autotok3_";
 const CACHE_TTL = 3 * 60 * 1000; // 3 minutes
 
 /**
  * Sweep every supported EVM chain for ERC-20 tokens.
- * Alchemy (5 chains) + Ankr batch + direct-RPC fallback, all in parallel.
+ * Alchemy (5 chains) + Ankr batch + Multicall3 fallback, all in parallel.
  * Serves stale cache immediately, then re-fetches in the background.
  */
 export async function sweepAllChainTokens(
@@ -281,6 +390,7 @@ export async function sweepAllChainTokens(
   onUpdate: (chainId: string, tokens: AutoToken[]) => void,
 ): Promise<void> {
   const cacheKey = CACHE_PFX + address.toLowerCase();
+  console.log("[NumPay] sweepAllChainTokens for", address);
 
   // Serve cache immediately (stale-while-revalidate)
   let cacheIsFresh = false;
@@ -289,7 +399,14 @@ export async function sweepAllChainTokens(
     if (raw) {
       const { ts, data } = JSON.parse(raw) as { ts: number; data: Record<string, AutoToken[]> };
       for (const [chainId, tokens] of Object.entries(data)) onUpdate(chainId, tokens);
-      if (Date.now() - ts < CACHE_TTL) cacheIsFresh = true;
+      if (Date.now() - ts < CACHE_TTL) {
+        console.log("[NumPay] cache fresh, skipping re-fetch");
+        cacheIsFresh = true;
+      } else {
+        console.log("[NumPay] stale cache served, re-fetching");
+      }
+    } else {
+      console.log("[NumPay] no cache, fetching fresh");
     }
   } catch {}
 
@@ -306,7 +423,6 @@ export async function sweepAllChainTokens(
     onUpdate(chainId, freshData[chainId]);
   };
 
-  // Run all three layers in parallel
   const alchemyChains = Object.keys(ALCHEMY_CHAINS);
   const ankrChainIds  = Object.keys(ANKR_CHAINS);
 
@@ -314,19 +430,23 @@ export async function sweepAllChainTokens(
     // Layer 1: Alchemy (ETH, Polygon, Arbitrum, Optimism, Base)
     Promise.all(
       alchemyChains.map(async (chainId) => {
-        try {
-          const tokens = await fetchAlchemyERC20s(chainId, address);
-          merge(chainId, tokens);
-        } catch {}
+        const tokens = await fetchAlchemyERC20s(chainId, address);
+        merge(chainId, tokens);
       }),
     ),
     // Layer 2: Ankr batch (BSC, Avalanche, Fantom, etc.)
     fetchAnkrBatch(address, ankrChainIds).then((ankrResults) => {
       for (const [chainId, tokens] of Object.entries(ankrResults)) merge(chainId, tokens);
     }),
-    // Layer 3: Direct balanceOf via chain RPC for all chains with DEFAULT_TOKENS
+    // Layer 3: Multicall3 balanceOf for all non-Alchemy chains with known tokens
     sweepTokensByRPC(address, (chainId, tokens) => merge(chainId, tokens)),
   ]);
+
+  const summary = Object.entries(freshData)
+    .filter(([, t]) => t.length > 0)
+    .map(([k, v]) => `${k}:${v.length}`)
+    .join(", ");
+  console.log("[NumPay] sweep complete:", summary || "no tokens found");
 
   try {
     await setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: freshData }));
