@@ -1,10 +1,13 @@
 /**
  * Auto-detect all ERC-20 tokens across every chain.
- * Alchemy for ETH/POL/ARB/OPT/BASE (rich metadata + logos).
- * Ankr multichain batch for everything else (free, no key, one call).
+ * Layer 1: Alchemy (ETH/POL/ARB/OPT/BASE) — rich metadata.
+ * Layer 2: Ankr multichain batch — free, no key, covers BSC etc.
+ * Layer 3: Direct RPC balanceOf — guaranteed fallback for known tokens.
  */
 import { ethers } from "ethers";
 import { getItem, setItem } from "./storage";
+import { NETWORKS } from "./networks";
+import { DEFAULT_TOKENS, getTokenBalance } from "./tokens";
 
 const ALCHEMY_KEY = "REDACTED_ROTATE_ME";
 
@@ -208,12 +211,69 @@ async function fetchAnkrBatch(
   } catch { return {}; }
 }
 
+/**
+ * Build a networkId → RPC URL map for all chains that have DEFAULT_TOKENS.
+ * Used by the direct-RPC fallback sweep.
+ */
+function buildChainRpcMap(): Record<string, { rpc: string; tokens: typeof DEFAULT_TOKENS[number] }> {
+  const map: Record<string, { rpc: string; tokens: typeof DEFAULT_TOKENS[number] }> = {};
+  for (const [networkId, net] of Object.entries(NETWORKS)) {
+    const tokens = DEFAULT_TOKENS[net.chainId];
+    if (tokens && tokens.length > 0) {
+      map[networkId] = { rpc: net.rpcUrl, tokens };
+    }
+  }
+  return map;
+}
+
+/**
+ * Check DEFAULT_TOKENS balances via direct chain RPC for every supported network.
+ * This is the guaranteed fallback — no external API needed.
+ */
+async function sweepTokensByRPC(
+  address: string,
+  onUpdate: (chainId: string, tokens: AutoToken[]) => void,
+): Promise<void> {
+  const chainMap = buildChainRpcMap();
+
+  await Promise.all(
+    Object.entries(chainMap).map(async ([networkId, { rpc, tokens }]) => {
+      try {
+        const provider = new ethers.JsonRpcProvider(rpc);
+        const results = await Promise.all(
+          tokens.map(async (token) => {
+            try {
+              const balance = await Promise.race([
+                getTokenBalance(token.address, address, provider),
+                new Promise<never>((_, r) =>
+                  setTimeout(() => r(new Error("timeout")), 5000),
+                ),
+              ]);
+              if (parseFloat(balance) <= 0) return null;
+              return {
+                symbol:   token.symbol,
+                name:     token.name,
+                address:  token.address.toLowerCase(),
+                decimals: token.decimals,
+                balance,
+                logo:     token.logo,
+              } as AutoToken;
+            } catch { return null; }
+          }),
+        );
+        const found = results.filter((t): t is AutoToken => t !== null);
+        if (found.length > 0) onUpdate(networkId, found);
+      } catch {}
+    }),
+  );
+}
+
 const CACHE_PFX = "numpay_autotok2_";
 const CACHE_TTL = 3 * 60 * 1000; // 3 minutes
 
 /**
  * Sweep every supported EVM chain for ERC-20 tokens.
- * Alchemy (5 chains) + Ankr batch (all other chains) in parallel.
+ * Alchemy (5 chains) + Ankr batch + direct-RPC fallback, all in parallel.
  * Serves stale cache immediately, then re-fetches in the background.
  */
 export async function sweepAllChainTokens(
@@ -237,51 +297,36 @@ export async function sweepAllChainTokens(
 
   const freshData: Record<string, AutoToken[]> = {};
 
-  // Alchemy: parallel per-chain (rich metadata + logos)
+  const merge = (chainId: string, incoming: AutoToken[]) => {
+    if (incoming.length === 0) return;
+    const existing = freshData[chainId] ?? [];
+    const existingAddrs = new Set(existing.map((t) => t.address.toLowerCase()));
+    const toAdd = incoming.filter((t) => !existingAddrs.has(t.address.toLowerCase()));
+    freshData[chainId] = [...existing, ...toAdd];
+    onUpdate(chainId, freshData[chainId]);
+  };
+
+  // Run all three layers in parallel
   const alchemyChains = Object.keys(ALCHEMY_CHAINS);
   const ankrChainIds  = Object.keys(ANKR_CHAINS);
 
-  const [alchemyResults, ankrResults] = await Promise.all([
+  await Promise.all([
+    // Layer 1: Alchemy (ETH, Polygon, Arbitrum, Optimism, Base)
     Promise.all(
       alchemyChains.map(async (chainId) => {
         try {
           const tokens = await fetchAlchemyERC20s(chainId, address);
-          return { chainId, tokens };
-        } catch { return { chainId, tokens: [] as AutoToken[] }; }
+          merge(chainId, tokens);
+        } catch {}
       }),
     ),
-    fetchAnkrBatch(address, ankrChainIds),
-  ]);
-
-  for (const { chainId, tokens } of alchemyResults) {
-    if (tokens.length > 0) {
-      freshData[chainId] = tokens;
-      onUpdate(chainId, tokens);
-    }
-  }
-
-  for (const [chainId, tokens] of Object.entries(ankrResults)) {
-    if (tokens.length > 0) {
-      freshData[chainId] = tokens;
-      onUpdate(chainId, tokens);
-    }
-  }
-
-  // Scan fallback: only for chains Ankr didn't return (rare edge case)
-  const ankrMissed = Object.keys(SCAN_CHAINS).filter(
-    (id) => !ankrResults[id] && !ANKR_CHAINS[id],
-  );
-  await Promise.all(
-    ankrMissed.map(async (chainId) => {
-      try {
-        const tokens = await fetchScanERC20s(chainId, address);
-        if (tokens.length > 0) {
-          freshData[chainId] = tokens;
-          onUpdate(chainId, tokens);
-        }
-      } catch {}
+    // Layer 2: Ankr batch (BSC, Avalanche, Fantom, etc.)
+    fetchAnkrBatch(address, ankrChainIds).then((ankrResults) => {
+      for (const [chainId, tokens] of Object.entries(ankrResults)) merge(chainId, tokens);
     }),
-  );
+    // Layer 3: Direct balanceOf via chain RPC for all chains with DEFAULT_TOKENS
+    sweepTokensByRPC(address, (chainId, tokens) => merge(chainId, tokens)),
+  ]);
 
   try {
     await setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: freshData }));

@@ -63,14 +63,24 @@ export const DEFAULT_TOKENS: Record<number, Token[]> = {
   ],
   // ── Avalanche C-Chain ──────────────────────────────────────────────────────
   43114: [
-    { symbol: "USDT", name: "Tether USD", address: "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7", decimals: 6,  logo: `${TW}/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png` },
-    { symbol: "USDC", name: "USD Coin",   address: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", decimals: 6,  logo: `${TW}/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png` },
+    { symbol: "USDT",  name: "Tether USD",   address: "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7", decimals: 6,  logo: `${TW}/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png` },
+    { symbol: "USDC",  name: "USD Coin",      address: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", decimals: 6,  logo: `${TW}/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png` },
+    { symbol: "WAVAX", name: "Wrapped AVAX",  address: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7", decimals: 18, logo: `${TW}/avalanchec/info/logo.png` },
+    { symbol: "WBTC",  name: "Wrapped BTC",   address: "0x50b7545627a5162F82A992c33b87aDc75187B218", decimals: 8,  logo: `${TW}/ethereum/assets/0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599/logo.png` },
+    { symbol: "WETH",  name: "Wrapped ETH",   address: "0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB", decimals: 18, logo: `${TW}/ethereum/info/logo.png` },
   ],
   // ── BNB Chain ─────────────────────────────────────────────────────────────
   56: [
-    { symbol: "USDT", name: "Tether USD", address: "0x55d398326f99059fF775485246999027B3197955", decimals: 18, logo: `${TW}/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png` },
-    { symbol: "USDC", name: "USD Coin",   address: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", decimals: 18, logo: `${TW}/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png` },
-    { symbol: "DAI",  name: "Dai",        address: "0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3", decimals: 18, logo: `${TW}/ethereum/assets/0x6B175474E89094C44Da98b954EedeAC495271d0F/logo.png` },
+    { symbol: "USDT", name: "Tether USD",      address: "0x55d398326f99059fF775485246999027B3197955", decimals: 18, logo: `${TW}/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png` },
+    { symbol: "USDC", name: "USD Coin",         address: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", decimals: 18, logo: `${TW}/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png` },
+    { symbol: "DAI",  name: "Dai",              address: "0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3", decimals: 18, logo: `${TW}/ethereum/assets/0x6B175474E89094C44Da98b954EedeAC495271d0F/logo.png` },
+    { symbol: "CAKE", name: "PancakeSwap",      address: "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82", decimals: 18, logo: `${TW}/smartchain/assets/0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82/logo.png` },
+    { symbol: "WBNB", name: "Wrapped BNB",      address: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", decimals: 18, logo: `${TW}/smartchain/assets/0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c/logo.png` },
+    { symbol: "ETH",  name: "Ethereum Token",   address: "0x2170Ed0880ac9A755fd29B2688956BD959F933F8", decimals: 18, logo: `${TW}/ethereum/info/logo.png` },
+    { symbol: "BTCB", name: "Bitcoin BEP2",     address: "0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c", decimals: 18, logo: `${TW}/bitcoin/info/logo.png` },
+    { symbol: "XRP",  name: "XRP Token",        address: "0x1D2F0da169ceB9fC7B3144628dB156f3F6c60dBE", decimals: 18, logo: `${TW}/ripple/info/logo.png` },
+    { symbol: "ADA",  name: "Cardano Token",    address: "0x3EE2200Efb3400fAbB9AacF31297cBdD1d435D47", decimals: 18, logo: `${TW}/cardano/info/logo.png` },
+    { symbol: "DOGE", name: "Dogecoin Token",   address: "0xbA2aE424d960c26247Dd6c32edC70B295c744C43",  decimals: 8,  logo: `${TW}/doge/info/logo.png` },
   ],
   // ── zkSync Era ─────────────────────────────────────────────────────────────
   324: [
