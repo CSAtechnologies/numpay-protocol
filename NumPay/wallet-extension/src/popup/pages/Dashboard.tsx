@@ -894,7 +894,8 @@ export default function Dashboard({ onLock }: Props) {
                 {dustTokens.map((token, i) => (
                   <div
                     key={`dust-${token.symbol}-${token.chainName}-${i}`}
-                    className="token-row opacity-45 hover:opacity-80"
+                    className="token-row opacity-45 hover:opacity-80 cursor-pointer"
+                    onClick={() => navigate("/token", { state: token })}
                   >
                     <div className="flex items-center gap-2.5">
                       <TokenIcon symbol={token.symbol} logo={token.logo} size={28} />
