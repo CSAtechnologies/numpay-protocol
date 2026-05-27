@@ -4,7 +4,7 @@ import { useLocation } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
 import Layout from "../components/Layout";
 import { CopyIcon, CheckIcon, ChevronDownIcon } from "../components/Icons";
-import { NETWORKS } from "@/lib/networks";
+import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
 
 const TW = "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains";
 
@@ -59,6 +59,15 @@ export default function Receive() {
   const [selectedChainId, setSelectedChainId] = useState(
     () => navChainId ?? activeChainId,
   );
+  // Sync once when storage finishes loading (activeChainId changes from the
+  // default to the persisted value). Skip if navigation state seeded the chain.
+  const chainSynced = useRef(false);
+  useEffect(() => {
+    if (!navChainId && !chainSynced.current && activeChainId !== DEFAULT_NETWORK) {
+      chainSynced.current = true;
+      setSelectedChainId(activeChainId);
+    }
+  }, [activeChainId, navChainId]);
 
   const selectedChain = ALL_CHAINS.find((c) => c.id === selectedChainId) ?? ALL_CHAINS[0];
 
