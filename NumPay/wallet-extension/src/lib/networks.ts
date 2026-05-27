@@ -69,7 +69,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   bsc: {
     id: "bsc", name: "BNB Chain", chainId: 56,
-    rpcUrl: "https://bsc-dataseed.binance.org/",
+    rpcUrl: "https://bsc-dataseed1.binance.org/",
     symbol: "BNB", decimals: 18,
     explorer: "https://bscscan.com",
     logo: twLogo("smartchain"),
@@ -118,7 +118,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   fantom: {
     id: "fantom", name: "Fantom", chainId: 250,
-    rpcUrl: "https://rpc.ftm.tools",
+    rpcUrl: "https://rpc.fantom.network",
     symbol: "FTM", decimals: 18,
     explorer: "https://ftmscan.com",
     logo: twLogo("fantom"),

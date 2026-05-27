@@ -309,7 +309,7 @@ async function sweepTokensByRPC(
 
           const raw = await Promise.race([
             provider.call({ to: mc3, data: encoded }),
-            new Promise<never>((_, r) => setTimeout(() => r(new Error("mc3 timeout")), 8000)),
+            new Promise<never>((_, r) => setTimeout(() => r(new Error("mc3 timeout")), 15000)),
           ]);
 
           const decoded = MC3_IFACE.decodeFunctionResult("aggregate3", raw)[0] as Array<{
