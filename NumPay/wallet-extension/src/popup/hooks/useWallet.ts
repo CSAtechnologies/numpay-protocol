@@ -8,6 +8,7 @@ import {
   deriveNonEvmAddresses,
   fetchNonEvmBalances,
   fetchSolanaTokens,
+  fetchTronTokens,
   type NonEvmWallet,
   type NonEvmChain,
 } from "@/lib/chains";
@@ -317,16 +318,19 @@ export function useWallet(): WalletState {
         const nev = await deriveNonEvmAddresses(mnemonic);
         setNonEvmWallet(nev);
 
-        // Fetch native balances and SPL tokens in parallel
-        const [chains, splTokens] = await Promise.all([
+        // Fetch native balances + SPL tokens + TRC-20 tokens in parallel
+        const [chains, splTokens, trc20Tokens] = await Promise.all([
           fetchNonEvmBalances(nev),
           fetchSolanaTokens(nev.solana.address).catch(() => []),
+          fetchTronTokens(nev.tron.address).catch(() => []),
         ]);
 
         setNonEvmChains(chains);
-        if (splTokens.length > 0) {
-          setTokensByChain((prev) => ({ ...prev, solana: splTokens }));
-        }
+        setTokensByChain((prev) => ({
+          ...prev,
+          ...(splTokens.length > 0  ? { solana: splTokens }      : {}),
+          ...(trc20Tokens.length > 0 ? { tron: trc20Tokens }     : {}),
+        }));
 
         try { await setItem(cacheKey, JSON.stringify({ ts: Date.now(), chains })); } catch {}
       } catch (e) {
@@ -342,14 +346,17 @@ export function useWallet(): WalletState {
     if (!nonEvmWallet) return;
     setNonEvmLoading(true);
     try {
-      const [chains, splTokens] = await Promise.all([
+      const [chains, splTokens, trc20Tokens] = await Promise.all([
         fetchNonEvmBalances(nonEvmWallet),
         fetchSolanaTokens(nonEvmWallet.solana.address).catch(() => []),
+        fetchTronTokens(nonEvmWallet.tron.address).catch(() => []),
       ]);
       setNonEvmChains(chains);
-      if (splTokens.length > 0) {
-        setTokensByChain((prev) => ({ ...prev, solana: splTokens }));
-      }
+      setTokensByChain((prev) => ({
+        ...prev,
+        ...(splTokens.length > 0   ? { solana: splTokens }  : {}),
+        ...(trc20Tokens.length > 0 ? { tron: trc20Tokens }  : {}),
+      }));
     } catch {}
     finally { setNonEvmLoading(false); }
   }, [nonEvmWallet]);

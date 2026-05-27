@@ -130,15 +130,99 @@ export async function sendSolanaTransfer(
 
 // ---------- balance ----------
 
+// ── Token2022 on-chain metadata helpers ──────────────────────────────────────
+
+function readU32LE(data: Uint8Array, offset: number): number {
+  return (data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0;
+}
+
+function toHttpsUrl(uri: string): string {
+  if (uri.startsWith("ipfs://")) return uri.replace("ipfs://", "https://cf-ipfs.com/ipfs/");
+  return uri;
+}
+
 /**
- * Fetch all SPL token balances for a Solana address.
- * Uses getTokenAccountsByOwner + Alchemy DAS batch metadata (covers pump.fun & all Metaplex tokens).
+ * Parse the Token2022 TokenMetadata extension (type 19) from a base64-encoded
+ * mint account. Returns name, symbol, and the JSON metadata URI if found.
+ * Layout after the 6-byte TLV header:
+ *   8  bytes  discriminator
+ *   32 bytes  update_authority (OptionalNonZeroPubkey)
+ *   32 bytes  mint
+ *   4+n bytes name   (Borsh string)
+ *   4+n bytes symbol (Borsh string)
+ *   4+n bytes uri    (Borsh string)
+ */
+function parseToken2022Metadata(
+  rawBase64: string,
+): { name?: string; symbol?: string; uri?: string } | null {
+  try {
+    const bytes = Uint8Array.from(atob(rawBase64), (c) => c.charCodeAt(0));
+    // Standard SPL mint = 82 bytes; Token2022 adds AccountType byte + TLV extensions
+    if (bytes.length <= 82) return null;
+    // Byte 82: AccountType — 1 = Mint (Token2022)
+    if (bytes[82] !== 1) return null;
+
+    const decoder = new TextDecoder();
+    let offset = 83;
+    while (offset + 6 <= bytes.length) {
+      const extType = bytes[offset] | (bytes[offset + 1] << 8);
+      const extLen  = readU32LE(bytes, offset + 2);
+      offset += 6;
+
+      if (extType === 19) {
+        // TokenMetadata extension
+        let pos = offset;
+        pos += 8;  // discriminator
+        pos += 32; // update_authority
+        pos += 32; // mint
+
+        if (pos + 4 > bytes.length) break;
+        const nameLen = readU32LE(bytes, pos); pos += 4;
+        if (pos + nameLen > bytes.length) break;
+        const name = decoder.decode(bytes.slice(pos, pos + nameLen)).trim();
+        pos += nameLen;
+
+        if (pos + 4 > bytes.length) break;
+        const symLen = readU32LE(bytes, pos); pos += 4;
+        if (pos + symLen > bytes.length) break;
+        const symbol = decoder.decode(bytes.slice(pos, pos + symLen)).trim();
+        pos += symLen;
+
+        if (pos + 4 > bytes.length) break;
+        const uriLen = readU32LE(bytes, pos); pos += 4;
+        if (pos + uriLen > bytes.length) break;
+        const uri = decoder.decode(bytes.slice(pos, pos + uriLen)).trim();
+
+        return {
+          name:   name   || undefined,
+          symbol: symbol || undefined,
+          uri:    uri    || undefined,
+        };
+      }
+
+      offset += extLen;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch all SPL + Token2022 token balances and metadata for a Solana address.
+ *
+ * Metadata resolution chain (each step only runs for tokens still missing data):
+ *   1. Token2022 on-chain extension  — reads mint account directly, no external API
+ *      └─ also fetches the JSON URI for the logo image
+ *   2. Alchemy DAS getAssetBatch     — covers indexed Metaplex / standard SPL tokens
+ *   3. pump.fun API                  — bonding-curve tokens not yet indexed by DAS
+ *   4. DexScreener                   — graduated tokens listed on any DEX
  */
 export async function fetchSolanaTokens(address: string): Promise<Array<{
   symbol: string; name: string; address: string; decimals: number; balance: string; logo?: string;
 }>> {
   try {
-    // Query both SPL Token program and Token2022 (pump.fun uses both)
+    // ── Step 0: get all token accounts (SPL + Token2022) ─────────────────────
     const [resp1, resp2] = await Promise.all([
       fetch(SOL_RPC, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -161,7 +245,6 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
       ...(resp2?.result?.value ?? []),
     ];
 
-    // Collect mints with positive balance
     const holdings: { mint: string; balance: number; decimals: number }[] = [];
     for (const acc of accounts) {
       const info = acc.account?.data?.parsed?.info;
@@ -172,41 +255,130 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
     }
     if (holdings.length === 0) return [];
 
-    // Batch-fetch Metaplex metadata via Alchemy DAS (works for pump.fun tokens too)
     const metaMap: Record<string, { symbol?: string; name?: string; logo?: string }> = {};
+
+    // ── Step 1: Token2022 on-chain metadata (no external API) ────────────────
     try {
-      const dasResp = await fetch(SOL_RPC, {
+      const mintResp = await fetch(SOL_RPC, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          jsonrpc: "2.0", id: 1,
-          method: "getAssetBatch",
-          params: { ids: holdings.slice(0, 50).map((h) => h.mint) },
+          jsonrpc: "2.0", id: 3,
+          method: "getMultipleAccounts",
+          params: [holdings.slice(0, 50).map((h) => h.mint), { encoding: "base64" }],
         }),
       });
-      if (dasResp.ok) {
-        const dasData = await dasResp.json();
-        for (const asset of (dasData.result ?? [])) {
-          if (!asset?.id) continue;
-          metaMap[asset.id] = {
-            symbol: asset.content?.metadata?.symbol?.trim(),
-            name:   asset.content?.metadata?.name?.trim(),
-            logo:   asset.content?.links?.image ?? asset.content?.files?.[0]?.cdn_uri,
-          };
+      if (mintResp.ok) {
+        const mintData = await mintResp.json();
+        const mintAccounts: any[] = mintData.result?.value ?? [];
+        const uriQueue: { mint: string; uri: string }[] = [];
+
+        for (let i = 0; i < mintAccounts.length; i++) {
+          const acc = mintAccounts[i];
+          if (!acc?.data?.[0]) continue;
+          const t2 = parseToken2022Metadata(acc.data[0]);
+          if (t2?.name || t2?.symbol) {
+            metaMap[holdings[i].mint] = { name: t2.name, symbol: t2.symbol };
+            if (t2.uri) uriQueue.push({ mint: holdings[i].mint, uri: t2.uri });
+          }
         }
+
+        // Fetch logo from the JSON metadata URI (IPFS / Arweave)
+        await Promise.allSettled(
+          uriQueue.map(async ({ mint, uri }) => {
+            try {
+              const r = await fetch(toHttpsUrl(uri));
+              if (!r.ok) return;
+              const json = await r.json();
+              if (json?.image && metaMap[mint]) {
+                metaMap[mint].logo = toHttpsUrl(String(json.image));
+              }
+            } catch {}
+          }),
+        );
       }
     } catch {}
 
+    // ── Step 2: Alchemy DAS batch (indexed Metaplex / standard SPL tokens) ───
+    const missing1 = holdings.filter((h) => !metaMap[h.mint]?.name).map((h) => h.mint);
+    if (missing1.length > 0) {
+      try {
+        const dasResp = await fetch(SOL_RPC, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0", id: 1,
+            method: "getAssetBatch",
+            params: { ids: missing1.slice(0, 50) },
+          }),
+        });
+        if (dasResp.ok) {
+          const dasData = await dasResp.json();
+          for (const asset of (dasData.result ?? [])) {
+            if (!asset?.id) continue;
+            const sym  = asset.content?.metadata?.symbol?.trim();
+            const name = asset.content?.metadata?.name?.trim();
+            const logo = asset.content?.links?.image ?? asset.content?.files?.[0]?.cdn_uri;
+            if (sym || name) metaMap[asset.id] = { symbol: sym, name, logo };
+          }
+        }
+      } catch {}
+    }
+
+    // ── Step 3: pump.fun API (bonding-curve tokens not yet indexed) ───────────
+    const missing2 = holdings.filter((h) => !metaMap[h.mint]?.name).map((h) => h.mint);
+    if (missing2.length > 0) {
+      await Promise.allSettled(
+        missing2.map(async (mint) => {
+          try {
+            const r = await fetch(`https://frontend-api.pump.fun/coins/${mint}`);
+            if (!r.ok) return;
+            const d = await r.json();
+            if (d?.name || d?.symbol) {
+              metaMap[mint] = {
+                symbol: d.symbol?.trim(),
+                name:   d.name?.trim(),
+                logo:   d.image_uri ? toHttpsUrl(d.image_uri) : undefined,
+              };
+            }
+          } catch {}
+        }),
+      );
+    }
+
+    // ── Step 4: DexScreener (graduated tokens on Raydium / Orca / etc.) ──────
+    const missing3 = holdings.filter((h) => !metaMap[h.mint]?.name).map((h) => h.mint);
+    if (missing3.length > 0) {
+      try {
+        const r = await fetch(
+          `https://api.dexscreener.com/latest/dex/tokens/${missing3.slice(0, 10).join(",")}`,
+        );
+        if (r.ok) {
+          const d = await r.json();
+          for (const pair of (d.pairs ?? [])) {
+            const mint = pair.baseToken?.address;
+            if (mint && !metaMap[mint]?.name) {
+              metaMap[mint] = {
+                symbol: pair.baseToken.symbol?.trim(),
+                name:   pair.baseToken.name?.trim(),
+                logo:   pair.info?.imageUrl,
+              };
+            }
+          }
+        }
+      } catch {}
+    }
+
     return holdings.map(({ mint, balance, decimals }) => {
       const meta = metaMap[mint] ?? {};
-      const symbol = meta.symbol || mint.slice(0, 4).toUpperCase();
+      const symbol = meta.symbol || mint.slice(0, 6).toUpperCase();
       return {
         symbol,
-        name: meta.name || symbol,
+        name:    meta.name || meta.symbol || mint.slice(0, 6).toUpperCase(),
         address: mint,
         decimals,
         balance: balance.toString(),
-        logo: meta.logo,
+        logo:    meta.logo,
       };
     });
   } catch { return []; }

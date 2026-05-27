@@ -63,3 +63,87 @@ export async function fetchTronBalance(address: string): Promise<number> {
 
   return 0;
 }
+
+const TW = "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains";
+
+// Well-known TRC-20 contracts with hardcoded metadata (avoids N round-trips for common tokens)
+const KNOWN_TRC20: Record<string, { name: string; symbol: string; decimals: number; logo: string }> = {
+  "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t": { name: "Tether USD",   symbol: "USDT", decimals: 6,  logo: `${TW}/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png` },
+  "TEkxiTehnzSmse5XcY4i1cDfGJxuVkgxoW": { name: "USD Coin",      symbol: "USDC", decimals: 6,  logo: `${TW}/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png` },
+  "TPYmHEhy5n8TCEfYGqW2rPxsghSfzghPDn": { name: "USDD",          symbol: "USDD", decimals: 18, logo: `${TW}/tron/assets/TPYmHEhy5n8TCEfYGqW2rPxsghSfzghPDn/logo.png` },
+  "TAFjULxiVgT4qWk6UZwjqwZXTSaGaqnVp4": { name: "BitTorrent",    symbol: "BTT",  decimals: 18, logo: `${TW}/tron/assets/TAFjULxiVgT4qWk6UZwjqwZXTSaGaqnVp4/logo.png` },
+  "TCFLL5dx5ZJdKnWuesXxi1VPwjLVmWZZy9": { name: "JUST",          symbol: "JST",  decimals: 18, logo: `${TW}/tron/assets/TCFLL5dx5ZJdKnWuesXxi1VPwjLVmWZZy9/logo.png` },
+  "TSSMHYeV2uE9qYH95DqyoCuNCzEL1NvU3S": { name: "SUN Token",     symbol: "SUN",  decimals: 18, logo: `${TW}/tron/assets/TSSMHYeV2uE9qYH95DqyoCuNCzEL1NvU3S/logo.png` },
+  "TNUC9Qb1rRpS5CbWLmNMxXBjyFoydXjWFR": { name: "Wrapped TRX",   symbol: "WTRX", decimals: 6,  logo: `${TW}/tron/assets/TNUC9Qb1rRpS5CbWLmNMxXBjyFoydXjWFR/logo.png` },
+  "TUpMhErZL2fhh4sVNULAbNKLokS4GjC1F4": { name: "TrueUSD",       symbol: "TUSD", decimals: 18, logo: `${TW}/tron/assets/TUpMhErZL2fhh4sVNULAbNKLokS4GjC1F4/logo.png` },
+  "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7": { name: "WINkLink",      symbol: "WIN",  decimals: 6,  logo: `${TW}/tron/assets/TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7/logo.png` },
+};
+
+/**
+ * Fetch TRC-20 token balances for a Tron address.
+ * Uses Trongrid account data for balances, known list for metadata,
+ * and DexScreener for any unknown contracts.
+ */
+export async function fetchTronTokens(address: string): Promise<Array<{
+  symbol: string; name: string; address: string; decimals: number; balance: string; logo?: string;
+}>> {
+  try {
+    const resp = await fetch(`https://api.trongrid.io/v1/accounts/${address}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+
+    // trc20 is an array of { contract_address: balance_string } objects
+    const trc20List: Record<string, string>[] = data.data?.[0]?.trc20 ?? [];
+
+    const tokens: Array<{
+      symbol: string; name: string; address: string; decimals: number; balance: string; logo?: string;
+    }> = [];
+
+    for (const entry of trc20List) {
+      for (const [contract, rawBalance] of Object.entries(entry)) {
+        const known = KNOWN_TRC20[contract];
+        const decimals = known?.decimals ?? 6;
+        const balance = Number(rawBalance) / Math.pow(10, decimals);
+        if (balance <= 0) continue;
+        tokens.push({
+          symbol:   known?.symbol ?? contract.slice(0, 6),
+          name:     known?.name   ?? contract.slice(0, 6),
+          address:  contract,
+          decimals,
+          balance:  balance.toString(),
+          logo:     known?.logo,
+        });
+      }
+    }
+
+    // Resolve unknown contracts via DexScreener (covers Tron DEX pairs)
+    const unknowns = tokens
+      .filter((t) => !KNOWN_TRC20[t.address])
+      .map((t) => t.address);
+
+    if (unknowns.length > 0) {
+      try {
+        const r = await fetch(
+          `https://api.dexscreener.com/latest/dex/tokens/${unknowns.slice(0, 5).join(",")}`,
+        );
+        if (r.ok) {
+          const d = await r.json();
+          for (const pair of (d.pairs ?? [])) {
+            const contract = pair.baseToken?.address;
+            if (!contract) continue;
+            const token = tokens.find((t) => t.address === contract && !KNOWN_TRC20[t.address]);
+            if (token && (pair.baseToken.name || pair.baseToken.symbol)) {
+              token.name   = pair.baseToken.name?.trim()   || token.name;
+              token.symbol = pair.baseToken.symbol?.trim() || token.symbol;
+              token.logo   = pair.info?.imageUrl           || token.logo;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    return tokens;
+  } catch { return []; }
+}
