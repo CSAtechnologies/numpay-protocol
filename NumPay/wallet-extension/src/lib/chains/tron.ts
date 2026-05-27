@@ -118,15 +118,35 @@ export async function fetchTronTokens(address: string): Promise<Array<{
       }
     }
 
-    // Resolve unknown contracts via DexScreener (covers Tron DEX pairs)
-    const unknowns = tokens
-      .filter((t) => !KNOWN_TRC20[t.address])
-      .map((t) => t.address);
+    const unknowns = tokens.filter((t) => !KNOWN_TRC20[t.address]);
 
+    // Resolve unknown contracts via TronScan token overview
     if (unknowns.length > 0) {
+      await Promise.allSettled(
+        unknowns.map(async (token) => {
+          try {
+            const r = await fetch(
+              `https://apilist.tronscanapi.com/api/token/overview?address=${token.address}`,
+              { headers: { Accept: "application/json" } },
+            );
+            if (!r.ok) return;
+            const d = await r.json();
+            if (d?.name || d?.symbol) {
+              token.name   = d.name?.trim()   || token.name;
+              token.symbol = d.symbol?.trim() || token.symbol;
+              if (d.logo) token.logo = d.logo;
+            }
+          } catch {}
+        }),
+      );
+    }
+
+    // DexScreener fallback for still-unknown tokens (covers Tron DEX pairs)
+    const stillUnknown = tokens.filter((t) => !KNOWN_TRC20[t.address] && t.symbol === t.address.slice(0, 6));
+    if (stillUnknown.length > 0) {
       try {
         const r = await fetch(
-          `https://api.dexscreener.com/latest/dex/tokens/${unknowns.slice(0, 5).join(",")}`,
+          `https://api.dexscreener.com/latest/dex/tokens/${stillUnknown.slice(0, 5).map((t) => t.address).join(",")}`,
         );
         if (r.ok) {
           const d = await r.json();

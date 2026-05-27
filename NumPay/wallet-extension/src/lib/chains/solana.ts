@@ -299,49 +299,52 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
       }
     } catch {}
 
-    // ── Step 2: Alchemy DAS batch (indexed Metaplex / standard SPL tokens) ───
+    // ── Step 2: Jupiter Token List (covers all tradeable Solana tokens) ─────
     const missing1 = holdings.filter((h) => !metaMap[h.mint]?.name).map((h) => h.mint);
     if (missing1.length > 0) {
-      try {
-        const dasResp = await fetch(SOL_RPC, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jsonrpc: "2.0", id: 1,
-            method: "getAssetBatch",
-            params: { ids: missing1.slice(0, 50) },
-          }),
-        });
-        if (dasResp.ok) {
-          const dasData = await dasResp.json();
-          for (const asset of (dasData.result ?? [])) {
-            if (!asset?.id) continue;
-            const sym  = asset.content?.metadata?.symbol?.trim();
-            const name = asset.content?.metadata?.name?.trim();
-            const logo = asset.content?.links?.image ?? asset.content?.files?.[0]?.cdn_uri;
-            if (sym || name) metaMap[asset.id] = { symbol: sym, name, logo };
-          }
-        }
-      } catch {}
+      await Promise.allSettled(
+        missing1.slice(0, 50).map(async (mint) => {
+          try {
+            const r = await fetch(`https://tokens.jup.ag/token/${mint}`);
+            if (!r.ok) return;
+            const d = await r.json();
+            if (d?.symbol || d?.name) {
+              metaMap[mint] = {
+                symbol: d.symbol?.trim(),
+                name:   d.name?.trim(),
+                logo:   d.logoURI ? toHttpsUrl(String(d.logoURI)) : undefined,
+              };
+            }
+          } catch {}
+        }),
+      );
     }
 
-    // ── Step 3: pump.fun API (bonding-curve tokens not yet indexed) ───────────
+    // ── Step 3: pump.fun API (bonding-curve tokens not yet on Jupiter) ───────
     const missing2 = holdings.filter((h) => !metaMap[h.mint]?.name).map((h) => h.mint);
     if (missing2.length > 0) {
       await Promise.allSettled(
         missing2.map(async (mint) => {
-          try {
-            const r = await fetch(`https://frontend-api.pump.fun/coins/${mint}`);
-            if (!r.ok) return;
-            const d = await r.json();
-            if (d?.name || d?.symbol) {
-              metaMap[mint] = {
-                symbol: d.symbol?.trim(),
-                name:   d.name?.trim(),
-                logo:   d.image_uri ? toHttpsUrl(d.image_uri) : undefined,
-              };
-            }
-          } catch {}
+          // Try v2 endpoint first, then v1 fallback
+          const urls = [
+            `https://frontend-api-v2.pump.fun/coins/${mint}`,
+            `https://frontend-api.pump.fun/coins/${mint}`,
+          ];
+          for (const url of urls) {
+            try {
+              const r = await fetch(url);
+              if (!r.ok) continue;
+              const d = await r.json();
+              if (d?.name || d?.symbol) {
+                metaMap[mint] = {
+                  symbol: d.symbol?.trim(),
+                  name:   d.name?.trim(),
+                  logo:   d.image_uri ? toHttpsUrl(d.image_uri) : undefined,
+                };
+                break;
+              }
+            } catch {}
+          }
         }),
       );
     }
