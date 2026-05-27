@@ -72,7 +72,8 @@ const ERC20_IFACE = new ethers.Interface([
   "function balanceOf(address owner) view returns (uint256)",
 ]);
 
-// Alchemy chain IDs — handled by Layer 1, skip in Layer 3
+// Alchemy chain IDs — Layer 1 handles these, but Layer 3 still runs as fallback
+// so DEFAULT_TOKENS are found even when Alchemy returns 403 / rate-limits
 const ALCHEMY_CHAIN_IDS = new Set(["ethereum", "polygon", "arbitrum", "optimism", "base"]);
 
 async function fetchAlchemyERC20s(chainId: string, address: string): Promise<AutoToken[]> {
@@ -91,12 +92,12 @@ async function fetchAlchemyERC20s(chainId: string, address: string): Promise<Aut
       }),
     });
     if (!balResp.ok) {
-      console.warn(`[NumPay] Alchemy ${chainId}: HTTP ${balResp.status}`);
+      console.log(`[NumPay] Alchemy ${chainId}: HTTP ${balResp.status} — Layer 3 fallback will cover DEFAULT_TOKENS`);
       return [];
     }
     const balData = await balResp.json();
     if (balData.error) {
-      console.warn(`[NumPay] Alchemy ${chainId}: API error`, balData.error);
+      console.log(`[NumPay] Alchemy ${chainId}: API error`, balData.error.message ?? balData.error);
       return [];
     }
     const balances: Array<{ contractAddress: string; tokenBalance: string }> =
@@ -260,13 +261,12 @@ async function fetchAnkrBatch(
 }
 
 /**
- * Build a networkId → RPC map for all non-Alchemy chains that have DEFAULT_TOKENS.
- * Alchemy chains are already handled by Layer 1.
+ * Build a networkId → RPC map for all chains that have DEFAULT_TOKENS.
+ * Includes Alchemy chains so Layer 3 acts as guaranteed fallback when Alchemy 403s.
  */
 function buildChainRpcMap(): Record<string, { rpc: string; tokens: typeof DEFAULT_TOKENS[number]; mc3: string }> {
   const map: Record<string, { rpc: string; tokens: typeof DEFAULT_TOKENS[number]; mc3: string }> = {};
   for (const [networkId, net] of Object.entries(NETWORKS)) {
-    if (ALCHEMY_CHAIN_IDS.has(networkId)) continue; // handled by Layer 1
     const tokens = DEFAULT_TOKENS[net.chainId];
     if (tokens && tokens.length > 0) {
       map[networkId] = {
