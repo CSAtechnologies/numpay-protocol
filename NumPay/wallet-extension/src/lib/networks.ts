@@ -34,7 +34,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   polygon: {
     id: "polygon", name: "Polygon", chainId: 137,
-    rpcUrl: "https://polygon-rpc.com",
+    rpcUrl: "https://rpc.ankr.com/polygon",
     symbol: "POL", decimals: 18,
     explorer: "https://polygonscan.com",
     logo: twLogo("polygon"),
