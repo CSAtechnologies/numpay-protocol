@@ -34,7 +34,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   polygon: {
     id: "polygon", name: "Polygon", chainId: 137,
-    rpcUrl: "https://polygon-bor-rpc.publicnode.com",
+    rpcUrl: "https://polygon-rpc.com",
     symbol: "POL", decimals: 18,
     explorer: "https://polygonscan.com",
     logo: twLogo("polygon"),
@@ -69,7 +69,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   bsc: {
     id: "bsc", name: "BNB Chain", chainId: 56,
-    rpcUrl: "https://bsc.publicnode.com",
+    rpcUrl: "https://bsc-dataseed.binance.org/",
     symbol: "BNB", decimals: 18,
     explorer: "https://bscscan.com",
     logo: twLogo("smartchain"),
@@ -118,7 +118,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   fantom: {
     id: "fantom", name: "Fantom", chainId: 250,
-    rpcUrl: "https://fantom-rpc.publicnode.com",
+    rpcUrl: "https://rpc.ankr.com/fantom",
     symbol: "FTM", decimals: 18,
     explorer: "https://ftmscan.com",
     logo: twLogo("fantom"),
@@ -167,7 +167,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   klaytn: {
     id: "klaytn", name: "Klaytn", chainId: 8217,
-    rpcUrl: "https://klaytn-rpc.publicnode.com",
+    rpcUrl: "https://rpc.ankr.com/klaytn",
     symbol: "KLAY", decimals: 18,
     explorer: "https://scope.klaytn.com",
     logo: twLogo("klaytn"),
