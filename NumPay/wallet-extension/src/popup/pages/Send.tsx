@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { ethers } from "ethers";
+import { useLocation } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
 import { isBPANInput, isValidBPAN, resolveBPAN, formatBPAN } from "@/lib/bpan";
 import { BPAN_CHAINS, DEFAULT_NETWORK, type BPANChainId } from "@/lib/networks";
@@ -45,17 +46,21 @@ export default function Send() {
     switchChain,
   } = useWallet();
 
-  // Default to the globally selected chain; sync once when storage finishes loading
+  const location = useLocation();
+  const navChainId = (location.state as { prefillChain?: string } | null)?.prefillChain as BPANChainId | undefined;
+
+  // Seed from navigation state (e.g. coming from TokenDetail) or fall back to global chain.
   const [selectedChainId, setSelectedChainId] = useState<BPANChainId>(
-    activeChainId as BPANChainId
+    () => navChainId ?? (activeChainId as BPANChainId)
   );
+  // Sync once when storage finishes loading. Skip if navigation state seeded the chain.
   const chainSynced = useRef(false);
   useEffect(() => {
-    if (!chainSynced.current && activeChainId !== DEFAULT_NETWORK) {
+    if (!navChainId && !chainSynced.current && activeChainId !== DEFAULT_NETWORK) {
       chainSynced.current = true;
       setSelectedChainId(activeChainId as BPANChainId);
     }
-  }, [activeChainId]);
+  }, [activeChainId, navChainId]);
 
   const [to, setTo] = useState("");
   const [amount, setAmount] = useState("");
