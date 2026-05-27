@@ -1,7 +1,7 @@
 /**
  * Auto-detect all ERC-20 tokens across every chain.
- * Uses Alchemy's token balance API for Alchemy-supported chains,
- * and block explorer "tokenlist" endpoints for the rest.
+ * Alchemy for ETH/POL/ARB/OPT/BASE (rich metadata + logos).
+ * Ankr multichain batch for everything else (free, no key, one call).
  */
 import { ethers } from "ethers";
 import { getItem, setItem } from "./storage";
@@ -16,6 +16,24 @@ export const ALCHEMY_CHAINS: Record<string, string> = {
   base:     "base-mainnet",
 };
 
+// Ankr blockchain slugs for non-Alchemy chains
+const ANKR_CHAINS: Record<string, string> = {
+  bsc:          "bsc",
+  avalanche:    "avalanche",
+  fantom:       "fantom",
+  gnosis:       "gnosis",
+  moonbeam:     "moonbeam",
+  celo:         "celo",
+  scroll:       "scroll",
+  linea:        "linea",
+  mantle:       "mantle",
+  blast:        "blast",
+  zksync:       "zksync_era",
+  polygonzkevm: "polygon_zkevm",
+  cronos:       "cronos",
+};
+
+// Kept for legacy reference — scan APIs now only used as fallback
 export const SCAN_CHAINS: Record<string, string> = {
   bsc:         "https://api.bscscan.com/api",
   avalanche:   "https://api.snowscan.xyz/api",
@@ -134,11 +152,60 @@ async function fetchScanERC20s(chainId: string, address: string): Promise<AutoTo
   } catch { return []; }
 }
 
-/** Fetch all ERC-20 tokens for one chain, choosing the best available method. */
+/** Fetch all ERC-20 tokens for one Alchemy chain. */
 export async function fetchERC20sForChain(chainId: string, walletAddress: string): Promise<AutoToken[]> {
   if (ALCHEMY_CHAINS[chainId]) return fetchAlchemyERC20s(chainId, walletAddress);
   if (SCAN_CHAINS[chainId])   return fetchScanERC20s(chainId, walletAddress);
   return [];
+}
+
+/**
+ * Fetch ERC-20 tokens across multiple chains in ONE Ankr multichain call.
+ * Returns a map of chainId → tokens.
+ */
+async function fetchAnkrBatch(
+  address: string,
+  chainIds: string[],
+): Promise<Record<string, AutoToken[]>> {
+  const blockchains = chainIds.map((id) => ANKR_CHAINS[id]).filter(Boolean);
+  if (blockchains.length === 0) return {};
+
+  try {
+    const resp = await fetch("https://rpc.ankr.com/multichain", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1,
+        method: "ankr_getAccountBalance",
+        params: { walletAddress: address, blockchain: blockchains, onlyWhitelisted: false },
+      }),
+    });
+    if (!resp.ok) return {};
+    const data = await resp.json();
+
+    // Reverse-map Ankr blockchain slug → our chainId
+    const ankrToChain: Record<string, string> = {};
+    for (const [chainId, slug] of Object.entries(ANKR_CHAINS)) ankrToChain[slug] = chainId;
+
+    const result: Record<string, AutoToken[]> = {};
+    for (const asset of (data?.result?.assets ?? [])) {
+      if (asset.tokenType === "NATIVE" || !asset.contractAddress) continue;
+      const chainId = ankrToChain[asset.blockchain];
+      if (!chainId) continue;
+      const balance = parseFloat(asset.balance || "0");
+      if (balance <= 0) continue;
+      if (!result[chainId]) result[chainId] = [];
+      result[chainId].push({
+        symbol:   String(asset.tokenSymbol  || "").trim(),
+        name:     String(asset.tokenName    || asset.tokenSymbol || "").trim(),
+        address:  String(asset.contractAddress).toLowerCase(),
+        decimals: Number(asset.tokenDecimals ?? 18),
+        balance:  String(asset.balance || "0"),
+        logo:     asset.thumbnail || undefined,
+      });
+    }
+    return result;
+  } catch { return {}; }
 }
 
 const CACHE_PFX = "numpay_autotok_";
@@ -146,7 +213,7 @@ const CACHE_TTL = 3 * 60 * 1000; // 3 minutes
 
 /**
  * Sweep every supported EVM chain for ERC-20 tokens.
- * Calls onUpdate(chainId, tokens) for each chain as results arrive.
+ * Alchemy (5 chains) + Ankr batch (all other chains) in parallel.
  * Serves stale cache immediately, then re-fetches in the background.
  */
 export async function sweepAllChainTokens(
@@ -168,17 +235,53 @@ export async function sweepAllChainTokens(
 
   if (cacheIsFresh) return;
 
-  // Background refresh
-  const allChains = [...Object.keys(ALCHEMY_CHAINS), ...Object.keys(SCAN_CHAINS)];
   const freshData: Record<string, AutoToken[]> = {};
 
-  await Promise.all(allChains.map(async (chainId) => {
-    try {
-      const tokens = await fetchERC20sForChain(chainId, address);
+  // Alchemy: parallel per-chain (rich metadata + logos)
+  const alchemyChains = Object.keys(ALCHEMY_CHAINS);
+  const ankrChainIds  = Object.keys(ANKR_CHAINS);
+
+  const [alchemyResults, ankrResults] = await Promise.all([
+    Promise.all(
+      alchemyChains.map(async (chainId) => {
+        try {
+          const tokens = await fetchAlchemyERC20s(chainId, address);
+          return { chainId, tokens };
+        } catch { return { chainId, tokens: [] as AutoToken[] }; }
+      }),
+    ),
+    fetchAnkrBatch(address, ankrChainIds),
+  ]);
+
+  for (const { chainId, tokens } of alchemyResults) {
+    if (tokens.length > 0) {
       freshData[chainId] = tokens;
-      if (tokens.length > 0) onUpdate(chainId, tokens);
-    } catch {}
-  }));
+      onUpdate(chainId, tokens);
+    }
+  }
+
+  for (const [chainId, tokens] of Object.entries(ankrResults)) {
+    if (tokens.length > 0) {
+      freshData[chainId] = tokens;
+      onUpdate(chainId, tokens);
+    }
+  }
+
+  // Scan fallback: only for chains Ankr didn't return (rare edge case)
+  const ankrMissed = Object.keys(SCAN_CHAINS).filter(
+    (id) => !ankrResults[id] && !ANKR_CHAINS[id],
+  );
+  await Promise.all(
+    ankrMissed.map(async (chainId) => {
+      try {
+        const tokens = await fetchScanERC20s(chainId, address);
+        if (tokens.length > 0) {
+          freshData[chainId] = tokens;
+          onUpdate(chainId, tokens);
+        }
+      } catch {}
+    }),
+  );
 
   try {
     await setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: freshData }));
