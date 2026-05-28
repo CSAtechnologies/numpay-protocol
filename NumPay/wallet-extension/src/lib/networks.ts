@@ -41,21 +41,21 @@ export const NETWORKS: Record<string, Network> = {
   },
   arbitrum: {
     id: "arbitrum", name: "Arbitrum One", chainId: 42161,
-    rpcUrl: "https://arb-mainnet.g.alchemy.com/v2/REDACTED_ROTATE_ME",
+    rpcUrl: "https://arbitrum.drpc.org",
     symbol: "ETH", decimals: 18,
     explorer: "https://arbiscan.io",
     logo: twLogo("arbitrum"),
   },
   optimism: {
     id: "optimism", name: "Optimism", chainId: 10,
-    rpcUrl: "https://opt-mainnet.g.alchemy.com/v2/REDACTED_ROTATE_ME",
+    rpcUrl: "https://optimism.drpc.org",
     symbol: "ETH", decimals: 18,
     explorer: "https://optimistic.etherscan.io",
     logo: twLogo("optimism"),
   },
   base: {
     id: "base", name: "Base", chainId: 8453,
-    rpcUrl: "https://base-mainnet.g.alchemy.com/v2/REDACTED_ROTATE_ME",
+    rpcUrl: "https://base.drpc.org",
     symbol: "ETH", decimals: 18,
     explorer: "https://basescan.org",
     logo: twLogo("base"),
@@ -69,7 +69,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   bsc: {
     id: "bsc", name: "BNB Chain", chainId: 56,
-    rpcUrl: "https://bsc-dataseed1.binance.org/",
+    rpcUrl: "https://bsc.drpc.org",
     symbol: "BNB", decimals: 18,
     explorer: "https://bscscan.com",
     logo: twLogo("smartchain"),
