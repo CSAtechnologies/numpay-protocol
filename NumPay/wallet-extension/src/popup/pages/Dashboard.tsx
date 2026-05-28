@@ -7,7 +7,7 @@ import {
 } from "@/lib/wallet";
 import { NETWORKS, BPAN_CHAINS } from "@/lib/networks";
 import { findOwnedBPANs } from "@/lib/bpan";
-import { type Rates, usdToDisplayCurrency } from "@/lib/currency";
+import { type Rates } from "@/lib/currency";
 
 const SYMBOL_TO_COINGECKO: Record<string, string> = {
   ETH: "ethereum", BTC: "bitcoin", SOL: "solana", SUI: "sui",
@@ -17,9 +17,40 @@ const SYMBOL_TO_COINGECKO: Record<string, string> = {
   TRX: "tron", XRP: "ripple", LTC: "litecoin",
 };
 
+// ERC-20 token symbol → CoinGecko ID for tokens whose prices are in the rates cache
+const ERC20_TO_COINGECKO: Record<string, string> = {
+  // Stablecoins: tether ≈ $1, used as USD proxy
+  USDC: "tether", USDT: "tether", DAI: "tether", cUSD: "tether",
+  BUSD: "tether", TUSD: "tether",
+  // Wrapped natives — priced via the underlying asset
+  WBTC: "bitcoin", BTCB: "bitcoin",
+  WETH: "ethereum",
+  WAVAX: "avalanche-2",
+  WBNB: "binancecoin",
+  // BEP-20 bridge tokens priced via their underlying
+  XRP: "ripple", ADA: "tether", DOGE: "tether",
+};
+
 function getConvertedPrice(symbol: string, targetCurrency: string, rates: Rates): number {
   const coinId = SYMBOL_TO_COINGECKO[symbol] || "ethereum";
   return rates[coinId]?.[targetCurrency] || 0;
+}
+
+/** Compute the display-currency value of a raw ERC-20 token balance.
+ *  Returns 0 for unknown tokens so the dust filter never incorrectly hides them. */
+function getErc20UsdValue(symbol: string, balance: number, currencyCode: string, rates: Rates): number {
+  const coinId = ERC20_TO_COINGECKO[symbol.toUpperCase()];
+  if (!coinId) return 0; // unknown price — never treat as dust
+  const priceUsd = rates[coinId]?.["usd"] || 0;
+  if (!priceUsd) return 0;
+  const usdAmount = balance * priceUsd;
+  if (currencyCode === "usd") return usdAmount;
+  const tetherRate = rates["tether"]?.[currencyCode];
+  if (tetherRate) return usdAmount * tetherRate;
+  const ethUsd = rates["ethereum"]?.["usd"];
+  const ethTarget = rates["ethereum"]?.[currencyCode];
+  if (ethUsd && ethTarget) return usdAmount * (ethTarget / ethUsd);
+  return usdAmount;
 }
 
 import { useWallet } from "../hooks/useWallet";
@@ -206,7 +237,7 @@ export default function Dashboard({ onLock }: Props) {
       if (!isEvmChain) continue;
       for (const t of chainTokens) {
         const bal = parseFloat(t.balance || "0");
-        if (bal > 0) total += usdToDisplayCurrency(bal, currencyCode, rates);
+        if (bal > 0) total += getErc20UsdValue(t.symbol, bal, currencyCode, rates);
       }
     }
     return total || portfolioUsd;
@@ -246,8 +277,8 @@ export default function Dashboard({ onLock }: Props) {
 
       for (const t of chainTokens) {
         const bal = parseFloat(t.balance || "0");
-        // SPL and other non-EVM tokens: show in list but don't guess USD value
-        const usdValue = isEvmChain ? usdToDisplayCurrency(bal, currencyCode, rates) : 0;
+        // Use proper per-token pricing; unknown tokens get usdValue=0 so they always show if bal>0
+        const usdValue = isEvmChain ? getErc20UsdValue(t.symbol, bal, currencyCode, rates) : 0;
         all.push({
           symbol: t.symbol, name: t.name, logo: t.logo,
           balance: t.balance || "0",

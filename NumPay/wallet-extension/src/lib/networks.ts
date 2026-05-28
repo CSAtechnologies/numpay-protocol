@@ -41,21 +41,21 @@ export const NETWORKS: Record<string, Network> = {
   },
   arbitrum: {
     id: "arbitrum", name: "Arbitrum One", chainId: 42161,
-    rpcUrl: "https://arb1.arbitrum.io/rpc",
+    rpcUrl: "https://arb-mainnet.g.alchemy.com/v2/REDACTED_ROTATE_ME",
     symbol: "ETH", decimals: 18,
     explorer: "https://arbiscan.io",
     logo: twLogo("arbitrum"),
   },
   optimism: {
     id: "optimism", name: "Optimism", chainId: 10,
-    rpcUrl: "https://mainnet.optimism.io",
+    rpcUrl: "https://opt-mainnet.g.alchemy.com/v2/REDACTED_ROTATE_ME",
     symbol: "ETH", decimals: 18,
     explorer: "https://optimistic.etherscan.io",
     logo: twLogo("optimism"),
   },
   base: {
     id: "base", name: "Base", chainId: 8453,
-    rpcUrl: "https://mainnet.base.org",
+    rpcUrl: "https://base-mainnet.g.alchemy.com/v2/REDACTED_ROTATE_ME",
     symbol: "ETH", decimals: 18,
     explorer: "https://basescan.org",
     logo: twLogo("base"),
@@ -125,7 +125,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   cronos: {
     id: "cronos", name: "Cronos", chainId: 25,
-    rpcUrl: "https://evm.cronos.org",
+    rpcUrl: "https://cronos.drpc.org",
     symbol: "CRO", decimals: 18,
     explorer: "https://cronoscan.com",
     logo: twLogo("cronos"),
