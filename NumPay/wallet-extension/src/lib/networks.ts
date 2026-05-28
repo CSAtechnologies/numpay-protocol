@@ -55,7 +55,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   base: {
     id: "base", name: "Base", chainId: 8453,
-    rpcUrl: "https://base.drpc.org",
+    rpcUrl: "https://mainnet.base.org",
     symbol: "ETH", decimals: 18,
     explorer: "https://basescan.org",
     logo: twLogo("base"),
