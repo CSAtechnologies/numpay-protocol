@@ -13,6 +13,9 @@ const SOL_DERIVATION_PATH = "m/44'/501'/0'/0'";
 const ALCHEMY_KEY = "REDACTED_ROTATE_ME";
 const SOL_RPC = `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
 
+// Moralis Solana gateway — CDN-cached logos (survive dead origins) + spam/verify flags.
+const MORALIS_KEY = import.meta.env.VITE_MORALIS_KEY ?? "";
+
 /**
  * Derive a Solana address from a BIP39 mnemonic.
  */
@@ -128,6 +131,134 @@ export async function sendSolanaTransfer(
   return sendData.result as string;
 }
 
+// ── Jupiter swap (Solana DEX aggregator) ─────────────────────────────────────
+
+const JUP_SWAP = "https://lite-api.jup.ag/swap/v1";
+// Wrapped SOL mint — Jupiter's stand-in for native SOL on both sides of a swap.
+export const WSOL_MINT = "So11111111111111111111111111111111111111112";
+
+// A small curated set of popular Solana tokens for the swap "buy" side, so users
+// can swap into them even when they hold none yet. Held tokens are added separately.
+export const SOLANA_SWAP_TOKENS = [
+  { symbol: "USDC", name: "USD Coin",   address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", decimals: 6 },
+  { symbol: "USDT", name: "Tether USD", address: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", decimals: 6 },
+  { symbol: "BONK", name: "Bonk",       address: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", decimals: 5 },
+  { symbol: "JUP",  name: "Jupiter",    address: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", decimals: 6 },
+  { symbol: "WIF",  name: "dogwifhat",  address: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm", decimals: 6 },
+  { symbol: "JTO",  name: "Jito",       address: "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL", decimals: 9 },
+] as const;
+
+export interface JupiterQuote {
+  outAmount: string;        // raw, in the output token's smallest unit
+  priceImpactPct: string;
+  raw: any;                 // full quote response, passed straight back to /swap
+}
+
+/** Resolve a single Solana token's metadata by mint (for swap import). */
+export async function resolveSolanaToken(mint: string): Promise<{
+  symbol: string; name: string; address: string; decimals: number; logo?: string;
+} | null> {
+  try {
+    const r = await fetch(`https://lite-api.jup.ag/tokens/v2/search?query=${mint}`);
+    if (!r.ok) return null;
+    const arr = await r.json();
+    const d = Array.isArray(arr) ? arr.find((x: any) => x.id === mint) : null;
+    if (!d) return null;
+    return {
+      symbol:   d.symbol?.trim() || mint.slice(0, 6),
+      name:     d.name?.trim() || d.symbol?.trim() || mint.slice(0, 6),
+      address:  mint,
+      decimals: Number(d.decimals ?? 0),
+      logo:     d.icon ? toHttpsUrl(String(d.icon)) : undefined,
+    };
+  } catch { return null; }
+}
+
+/** Get a Jupiter swap quote. `amountRaw` is in the input token's smallest unit. */
+export async function fetchJupiterQuote(
+  inputMint: string, outputMint: string, amountRaw: string, slippageBps: number,
+): Promise<JupiterQuote | null> {
+  try {
+    const url = `${JUP_SWAP}/quote?inputMint=${inputMint}&outputMint=${outputMint}` +
+      `&amount=${amountRaw}&slippageBps=${slippageBps}`;
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (!d || d.error || !d.outAmount) return null;
+    return { outAmount: String(d.outAmount), priceImpactPct: String(d.priceImpactPct ?? "0"), raw: d };
+  } catch { return null; }
+}
+
+/** Decode a Solana compact-u16 (shortvec) length prefix. */
+function decodeCompactU16(bytes: Uint8Array, offset: number): { value: number; length: number } {
+  let value = 0, shift = 0, i = offset;
+  for (;;) {
+    const b = bytes[i++];
+    value |= (b & 0x7f) << shift;
+    if ((b & 0x80) === 0) break;
+    shift += 7;
+  }
+  return { value, length: i - offset };
+}
+
+/**
+ * Build, sign and submit a Jupiter swap. Jupiter returns a fully-built v0
+ * VersionedTransaction with the user as the sole required signer. We sign the
+ * message bytes (everything after the signature array) and write the signature
+ * into the fee-payer (first) slot — no SDK needed, same approach as transfers.
+ */
+export async function executeJupiterSwap(
+  secretKey: Uint8Array, userPublicKey: string, quoteRaw: any,
+): Promise<string> {
+  const swapResp = await fetch(`${JUP_SWAP}/swap`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      quoteResponse: quoteRaw,
+      userPublicKey,
+      wrapAndUnwrapSol: true,
+      dynamicComputeUnitLimit: true,
+      prioritizationFeeLamports: "auto",
+    }),
+  });
+  const swapData = await swapResp.json();
+  if (!swapData?.swapTransaction) {
+    throw new Error(swapData?.error || "Jupiter could not build the swap transaction");
+  }
+
+  const txBytes = Uint8Array.from(atob(swapData.swapTransaction), (c) => c.charCodeAt(0));
+  const { value: numSigs, length: lenBytes } = decodeCompactU16(txBytes, 0);
+  // We can only sign as the user (fee payer). Standard Jupiter swaps need exactly
+  // that; if a route requires extra signers, fail clearly instead of submitting
+  // a transaction we can't fully sign.
+  if (numSigs !== 1) {
+    throw new Error("This swap route needs additional signers and isn't supported. Try a different amount or token.");
+  }
+  const sigStart = lenBytes;
+  const message = txBytes.slice(sigStart + numSigs * 64);
+
+  const sig = nacl.sign.detached(message, secretKey);
+  txBytes.set(sig, sigStart); // user is the fee payer / first signer
+
+  let binary = "";
+  for (let i = 0; i < txBytes.length; i++) binary += String.fromCharCode(txBytes[i]);
+  const signedB64 = btoa(binary);
+
+  const sendResp = await fetch(SOL_RPC, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 1,
+      method: "sendTransaction",
+      // Jupiter recommends skipPreflight for their pre-simulated v0 txs.
+      params: [signedB64, { encoding: "base64", skipPreflight: true, maxRetries: 3, preflightCommitment: "confirmed" }],
+    }),
+  });
+  const sendData = await sendResp.json();
+  if (sendData.error) throw new Error(sendData.error.message ?? JSON.stringify(sendData.error));
+  return sendData.result as string;
+}
+
 // ---------- balance ----------
 
 // ── Token2022 on-chain metadata helpers ──────────────────────────────────────
@@ -212,14 +343,14 @@ function parseToken2022Metadata(
  * Fetch all SPL + Token2022 token balances and metadata for a Solana address.
  *
  * Metadata resolution chain (each step only runs for tokens still missing data):
- *   1. Token2022 on-chain extension  — reads mint account directly, no external API
- *      └─ also fetches the JSON URI for the logo image
- *   2. Alchemy DAS getAssetBatch     — covers indexed Metaplex / standard SPL tokens
- *   3. pump.fun API                  — bonding-curve tokens not yet indexed by DAS
- *   4. DexScreener                   — graduated tokens listed on any DEX
+ *   1.  Jupiter Token API v2  — name, symbol, icon, usd price (most coverage)
+ *   1b. Moralis Solana        — CDN-cached logo + spam/verify flags (one call)
+ *   2.  Token2022 on-chain    — reads mint account directly when both missed it
+ *   3.  DexScreener           — graduated tokens listed on any DEX (+ price)
  */
 export async function fetchSolanaTokens(address: string): Promise<Array<{
   symbol: string; name: string; address: string; decimals: number; balance: string; logo?: string; priceUsd?: number;
+  possibleSpam?: boolean; verifiedContract?: boolean; securityScore?: number;
 }>> {
   try {
     // ── Step 0: get all token accounts (SPL + Token2022) ─────────────────────
@@ -257,6 +388,11 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
 
     const metaMap: Record<string, { symbol?: string; name?: string; logo?: string }> = {};
     const priceMap: Record<string, number> = {};
+    // Moralis-sourced data: CDN logo + risk flags, keyed by mint.
+    const moralisMap: Record<string, {
+      name?: string; symbol?: string; logo?: string;
+      possibleSpam?: boolean; verifiedContract?: boolean; securityScore?: number;
+    }> = {};
 
     // ── Step 1: Jupiter Token API v2 — name, symbol, logo AND usd price ──────
     // Covers nearly all tradeable + pump.fun tokens in one call per mint.
@@ -280,8 +416,34 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
       }),
     );
 
-    // ── Step 2: Token2022 on-chain metadata for mints Jupiter didn't cover ───
-    const onchainMints = holdings.filter((h) => !metaMap[h.mint]?.name);
+    // ── Step 1b: Moralis Solana — one call for CDN-cached logos + risk flags ──
+    // Moralis re-hosts token images, so logos resolve even when the original
+    // metadata host (IPFS/Arweave/custom) is dead — fixes pump.fun/bonk.fun art.
+    if (MORALIS_KEY) {
+      try {
+        const r = await fetch(
+          `https://solana-gateway.moralis.io/account/mainnet/${address}/tokens`,
+          { headers: { "X-API-Key": MORALIS_KEY, Accept: "application/json" } },
+        );
+        if (r.ok) {
+          const list = await r.json();
+          for (const t of (Array.isArray(list) ? list : [])) {
+            if (!t?.mint) continue;
+            moralisMap[t.mint] = {
+              name:             t.name?.trim() || undefined,
+              symbol:           t.symbol?.trim() || undefined,
+              logo:             t.logo || undefined,
+              possibleSpam:     t.possibleSpam === true,
+              verifiedContract: t.isVerifiedContract === true,
+              securityScore:    typeof t.score === "number" ? t.score : undefined,
+            };
+          }
+        }
+      } catch {}
+    }
+
+    // ── Step 2: Token2022 on-chain metadata for mints Jupiter/Moralis missed ─
+    const onchainMints = holdings.filter((h) => !metaMap[h.mint]?.name && !moralisMap[h.mint]?.name);
     if (onchainMints.length > 0) {
       try {
         const mintResp = await fetch(SOL_RPC, {
@@ -326,7 +488,7 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
     }
 
     // ── Step 3: DexScreener (graduated tokens) — fills name/logo + price ─────
-    const missing3 = holdings.filter((h) => !metaMap[h.mint]?.name).map((h) => h.mint);
+    const missing3 = holdings.filter((h) => !metaMap[h.mint]?.name && !moralisMap[h.mint]?.name).map((h) => h.mint);
     if (missing3.length > 0) {
       try {
         const r = await fetch(
@@ -355,15 +517,20 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
 
     return holdings.map(({ mint, balance, decimals }) => {
       const meta = metaMap[mint] ?? {};
-      const symbol = meta.symbol || mint.slice(0, 6).toUpperCase();
+      const mor  = moralisMap[mint] ?? {};
+      const symbol = meta.symbol || mor.symbol || mint.slice(0, 6).toUpperCase();
       return {
         symbol,
-        name:    meta.name || meta.symbol || mint.slice(0, 6).toUpperCase(),
+        name:    meta.name || mor.name || meta.symbol || mint.slice(0, 6).toUpperCase(),
         address: mint,
         decimals,
         balance: balance.toString(),
-        logo:    meta.logo,
+        // Prefer the Moralis CDN logo (survives dead origins); fall back to Jupiter/on-chain.
+        logo:    mor.logo || meta.logo,
         priceUsd: priceMap[mint],
+        possibleSpam:     mor.possibleSpam,
+        verifiedContract: mor.verifiedContract,
+        securityScore:    mor.securityScore,
       };
     });
   } catch { return []; }

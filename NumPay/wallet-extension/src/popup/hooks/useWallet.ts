@@ -205,11 +205,14 @@ export function useWallet(): WalletState {
 
     const cacheKey = EVM_CACHE_PFX + wallet.address;
     let hasCache = false;
+    // Last-known balances, kept so a failed/offline fetch doesn't zero them out.
+    const prevByChain = new Map<string, ChainBalance>();
     try {
       const raw = await getItem(cacheKey);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed.chainBalances) && typeof parsed.portfolioUsd === "number") {
+          for (const cb of parsed.chainBalances as ChainBalance[]) prevByChain.set(cb.networkId, cb);
           setChainBalances(parsed.chainBalances);
           setPortfolioUsd(parsed.portfolioUsd);
           setMultiChainLoading(false);
@@ -249,16 +252,30 @@ export function useWallet(): WalletState {
           balance: formatted, balanceNum: num, usdValue: num * (NATIVE_USD_PRICES[net.symbol] || 0),
         } as ChainBalance;
       } catch {
+        // Mark as failed so we can retain the last-known balance below.
         return {
           networkId: chainId, name: net.name, symbol: net.symbol, logo: net.logo,
-          balance: "0", balanceNum: 0, usdValue: 0,
-        } as ChainBalance;
+          balance: "0", balanceNum: 0, usdValue: 0, failed: true,
+        } as ChainBalance & { failed: boolean };
       }
     });
 
     const settled = await Promise.all(promises);
+    const anySuccess = settled.some((r) => r && !(r as any).failed);
+
     const results: ChainBalance[] = [];
-    for (const r of settled) { if (r) results.push(r); }
+    for (const r of settled) {
+      if (!r) continue;
+      if ((r as any).failed) {
+        // RPC failed (offline / flaky): keep the last-known balance if we have one,
+        // otherwise fall back to the zero placeholder so the row still resolves.
+        const prev = prevByChain.get(r.networkId);
+        const { failed, ...zero } = r as ChainBalance & { failed: boolean };
+        results.push(prev ?? (zero as ChainBalance));
+      } else {
+        results.push(r);
+      }
+    }
     results.sort((a, b) => b.usdValue - a.usdValue);
     const total = results.reduce((s, c) => s + c.usdValue, 0);
 
@@ -266,9 +283,13 @@ export function useWallet(): WalletState {
     setPortfolioUsd(total);
     setMultiChainLoading(false);
 
-    try {
-      await setItem(cacheKey, JSON.stringify({ ts: Date.now(), chainBalances: results, portfolioUsd: total }));
-    } catch {}
+    // Only persist when something actually succeeded (or there was no cache yet),
+    // so a fully-offline refresh never overwrites good cached balances.
+    if (anySuccess || !hasCache) {
+      try {
+        await setItem(cacheKey, JSON.stringify({ ts: Date.now(), chainBalances: results, portfolioUsd: total }));
+      } catch {}
+    }
   }, [wallet]);
 
   useEffect(() => { refreshMultiChain(); }, [refreshMultiChain]);
@@ -300,12 +321,25 @@ export function useWallet(): WalletState {
     (async () => {
       const cacheKey = NONEVMCACHE_PFX + address;
       let hasCache = false;
+      // Last-known tokens, kept so a failed/offline fetch doesn't drop them.
+      let prevSol: any[] = [];
+      let prevTrx: any[] = [];
       try {
         const raw = await getItem(cacheKey);
         if (raw) {
           const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed.solanaTokens)) prevSol = parsed.solanaTokens;
+          if (Array.isArray(parsed.tronTokens))   prevTrx = parsed.tronTokens;
           if (Array.isArray(parsed.chains)) {
             setNonEvmChains(parsed.chains);
+            // Restore cached SPL/TRC-20 tokens so they show instantly / when offline
+            if (prevSol.length || prevTrx.length) {
+              setTokensByChain((prev) => ({
+                ...prev,
+                ...(prevSol.length ? { solana: prevSol } : {}),
+                ...(prevTrx.length ? { tron: prevTrx }   : {}),
+              }));
+            }
             setNonEvmLoading(false);
             hasCache = true;
           }
@@ -325,14 +359,24 @@ export function useWallet(): WalletState {
           fetchTronTokens(nev.tron.address).catch(() => []),
         ]);
 
+        // Keep last-known tokens when a fetch came back empty (offline/flaky),
+        // so SPL/TRC-20 holdings don't vanish on a bad refresh.
+        const sol = splTokens.length  ? splTokens  : prevSol;
+        const trx = trc20Tokens.length ? trc20Tokens : prevTrx;
+
         setNonEvmChains(chains);
         setTokensByChain((prev) => ({
           ...prev,
-          ...(splTokens.length > 0  ? { solana: splTokens }      : {}),
-          ...(trc20Tokens.length > 0 ? { tron: trc20Tokens }     : {}),
+          ...(sol.length ? { solana: sol } : {}),
+          ...(trx.length ? { tron: trx }   : {}),
         }));
 
-        try { await setItem(cacheKey, JSON.stringify({ ts: Date.now(), chains })); } catch {}
+        // Persist tokens too (not just native chains) so they survive offline.
+        try {
+          await setItem(cacheKey, JSON.stringify({
+            ts: Date.now(), chains, solanaTokens: sol, tronTokens: trx,
+          }));
+        } catch {}
       } catch (e) {
         console.error("Non-EVM derivation failed:", e);
       } finally {
@@ -351,15 +395,48 @@ export function useWallet(): WalletState {
         fetchSolanaTokens(nonEvmWallet.solana.address).catch(() => []),
         fetchTronTokens(nonEvmWallet.tron.address).catch(() => []),
       ]);
+
+      // Preserve last-known tokens (from cache) when a fetch returns empty.
+      const addr = wallet?.address;
+      const cacheKey = addr ? NONEVMCACHE_PFX + addr : null;
+      let prevSol: any[] = [], prevTrx: any[] = [];
+      if (cacheKey) {
+        try {
+          const raw = await getItem(cacheKey);
+          if (raw) { const p = JSON.parse(raw); prevSol = p.solanaTokens ?? []; prevTrx = p.tronTokens ?? []; }
+        } catch {}
+      }
+      const sol = splTokens.length  ? splTokens  : prevSol;
+      const trx = trc20Tokens.length ? trc20Tokens : prevTrx;
+
       setNonEvmChains(chains);
       setTokensByChain((prev) => ({
         ...prev,
-        ...(splTokens.length > 0   ? { solana: splTokens }  : {}),
-        ...(trc20Tokens.length > 0 ? { tron: trc20Tokens }  : {}),
+        ...(sol.length ? { solana: sol } : {}),
+        ...(trx.length ? { tron: trx }   : {}),
       }));
+
+      if (cacheKey) {
+        try {
+          await setItem(cacheKey, JSON.stringify({ ts: Date.now(), chains, solanaTokens: sol, tronTokens: trx }));
+        } catch {}
+      }
     } catch {}
     finally { setNonEvmLoading(false); }
-  }, [nonEvmWallet]);
+  }, [nonEvmWallet, wallet?.address]);
+
+  // Background refresh every 60s so balances stay current while the popup is open.
+  // Each refresher is stale-while-revalidate, so this never blanks displayed data —
+  // it only updates values in place (and shows a brief "syncing…" hint).
+  useEffect(() => {
+    if (!wallet) return;
+    const id = setInterval(() => {
+      refreshMultiChain();
+      refreshAutoTokens();
+      refreshNonEvm();
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [wallet, refreshMultiChain, refreshAutoTokens, refreshNonEvm]);
 
   function switchNetwork(id: string) {
     if (NETWORKS[id]) { setNetworkId(id); setItem(NETWORK_KEY, id); }

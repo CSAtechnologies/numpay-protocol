@@ -57,6 +57,9 @@ export interface AutoToken {
   balance: string;
   logo?: string;
   priceUsd?: number;
+  possibleSpam?: boolean;
+  securityScore?: number;
+  verifiedContract?: boolean;
 }
 
 // Multicall3 — deployed at the same address on all major EVM chains
@@ -201,6 +204,9 @@ async function fetchMoralisERC20s(chainId: string, address: string): Promise<Aut
         balance,
         logo:     t.logo || t.thumbnail || undefined,
         priceUsd: typeof t.usd_price === "number" ? t.usd_price : undefined,
+        possibleSpam:     t.possible_spam === true,
+        securityScore:    typeof t.security_score === "number" ? t.security_score : undefined,
+        verifiedContract: t.verified_contract === true,
       });
     }
     return out;
@@ -323,7 +329,7 @@ async function sweepTokensByRPC(
   );
 }
 
-const CACHE_PFX = "numpay_autotok4_";
+const CACHE_PFX = "numpay_autotok5_";
 const CACHE_TTL = 3 * 60 * 1000; // 3 minutes
 
 /**
@@ -370,6 +376,9 @@ export async function sweepAllChainTokens(
         logo:     cur.logo ?? t.logo,
         symbol:   realSym(cur.symbol) ? cur.symbol : t.symbol,
         name:     realSym(cur.name)   ? cur.name   : t.name,
+        possibleSpam:     cur.possibleSpam     ?? t.possibleSpam,
+        securityScore:    cur.securityScore    ?? t.securityScore,
+        verifiedContract: cur.verifiedContract ?? t.verifiedContract,
       });
     }
     freshData[chainId] = Array.from(byAddr.values());

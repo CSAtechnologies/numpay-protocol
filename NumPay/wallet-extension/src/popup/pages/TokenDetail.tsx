@@ -20,6 +20,10 @@ export interface TokenDetailState {
   chainName?: string;
   chainId?: string;
   isNative: boolean;
+  address?: string;
+  possibleSpam?: boolean;
+  securityScore?: number;
+  verifiedContract?: boolean;
 }
 
 interface MarketData {
@@ -494,6 +498,36 @@ export default function TokenDetail() {
           </a>
         )}
       </div>
+
+      {/* ── Risk / spam warning ── */}
+      {!token.isNative && (() => {
+        const risks: string[] = [];
+        if (token.possibleSpam) risks.push("Flagged as possible spam or scam");
+        if (token.verifiedContract === false) risks.push("Unverified contract");
+        if (typeof token.securityScore === "number" && token.securityScore < 50)
+          risks.push(`Low security score (${token.securityScore}/100)`);
+        if (risks.length === 0) return null;
+        return (
+          <div className="px-4 mb-3">
+            <div
+              className="rounded-xl px-3 py-2.5 flex gap-2.5"
+              style={{ border: "1px solid rgba(245,158,11,0.4)", background: "rgba(245,158,11,0.10)" }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="flex-shrink-0 mt-0.5" style={{ color: "#f59e0b" }}>
+                <path d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"
+                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <div className="min-w-0">
+                <p className="text-[12px] font-semibold" style={{ color: "#f59e0b" }}>Caution: this token has risk signals</p>
+                <ul className="text-[11px] text-muted mt-0.5 list-disc pl-4">
+                  {risks.map((r) => <li key={r}>{r}</li>)}
+                </ul>
+                <p className="text-[10px] text-muted mt-1">Scam tokens can mimic real ones. Verify the contract before sending or swapping.</p>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Price + change ── */}
       <div className="px-4 mb-3">

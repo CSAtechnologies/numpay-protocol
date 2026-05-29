@@ -105,6 +105,10 @@ interface DisplayToken {
   chainLogo?: string;
   chainId?: string;
   isNative: boolean;
+  address?: string;
+  possibleSpam?: boolean;
+  securityScore?: number;
+  verifiedContract?: boolean;
 }
 
 export default function Dashboard({ onLock }: Props) {
@@ -293,6 +297,10 @@ export default function Dashboard({ onLock }: Props) {
           balance: t.balance || "0",
           usdValue,
           chainName, chainLogo, chainId, isNative: false,
+          address: t.address,
+          possibleSpam: t.possibleSpam,
+          securityScore: t.securityScore,
+          verifiedContract: t.verifiedContract,
         });
       }
     }

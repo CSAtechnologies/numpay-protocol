@@ -6,6 +6,7 @@ import { usdToDisplayCurrency } from "@/lib/currency";
 import { NETWORKS } from "@/lib/networks";
 import { DEFAULT_TOKENS } from "@/lib/tokens";
 import { type NonEvmChain } from "@/lib/chains";
+import { fetchJupiterQuote, executeJupiterSwap, resolveSolanaToken, WSOL_MINT, SOLANA_SWAP_TOKENS } from "@/lib/chains/solana";
 import { getSigner } from "@/lib/wallet";
 import { getItem, setItem } from "@/lib/storage";
 import Layout from "../components/Layout";
@@ -30,7 +31,7 @@ interface SwapToken {
 }
 
 interface RouteOption {
-  provider: "paraswap" | "kyberswap";
+  provider: "paraswap" | "kyberswap" | "jupiter";
   label: string;
   logo: string;
   destAmount: string;
@@ -103,10 +104,14 @@ const TAG_STYLE: Record<string, string> = {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const isAddress = (s: string) => /^0x[0-9a-fA-F]{40}$/.test(s.trim());
+// Solana mint = base58, 32-44 chars (no 0x, excludes 0/O/I/l per base58 alphabet)
+const isSolanaMint = (s: string) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s.trim());
+// SOL left untouched on a max swap so the network fee + any ATA rent can be paid.
+const SOL_FEE_RESERVE = 0.01;
 
 function buildAllSwapTokens(
   chainBals: any[], currentTokens: any[], currentNetId: string,
-  customTokens: SwapToken[], nonEvmChains: NonEvmChain[],
+  customTokens: SwapToken[], nonEvmChains: NonEvmChain[], solanaHeld: SwapToken[],
 ): SwapToken[] {
   const items: SwapToken[] = [];
   const seen = new Set<string>();
@@ -134,6 +139,23 @@ function buildAllSwapTokens(
       decimals: nev.decimals, balance: nev.balance > 0 ? nev.balance.toFixed(nev.decimals > 6 ? 6 : nev.decimals) : "0",
       chainId: nev.id, chainName: nev.name,
     });
+  }
+
+  // Solana SPL tokens: the user's held tokens first (so balances win on dedupe),
+  // then a curated popular set for the buy side.
+  const solList: SwapToken[] = [
+    ...solanaHeld,
+    ...SOLANA_SWAP_TOKENS.map((t) => ({
+      symbol: t.symbol, name: t.name, address: t.address, decimals: t.decimals,
+      balance: "0", chainId: "solana", chainName: "Solana",
+    })),
+  ];
+  for (const t of solList) {
+    if (!t.address) continue;
+    const key = `solana:${t.address.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push(t);
   }
 
   // ERC-20 tokens from DEFAULT_TOKENS for each chain
@@ -215,8 +237,16 @@ async function fetchKyberQuote(chainId: number, from: SwapToken, to: SwapToken, 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function Swap() {
-  const { wallet, network, balance, tokens, chainBalances, nonEvmWallet, nonEvmChains } = useWallet();
+  const { wallet, network, balance, tokens, chainBalances, nonEvmWallet, nonEvmChains, tokensByChain } = useWallet();
   const { currencyCode, currency, rates } = useCurrency();
+
+  // The user's held Solana SPL tokens, shaped for the swap picker.
+  const solanaHeld = useMemo<SwapToken[]>(() => {
+    return (tokensByChain["solana"] ?? []).map((t) => ({
+      symbol: t.symbol, name: t.name, logo: t.logo, address: t.address,
+      decimals: t.decimals, balance: t.balance || "0", chainId: "solana", chainName: "Solana",
+    }));
+  }, [tokensByChain]);
 
   // Custom tokens (persisted)
   const [customTokens, setCustomTokens] = useState<SwapToken[]>([]);
@@ -227,8 +257,8 @@ export default function Swap() {
   }, []);
 
   const allTokens = useMemo(
-    () => buildAllSwapTokens(chainBalances, tokens, network.id, customTokens, nonEvmChains),
-    [chainBalances, tokens, network.id, customTokens, nonEvmChains],
+    () => buildAllSwapTokens(chainBalances, tokens, network.id, customTokens, nonEvmChains, solanaHeld),
+    [chainBalances, tokens, network.id, customTokens, nonEvmChains, solanaHeld],
   );
 
   // Default tokens
@@ -362,6 +392,30 @@ export default function Swap() {
       } finally {
         setLoadingBridge(false);
       }
+    } else if (from.chainId === "solana" && to.chainId === "solana") {
+      // ── Solana same-chain swap via Jupiter ──────────────────────────────
+      setLoadingQuote(true); setQuoteError(""); setRouteOptions([]); setSelectedRoute(0);
+      try {
+        const inMint  = from.address || WSOL_MINT;
+        const outMint = to.address   || WSOL_MINT;
+        const amountRaw = ethers.parseUnits(amt, from.decimals).toString();
+        const q = await fetchJupiterQuote(inMint, outMint, amountRaw, Math.round(parseFloat(slippage) * 100));
+        if (q) {
+          setRouteOptions([{
+            provider: "jupiter", label: "Jupiter",
+            logo: "https://assets.coingecko.com/coins/images/34188/small/jup.png",
+            destAmount: parseFloat(ethers.formatUnits(q.outAmount, to.decimals)).toFixed(Math.min(to.decimals, 6)),
+            destAmountRaw: q.outAmount, gasCostUSD: "0", tag: "Best",
+            priceRoute: q.raw, // carry the Jupiter quote for the swap build
+          }]);
+        } else {
+          setQuoteError("No Jupiter route found for this pair");
+        }
+      } catch (e: any) {
+        setQuoteError(e.message || "Quote failed");
+      } finally {
+        setLoadingQuote(false);
+      }
     } else {
       const net = NETWORKS[from.chainId];
       if (!net) return;
@@ -423,10 +477,29 @@ export default function Swap() {
   const importChainId = pickerChain || network.id;
 
   async function handleImport() {
-    const addr = pickerSearch.trim().toLowerCase();
-    const net  = NETWORKS[importChainId];
-    if (!net || !wallet) return;
+    const raw = pickerSearch.trim();
     setImportState("loading"); setImportError("");
+
+    // Solana mint → resolve metadata via Jupiter (works regardless of selected tab)
+    if (isSolanaMint(raw)) {
+      try {
+        const tok = await resolveSolanaToken(raw);
+        if (!tok) throw new Error();
+        setImportToken({
+          symbol: tok.symbol, name: tok.name, logo: tok.logo, address: tok.address,
+          decimals: tok.decimals, balance: "0", chainId: "solana", chainName: "Solana", custom: true,
+        });
+        setImportState("preview");
+      } catch {
+        setImportError("Could not find that Solana token. Check the mint address.");
+        setImportState("idle");
+      }
+      return;
+    }
+
+    const addr = raw.toLowerCase();
+    const net  = NETWORKS[importChainId];
+    if (!net || !wallet) { setImportState("idle"); return; }
     try {
       const provider = new ethers.JsonRpcProvider(net.rpcUrl);
       const c = new ethers.Contract(addr, ERC20_ABI, provider);
@@ -464,6 +537,26 @@ export default function Swap() {
   async function executeSwap() {
     const route = routeOptions[selectedRoute];
     if (!wallet || !route || !fromAmount) return;
+
+    // ── Solana swap via Jupiter ─────────────────────────────────────────────
+    if (route.provider === "jupiter") {
+      if (!nonEvmWallet?.solana) { setSwapError("Solana wallet not ready"); return; }
+      setSwapping(true); setSwapError(""); setTxHash("");
+      try {
+        const txid = await executeJupiterSwap(
+          nonEvmWallet.solana.secretKey,
+          nonEvmWallet.solana.address,
+          route.priceRoute, // the Jupiter quote carried from fetchQuotesForPair
+        );
+        setTxHash(txid);
+      } catch (e: any) {
+        setSwapError(e.message || "Swap failed");
+      } finally {
+        setSwapping(false);
+      }
+      return;
+    }
+
     const net = NETWORKS[fromToken.chainId];
     if (!net) return;
     setSwapping(true); setSwapError(""); setTxHash("");
@@ -635,7 +728,8 @@ export default function Swap() {
     });
   }, [allTokens, pickerChain, pickerSearch, network.id]);
 
-  const isAddrSearch = isAddress(pickerSearch.trim());
+  const isSolMintSearch = isSolanaMint(pickerSearch.trim());
+  const isAddrSearch = isAddress(pickerSearch.trim()) || isSolMintSearch;
 
   // ── Token picker overlay ──────────────────────────────────────────────────
 
@@ -709,8 +803,8 @@ export default function Swap() {
               {importState === "idle" && (
                 <div className="premium-card p-3.5">
                   <p className="text-[11px] text-muted mb-2">
-                    Import token on <span className="font-semibold text-text-primary">{NETWORKS[importChainId]?.name || importChainId}</span>
-                    {" "}— select a chain above to change network
+                    Import token on <span className="font-semibold text-text-primary">{isSolMintSearch ? "Solana" : (NETWORKS[importChainId]?.name || importChainId)}</span>
+                    {!isSolMintSearch && " — select a chain above to change network"}
                   </p>
                   <p className="text-[12px] text-text-secondary font-mono mb-3 break-all">
                     {pickerSearch.slice(0, 10)}…{pickerSearch.slice(-8)}
@@ -788,6 +882,9 @@ export default function Swap() {
 
   const fromNetObj = NETWORKS[fromToken.chainId];
   const toNet      = NETWORKS[toToken.chainId];
+  const explorerTxUrl = fromToken.chainId === "solana"
+    ? `https://solscan.io/tx/${activeTxHash}`
+    : `${fromNetObj?.explorer}/tx/${activeTxHash}`;
 
   return (
     <Layout>
@@ -798,7 +895,7 @@ export default function Swap() {
           <div className="flex items-center justify-between mb-5">
             <div>
               <h2 className="text-lg font-bold text-text-primary">{isBridge ? "Bridge" : "Swap"}</h2>
-              <p className="text-[10px] text-muted">{isBridge ? "Powered by LI.FI" : "ParaSwap · KyberSwap"}</p>
+              <p className="text-[10px] text-muted">{isBridge ? "Powered by LI.FI" : (fromToken.chainId === "solana" ? "Powered by Jupiter" : "ParaSwap · KyberSwap")}</p>
             </div>
             <button onClick={() => setShowSettings(!showSettings)}
               className="p-2 rounded-lg text-muted hover:text-text-primary hover:bg-surface-1 transition-colors">
@@ -855,7 +952,13 @@ export default function Swap() {
               <div className="flex gap-2 mt-3">
                 {[{ l: "25%", p: 0.25 }, { l: "50%", p: 0.5 }, { l: "75%", p: 0.75 }, { l: "MAX", p: 1 }].map(({ l, p }) => (
                   <button key={l}
-                    onClick={() => handleFromAmountChange((fromBalance * p).toFixed(Math.min(fromToken.decimals, 8)))}
+                    onClick={() => {
+                      // Native SOL must keep headroom for the network fee + any ATA rent.
+                      const isNativeSol = fromToken.chainId === "solana" && !fromToken.address;
+                      const cap = isNativeSol ? Math.max(0, fromBalance - SOL_FEE_RESERVE) : fromBalance;
+                      const amt = Math.min(fromBalance * p, cap);
+                      handleFromAmountChange(amt.toFixed(Math.min(fromToken.decimals, 8)));
+                    }}
                     className="px-3 py-1 rounded-full text-[11px] font-bold bg-brand-500/10 text-brand-400 hover:bg-brand-500/20 transition-colors">
                     {l}
                   </button>
@@ -1009,7 +1112,7 @@ export default function Swap() {
           {activeTxHash && (
             <div className="mb-4 premium-card p-3">
               <p className="text-accent-green text-xs font-semibold mb-1">{isBridge ? "Bridge submitted!" : "Swap submitted!"}</p>
-              <a href={`${fromNetObj?.explorer}/tx/${activeTxHash}`} target="_blank" rel="noopener noreferrer"
+              <a href={explorerTxUrl} target="_blank" rel="noopener noreferrer"
                 className="flex items-center gap-1 text-brand-400 text-[11px] hover:underline break-all">
                 {activeTxHash.slice(0, 20)}…{activeTxHash.slice(-8)} <ExternalLinkIcon size={10} />
               </a>

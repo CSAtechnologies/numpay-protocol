@@ -9,6 +9,10 @@ export interface Token {
   balance?: string;
   // Optional live USD price (set by fetchers that resolve it, e.g. Jupiter/DexScreener).
   priceUsd?: number;
+  // Optional risk signals (from Moralis). Surfaced on the token detail page.
+  possibleSpam?: boolean;
+  securityScore?: number;     // 0-100; lower = riskier (Moralis security_score)
+  verifiedContract?: boolean;
 }
 
 const ERC20_ABI = [

@@ -463,11 +463,14 @@ input[type="number"]::-webkit-outer-spin-button {
 .token-row {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
   padding: 10px 2px;
   font-size: 13px;
   border-bottom: 1px solid rgba(42, 36, 80, 0.4);
 }
+/* Let the name block shrink/truncate so the balance/price column stays hard-right */
+.token-row > :first-child { min-width: 0; }
 .token-row:last-child { border-bottom: 0; }
 [data-theme="light"] .token-row { border-bottom-color: rgba(124, 109, 240, 0.08); }
 
