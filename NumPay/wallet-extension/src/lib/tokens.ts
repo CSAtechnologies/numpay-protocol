@@ -7,6 +7,8 @@ export interface Token {
   decimals: number;
   logo?: string;
   balance?: string;
+  // Optional live USD price (set by fetchers that resolve it, e.g. Jupiter/DexScreener).
+  priceUsd?: number;
 }
 
 const ERC20_ABI = [

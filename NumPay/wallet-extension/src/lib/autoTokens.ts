@@ -1,8 +1,12 @@
 /**
- * Auto-detect all ERC-20 tokens across every chain.
- * Layer 1: Alchemy (ETH/POL/ARB/OPT/BASE) — rich metadata.
- * Layer 2: Ankr multichain batch — free, no key, covers BSC etc.
- * Layer 3: Multicall3 balanceOf — guaranteed fallback for known tokens.
+ * Auto-detect ERC-20 tokens across every supported EVM chain.
+ *
+ * Layer 1: Alchemy `alchemy_getTokenBalances` — full auto-detect of ANY held
+ *          token. Only the networks enabled in our Alchemy app actually work
+ *          (ETH + Polygon today); the rest 403 and are covered by Layer 2.
+ * Layer 2: Multicall3 `aggregate3` over DEFAULT_TOKENS — one eth_call per chain,
+ *          guaranteed fallback for known tokens on every chain. Falls back to
+ *          individual balanceOf calls if Multicall3 is unavailable on a chain.
  */
 import { ethers } from "ethers";
 import { getItem, setItem } from "./storage";
@@ -11,6 +15,8 @@ import { DEFAULT_TOKENS, getTokenBalance } from "./tokens";
 
 const ALCHEMY_KEY = "REDACTED_ROTATE_ME";
 
+// Alchemy network sub-domains. Only networks enabled in our Alchemy app return
+// data; others return 403 and rely on the Layer 2 Multicall3 sweep instead.
 export const ALCHEMY_CHAINS: Record<string, string> = {
   ethereum: "eth-mainnet",
   polygon:  "polygon-mainnet",
@@ -19,36 +25,28 @@ export const ALCHEMY_CHAINS: Record<string, string> = {
   base:     "base-mainnet",
 };
 
-// Ankr blockchain slugs for non-Alchemy chains
-const ANKR_CHAINS: Record<string, string> = {
-  bsc:          "bsc",
-  avalanche:    "avalanche",
-  fantom:       "fantom",
-  gnosis:       "gnosis",
-  moonbeam:     "moonbeam",
-  celo:         "celo",
-  scroll:       "scroll",
-  linea:        "linea",
-  mantle:       "mantle",
-  blast:        "blast",
-  zksync:       "zksync_era",
-  polygonzkevm: "polygon_zkevm",
-  cronos:       "cronos",
-};
-
-// Kept for legacy reference — scan APIs now only used as fallback
-export const SCAN_CHAINS: Record<string, string> = {
-  bsc:         "https://api.bscscan.com/api",
-  avalanche:   "https://api.snowscan.xyz/api",
-  fantom:      "https://api.ftmscan.com/api",
-  cronos:      "https://api.cronoscan.com/api",
-  gnosis:      "https://api.gnosisscan.io/api",
-  moonbeam:    "https://api-moonbeam.moonscan.io/api",
-  celo:        "https://api.celoscan.io/api",
-  scroll:      "https://api.scrollscan.com/api",
-  linea:       "https://api.lineascan.build/api",
-  mantle:      "https://api.mantlescan.xyz/api",
-  blast:       "https://api.blastscan.io/api",
+// Moralis covers held-token auto-detection + USD price on chains Alchemy can't
+// (BSC etc.) and enriches the rest with prices. networkId → hex chainId.
+// Key is injected from .env (VITE_MORALIS_KEY) at build time — never committed.
+const MORALIS_KEY = import.meta.env.VITE_MORALIS_KEY ?? "";
+const MORALIS_CHAINS: Record<string, string> = {
+  ethereum:     "0x1",
+  polygon:      "0x89",
+  bsc:          "0x38",
+  avalanche:    "0xa86a",
+  fantom:       "0xfa",
+  cronos:       "0x19",
+  arbitrum:     "0xa4b1",
+  optimism:     "0xa",
+  base:         "0x2105",
+  gnosis:       "0x64",
+  linea:        "0xe708",
+  moonbeam:     "0x504",
+  zksync:       "0x144",
+  mantle:       "0x1388",
+  blast:        "0x13e31",
+  scroll:       "0x82750",
+  polygonzkevm: "0x44d",
 };
 
 export interface AutoToken {
@@ -58,6 +56,7 @@ export interface AutoToken {
   decimals: number;
   balance: string;
   logo?: string;
+  priceUsd?: number;
 }
 
 // Multicall3 — deployed at the same address on all major EVM chains
@@ -71,10 +70,13 @@ const MC3_IFACE = new ethers.Interface([
 const ERC20_IFACE = new ethers.Interface([
   "function balanceOf(address owner) view returns (uint256)",
 ]);
-
-// Alchemy chain IDs — Layer 1 handles these, but Layer 3 still runs as fallback
-// so DEFAULT_TOKENS are found even when Alchemy returns 403 / rate-limits
-const ALCHEMY_CHAIN_IDS = new Set(["ethereum", "polygon", "arbitrum", "optimism", "base"]);
+// On-chain metadata reads — fallback when Alchemy has no indexed metadata
+// (common for fresh memecoins). string symbol/name; uint8 decimals.
+const ERC20_META_ABI = [
+  "function symbol() view returns (string)",
+  "function name() view returns (string)",
+  "function decimals() view returns (uint8)",
+];
 
 async function fetchAlchemyERC20s(chainId: string, address: string): Promise<AutoToken[]> {
   const sub = ALCHEMY_CHAINS[chainId];
@@ -91,15 +93,11 @@ async function fetchAlchemyERC20s(chainId: string, address: string): Promise<Aut
         params: [address, "erc20"],
       }),
     });
-    if (!balResp.ok) {
-      console.log(`[NumPay] Alchemy ${chainId}: HTTP ${balResp.status} — Layer 3 fallback will cover DEFAULT_TOKENS`);
-      return [];
-    }
+    // 403 here is expected for networks not enabled in our Alchemy app —
+    // Layer 2 covers DEFAULT_TOKENS for those chains, so fail quietly.
+    if (!balResp.ok) return [];
     const balData = await balResp.json();
-    if (balData.error) {
-      console.log(`[NumPay] Alchemy ${chainId}: API error`, balData.error.message ?? balData.error);
-      return [];
-    }
+    if (balData.error) return [];
     const balances: Array<{ contractAddress: string; tokenBalance: string }> =
       balData.result?.tokenBalances ?? [];
 
@@ -107,8 +105,10 @@ async function fetchAlchemyERC20s(chainId: string, address: string): Promise<Aut
       if (!b.tokenBalance || b.tokenBalance === "0x") return false;
       try { return BigInt(b.tokenBalance) > 0n; } catch { return false; }
     });
-    console.log(`[NumPay] Alchemy ${chainId}: ${balances.length} tokens, ${nonZero.length} non-zero`);
     if (nonZero.length === 0) return [];
+
+    // Provider for on-chain metadata fallback (Alchemy URL also serves eth_call)
+    const provider = new ethers.JsonRpcProvider(url);
 
     // Parallel metadata fetch for all non-zero tokens (cap 80)
     const results = await Promise.all(nonZero.slice(0, 80).map(async (b) => {
@@ -123,146 +123,96 @@ async function fetchAlchemyERC20s(chainId: string, address: string): Promise<Aut
           }),
         });
         const metaData = await metaResp.json();
-        const meta = metaData.result;
-        if (!meta?.symbol) return null;
-        const decimals = Number(meta.decimals ?? 18);
+        const meta = metaData.result ?? {};
+
+        let symbol   = meta.symbol ? String(meta.symbol).trim() : "";
+        let name     = meta.name   ? String(meta.name).trim()   : "";
+        let decimals = meta.decimals != null ? Number(meta.decimals) : null;
+        const logo   = meta.logo || undefined;
+
+        // Alchemy returns empty metadata for un-indexed tokens (most fresh
+        // memecoins). Read symbol/name/decimals on-chain instead of dropping.
+        if (!symbol || decimals == null) {
+          try {
+            const c = new ethers.Contract(b.contractAddress, ERC20_META_ABI, provider);
+            const [onSym, onDec, onName] = await Promise.all([
+              c.symbol().catch(() => ""),
+              c.decimals().catch(() => null),
+              c.name().catch(() => ""),
+            ]);
+            if (!symbol)        symbol   = String(onSym || "").trim();
+            if (!name)          name     = String(onName || "").trim();
+            if (decimals == null && onDec != null) decimals = Number(onDec);
+          } catch {}
+        }
+
+        if (decimals == null) decimals = 18;
+        // Last resort so the token is never invisible: show truncated address
+        if (!symbol) symbol = b.contractAddress.slice(0, 8);
+        if (!name)   name   = symbol;
+
         const balance = ethers.formatUnits(BigInt(b.tokenBalance), decimals);
         if (parseFloat(balance) <= 0) return null;
         return {
-          symbol: String(meta.symbol).trim(),
-          name: String(meta.name || meta.symbol).trim(),
+          symbol,
+          name,
           address: b.contractAddress.toLowerCase(),
           decimals,
           balance,
-          logo: meta.logo || undefined,
+          logo,
         } as AutoToken;
       } catch { return null; }
     }));
 
-    const found = results.filter((t): t is AutoToken => t !== null);
-    console.log(`[NumPay] Alchemy ${chainId}: resolved ${found.length} tokens with metadata`);
-    return found;
+    return results.filter((t): t is AutoToken => t !== null);
   } catch (e) {
-    console.error(`[NumPay] Alchemy ${chainId}: exception`, e);
+    console.warn(`[NumPay] Alchemy ${chainId}: token fetch failed`, e);
     return [];
   }
 }
 
-async function fetchScanERC20s(chainId: string, address: string): Promise<AutoToken[]> {
-  const base = SCAN_CHAINS[chainId];
-  if (!base) return [];
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    const resp = await fetch(
-      `${base}?module=account&action=tokenlist&address=${address}`,
-      { signal: controller.signal }
-    ).finally(() => clearTimeout(timer));
-
-    const data = await resp.json();
-    if (data.status !== "1" || !Array.isArray(data.result)) return [];
-
-    const tokens: AutoToken[] = [];
-    for (const t of data.result) {
-      if (t.type && t.type !== "ERC-20") continue;
-      try {
-        const decimals = parseInt(t.decimals ?? "18", 10);
-        const raw = BigInt(t.balance ?? "0");
-        if (raw <= 0n) continue;
-        const balance = ethers.formatUnits(raw, decimals);
-        if (parseFloat(balance) <= 0) continue;
-        tokens.push({
-          symbol: String(t.symbol || "").trim(),
-          name: String(t.name || t.symbol || "").trim(),
-          address: String(t.contractAddress).toLowerCase(),
-          decimals,
-          balance,
-        });
-      } catch {}
-    }
-    return tokens;
-  } catch { return []; }
-}
-
-/** Fetch all ERC-20 tokens for one Alchemy chain. */
-export async function fetchERC20sForChain(chainId: string, walletAddress: string): Promise<AutoToken[]> {
-  if (ALCHEMY_CHAINS[chainId]) return fetchAlchemyERC20s(chainId, walletAddress);
-  if (SCAN_CHAINS[chainId])   return fetchScanERC20s(chainId, walletAddress);
-  return [];
-}
-
 /**
- * Fetch ERC-20 tokens across multiple chains in ONE Ankr multichain call.
- * Returns a map of chainId → tokens.
+ * Fetch all held ERC-20 tokens for one chain via Moralis, with USD price.
+ * Covers arbitrary memecoins (no hardcoded list) on every supported chain.
  */
-async function fetchAnkrBatch(
-  address: string,
-  chainIds: string[],
-): Promise<Record<string, AutoToken[]>> {
-  const blockchains = chainIds.map((id) => ANKR_CHAINS[id]).filter(Boolean);
-  if (blockchains.length === 0) return {};
-
-  console.log("[NumPay] Ankr batch: querying", blockchains.length, "chains");
-
+async function fetchMoralisERC20s(chainId: string, address: string): Promise<AutoToken[]> {
+  const chainHex = MORALIS_CHAINS[chainId];
+  if (!chainHex || !MORALIS_KEY) return [];
   try {
-    const resp = await fetch("https://rpc.ankr.com/multichain", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0", id: 1,
-        method: "ankr_getAccountBalance",
-        params: { walletAddress: address, blockchain: blockchains, onlyWhitelisted: false },
-      }),
-    });
-    if (!resp.ok) {
-      console.warn("[NumPay] Ankr batch: HTTP", resp.status);
-      return {};
-    }
+    const resp = await fetch(
+      `https://deep-index.moralis.io/api/v2.2/wallets/${address}/tokens?chain=${chainHex}`,
+      { headers: { "X-API-Key": MORALIS_KEY, Accept: "application/json" } },
+    );
+    if (!resp.ok) return [];
     const data = await resp.json();
-
-    if (data.error) {
-      console.warn("[NumPay] Ankr batch: API error", data.error);
-      return {};
-    }
-
-    const assets: any[] = data?.result?.assets ?? [];
-    console.log("[NumPay] Ankr batch: received", assets.length, "assets");
-
-    // Reverse-map Ankr blockchain slug → our chainId
-    const ankrToChain: Record<string, string> = {};
-    for (const [chainId, slug] of Object.entries(ANKR_CHAINS)) ankrToChain[slug] = chainId;
-
-    const result: Record<string, AutoToken[]> = {};
-    for (const asset of assets) {
-      if (asset.tokenType === "NATIVE" || !asset.contractAddress) continue;
-      const chainId = ankrToChain[asset.blockchain];
-      if (!chainId) continue;
-      const balance = parseFloat(asset.balance || "0");
-      if (balance <= 0) continue;
-      if (!result[chainId]) result[chainId] = [];
-      result[chainId].push({
-        symbol:   String(asset.tokenSymbol  || "").trim(),
-        name:     String(asset.tokenName    || asset.tokenSymbol || "").trim(),
-        address:  String(asset.contractAddress).toLowerCase(),
-        decimals: Number(asset.tokenDecimals ?? 18),
-        balance:  String(asset.balance || "0"),
-        logo:     asset.thumbnail || undefined,
+    const result: any[] = data.result ?? [];
+    const out: AutoToken[] = [];
+    for (const t of result) {
+      if (t.native_token) continue; // native coin is handled by the chain balance
+      const addr = String(t.token_address || "").toLowerCase();
+      if (!addr) continue;
+      const balance = String(t.balance_formatted ?? "0");
+      if (parseFloat(balance) <= 0) continue;
+      out.push({
+        symbol:   String(t.symbol || addr.slice(0, 8)).trim(),
+        name:     String(t.name || t.symbol || addr.slice(0, 8)).trim(),
+        address:  addr,
+        decimals: Number(t.decimals ?? 18),
+        balance,
+        logo:     t.logo || t.thumbnail || undefined,
+        priceUsd: typeof t.usd_price === "number" ? t.usd_price : undefined,
       });
     }
-
-    const chainCount = Object.keys(result).length;
-    const tokenTotal = Object.values(result).reduce((s, t) => s + t.length, 0);
-    console.log(`[NumPay] Ankr batch: ${chainCount} chains with tokens, ${tokenTotal} total`);
-    return result;
+    return out;
   } catch (e) {
-    console.error("[NumPay] Ankr batch: exception", e);
-    return {};
+    console.warn(`[NumPay] Moralis ${chainId}: token fetch failed`, e);
+    return [];
   }
 }
 
 /**
  * Build a networkId → RPC map for all chains that have DEFAULT_TOKENS.
- * Includes Alchemy chains so Layer 3 acts as guaranteed fallback when Alchemy 403s.
+ * Includes Alchemy chains so this acts as a guaranteed fallback when Alchemy 403s.
  */
 function buildChainRpcMap(): Record<string, { rpc: string; tokens: typeof DEFAULT_TOKENS[number]; mc3: string }> {
   const map: Record<string, { rpc: string; tokens: typeof DEFAULT_TOKENS[number]; mc3: string }> = {};
@@ -280,7 +230,7 @@ function buildChainRpcMap(): Record<string, { rpc: string; tokens: typeof DEFAUL
 }
 
 /**
- * Check DEFAULT_TOKENS balances via Multicall3 for every non-Alchemy chain.
+ * Check DEFAULT_TOKENS balances via Multicall3 for every chain with known tokens.
  * Falls back to individual balanceOf calls if Multicall3 is unavailable.
  */
 async function sweepTokensByRPC(
@@ -288,11 +238,9 @@ async function sweepTokensByRPC(
   onUpdate: (chainId: string, tokens: AutoToken[]) => void,
 ): Promise<void> {
   const chainMap = buildChainRpcMap();
-  console.log("[NumPay] RPC sweep: checking chains:", Object.keys(chainMap).join(", "));
 
   await Promise.all(
     Object.entries(chainMap).map(async ([networkId, { rpc, tokens, mc3 }]) => {
-      console.log(`[NumPay] RPC sweep ${networkId}: ${tokens.length} known tokens to check`);
       try {
         const provider = new ethers.JsonRpcProvider(rpc);
         const found: AutoToken[] = [];
@@ -339,9 +287,8 @@ async function sweepTokensByRPC(
           }
 
           multicallOk = true;
-          console.log(`[NumPay] RPC sweep ${networkId}: multicall3 OK → ${found.length} tokens`);
-        } catch (mcErr) {
-          console.warn(`[NumPay] RPC sweep ${networkId}: multicall3 failed (${(mcErr as Error).message}), trying individual calls`);
+        } catch {
+          // Multicall3 unavailable on this RPC — fall through to individual calls
         }
 
         // Fallback: individual balanceOf calls if multicall3 unavailable
@@ -366,24 +313,21 @@ async function sweepTokensByRPC(
             }),
           );
           for (const t of results) if (t) found.push(t);
-          console.log(`[NumPay] RPC sweep ${networkId}: individual calls → ${found.length} tokens`);
         }
 
         if (found.length > 0) onUpdate(networkId, found);
       } catch (e) {
-        console.error(`[NumPay] RPC sweep ${networkId}: fatal error`, e);
+        console.warn(`[NumPay] RPC sweep ${networkId} failed`, e);
       }
     }),
   );
 }
 
-const CACHE_PFX = "numpay_autotok3_";
+const CACHE_PFX = "numpay_autotok4_";
 const CACHE_TTL = 3 * 60 * 1000; // 3 minutes
 
 /**
  * Sweep every supported EVM chain for ERC-20 tokens.
- * Layer 1: Alchemy (ETH/POL/ARB/OPT/BASE) — full auto-detect via alchemy_getTokenBalances.
- * Layer 2: Multicall3 balanceOf for all chains with DEFAULT_TOKENS — guaranteed fallback.
  * Serves stale cache immediately, then re-fetches in the background.
  */
 export async function sweepAllChainTokens(
@@ -391,7 +335,6 @@ export async function sweepAllChainTokens(
   onUpdate: (chainId: string, tokens: AutoToken[]) => void,
 ): Promise<void> {
   const cacheKey = CACHE_PFX + address.toLowerCase();
-  console.log("[NumPay] sweepAllChainTokens for", address);
 
   // Serve cache immediately (stale-while-revalidate)
   let cacheIsFresh = false;
@@ -400,14 +343,7 @@ export async function sweepAllChainTokens(
     if (raw) {
       const { ts, data } = JSON.parse(raw) as { ts: number; data: Record<string, AutoToken[]> };
       for (const [chainId, tokens] of Object.entries(data)) onUpdate(chainId, tokens);
-      if (Date.now() - ts < CACHE_TTL) {
-        console.log("[NumPay] cache fresh, skipping re-fetch");
-        cacheIsFresh = true;
-      } else {
-        console.log("[NumPay] stale cache served, re-fetching");
-      }
-    } else {
-      console.log("[NumPay] no cache, fetching fresh");
+      if (Date.now() - ts < CACHE_TTL) cacheIsFresh = true;
     }
   } catch {}
 
@@ -415,19 +351,35 @@ export async function sweepAllChainTokens(
 
   const freshData: Record<string, AutoToken[]> = {};
 
+  // Merge incoming tokens into a chain, deduping by address. Order-independent:
+  // fills in price/logo from whichever source has them, and replaces a
+  // truncated-address placeholder symbol/name with a real one.
   const merge = (chainId: string, incoming: AutoToken[]) => {
     if (incoming.length === 0) return;
-    const existing = freshData[chainId] ?? [];
-    const existingAddrs = new Set(existing.map((t) => t.address.toLowerCase()));
-    const toAdd = incoming.filter((t) => !existingAddrs.has(t.address.toLowerCase()));
-    freshData[chainId] = [...existing, ...toAdd];
+    const byAddr = new Map<string, AutoToken>(
+      (freshData[chainId] ?? []).map((t) => [t.address.toLowerCase(), t]),
+    );
+    for (const t of incoming) {
+      const k = t.address.toLowerCase();
+      const cur = byAddr.get(k);
+      if (!cur) { byAddr.set(k, t); continue; }
+      const realSym  = (s?: string) => !!s && !s.startsWith("0x");
+      byAddr.set(k, {
+        ...cur,
+        priceUsd: cur.priceUsd ?? t.priceUsd,
+        logo:     cur.logo ?? t.logo,
+        symbol:   realSym(cur.symbol) ? cur.symbol : t.symbol,
+        name:     realSym(cur.name)   ? cur.name   : t.name,
+      });
+    }
+    freshData[chainId] = Array.from(byAddr.values());
     onUpdate(chainId, freshData[chainId]);
   };
 
   const alchemyChains = Object.keys(ALCHEMY_CHAINS);
 
   await Promise.all([
-    // Layer 1: Alchemy (ETH, Polygon, Arbitrum, Optimism, Base) — full auto-detect
+    // Layer 1: Alchemy full auto-detect (only enabled networks return data)
     Promise.all(
       alchemyChains.map(async (chainId) => {
         const tokens = await fetchAlchemyERC20s(chainId, address);
@@ -436,13 +388,14 @@ export async function sweepAllChainTokens(
     ),
     // Layer 2: Multicall3 balanceOf for all chains with known DEFAULT_TOKENS
     sweepTokensByRPC(address, (chainId, tokens) => merge(chainId, tokens)),
+    // Layer 3: Moralis — arbitrary held tokens + USD price (memecoins, all chains)
+    Promise.all(
+      Object.keys(MORALIS_CHAINS).map(async (chainId) => {
+        const tokens = await fetchMoralisERC20s(chainId, address);
+        merge(chainId, tokens);
+      }),
+    ),
   ]);
-
-  const summary = Object.entries(freshData)
-    .filter(([, t]) => t.length > 0)
-    .map(([k, v]) => `${k}:${v.length}`)
-    .join(", ");
-  console.log("[NumPay] sweep complete:", summary || "no tokens found");
 
   try {
     await setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: freshData }));

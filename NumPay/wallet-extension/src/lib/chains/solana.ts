@@ -219,7 +219,7 @@ function parseToken2022Metadata(
  *   4. DexScreener                   — graduated tokens listed on any DEX
  */
 export async function fetchSolanaTokens(address: string): Promise<Array<{
-  symbol: string; name: string; address: string; decimals: number; balance: string; logo?: string;
+  symbol: string; name: string; address: string; decimals: number; balance: string; logo?: string; priceUsd?: number;
 }>> {
   try {
     // ── Step 0: get all token accounts (SPL + Token2022) ─────────────────────
@@ -253,108 +253,80 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
       if (uiAmount <= 0) continue;
       holdings.push({ mint: info.mint, balance: uiAmount, decimals: info.tokenAmount.decimals ?? 0 });
     }
-    console.log(`[NumPay] Solana tokens: ${holdings.length} holdings found`);
     if (holdings.length === 0) return [];
 
     const metaMap: Record<string, { symbol?: string; name?: string; logo?: string }> = {};
+    const priceMap: Record<string, number> = {};
 
-    // ── Step 1: Token2022 on-chain metadata (no external API) ────────────────
-    try {
-      const mintResp = await fetch(SOL_RPC, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: 3,
-          method: "getMultipleAccounts",
-          params: [holdings.slice(0, 50).map((h) => h.mint), { encoding: "base64" }],
-        }),
-      });
-      if (mintResp.ok) {
-        const mintData = await mintResp.json();
-        const mintAccounts: any[] = mintData.result?.value ?? [];
-        const uriQueue: { mint: string; uri: string }[] = [];
-
-        for (let i = 0; i < mintAccounts.length; i++) {
-          const acc = mintAccounts[i];
-          if (!acc?.data?.[0]) continue;
-          const t2 = parseToken2022Metadata(acc.data[0]);
-          if (t2?.name || t2?.symbol) {
-            metaMap[holdings[i].mint] = { name: t2.name, symbol: t2.symbol };
-            if (t2.uri) uriQueue.push({ mint: holdings[i].mint, uri: t2.uri });
+    // ── Step 1: Jupiter Token API v2 — name, symbol, logo AND usd price ──────
+    // Covers nearly all tradeable + pump.fun tokens in one call per mint.
+    await Promise.allSettled(
+      holdings.slice(0, 50).map(async (h) => {
+        try {
+          const r = await fetch(`https://lite-api.jup.ag/tokens/v2/search?query=${h.mint}`);
+          if (!r.ok) return;
+          const arr = await r.json();
+          const d = Array.isArray(arr) ? arr.find((x: any) => x.id === h.mint) : null;
+          if (!d) return;
+          if (d.symbol || d.name) {
+            metaMap[h.mint] = {
+              symbol: d.symbol?.trim(),
+              name:   d.name?.trim(),
+              logo:   d.icon ? toHttpsUrl(String(d.icon)) : undefined,
+            };
           }
-        }
+          if (typeof d.usdPrice === "number") priceMap[h.mint] = d.usdPrice;
+        } catch {}
+      }),
+    );
 
-        // Fetch logo from the JSON metadata URI (IPFS / Arweave)
-        await Promise.allSettled(
-          uriQueue.map(async ({ mint, uri }) => {
-            try {
-              const r = await fetch(toHttpsUrl(uri));
-              if (!r.ok) return;
-              const json = await r.json();
-              if (json?.image && metaMap[mint]) {
-                metaMap[mint].logo = toHttpsUrl(String(json.image));
-              }
-            } catch {}
+    // ── Step 2: Token2022 on-chain metadata for mints Jupiter didn't cover ───
+    const onchainMints = holdings.filter((h) => !metaMap[h.mint]?.name);
+    if (onchainMints.length > 0) {
+      try {
+        const mintResp = await fetch(SOL_RPC, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0", id: 3,
+            method: "getMultipleAccounts",
+            params: [onchainMints.slice(0, 50).map((h) => h.mint), { encoding: "base64" }],
           }),
-        );
-      }
-    } catch {}
+        });
+        if (mintResp.ok) {
+          const mintData = await mintResp.json();
+          const mintAccounts: any[] = mintData.result?.value ?? [];
+          const uriQueue: { mint: string; uri: string }[] = [];
 
-    // ── Step 2: Jupiter Token List (covers all tradeable Solana tokens) ─────
-    const missing1 = holdings.filter((h) => !metaMap[h.mint]?.name).map((h) => h.mint);
-    console.log(`[NumPay] Solana: after Token2022, ${missing1.length} mints still need metadata`);
-    if (missing1.length > 0) {
-      await Promise.allSettled(
-        missing1.slice(0, 50).map(async (mint) => {
-          try {
-            const r = await fetch(`https://tokens.jup.ag/token/${mint}`);
-            if (!r.ok) return;
-            const d = await r.json();
-            if (d?.symbol || d?.name) {
-              metaMap[mint] = {
-                symbol: d.symbol?.trim(),
-                name:   d.name?.trim(),
-                logo:   d.logoURI ? toHttpsUrl(String(d.logoURI)) : undefined,
-              };
+          for (let i = 0; i < mintAccounts.length; i++) {
+            const acc = mintAccounts[i];
+            if (!acc?.data?.[0]) continue;
+            const t2 = parseToken2022Metadata(acc.data[0]);
+            if (t2?.name || t2?.symbol) {
+              metaMap[onchainMints[i].mint] = { name: t2.name, symbol: t2.symbol };
+              if (t2.uri) uriQueue.push({ mint: onchainMints[i].mint, uri: t2.uri });
             }
-          } catch {}
-        }),
-      );
-    }
-
-    // ── Step 3: pump.fun API (bonding-curve tokens not yet on Jupiter) ───────
-    const missing2 = holdings.filter((h) => !metaMap[h.mint]?.name).map((h) => h.mint);
-    console.log(`[NumPay] Solana: after Jupiter, ${missing2.length} mints still need metadata`);
-    if (missing2.length > 0) {
-      await Promise.allSettled(
-        missing2.map(async (mint) => {
-          // Try v2 endpoint first, then v1 fallback
-          const urls = [
-            `https://frontend-api-v2.pump.fun/coins/${mint}`,
-            `https://frontend-api.pump.fun/coins/${mint}`,
-          ];
-          for (const url of urls) {
-            try {
-              const r = await fetch(url);
-              if (!r.ok) continue;
-              const d = await r.json();
-              if (d?.name || d?.symbol) {
-                metaMap[mint] = {
-                  symbol: d.symbol?.trim(),
-                  name:   d.name?.trim(),
-                  logo:   d.image_uri ? toHttpsUrl(d.image_uri) : undefined,
-                };
-                break;
-              }
-            } catch {}
           }
-        }),
-      );
+
+          // Fetch logo from the JSON metadata URI (IPFS / Arweave)
+          await Promise.allSettled(
+            uriQueue.map(async ({ mint, uri }) => {
+              try {
+                const r = await fetch(toHttpsUrl(uri));
+                if (!r.ok) return;
+                const json = await r.json();
+                if (json?.image && metaMap[mint]) {
+                  metaMap[mint].logo = toHttpsUrl(String(json.image));
+                }
+              } catch {}
+            }),
+          );
+        }
+      } catch {}
     }
 
-    // ── Step 4: DexScreener (graduated tokens on Raydium / Orca / etc.) ──────
+    // ── Step 3: DexScreener (graduated tokens) — fills name/logo + price ─────
     const missing3 = holdings.filter((h) => !metaMap[h.mint]?.name).map((h) => h.mint);
-    console.log(`[NumPay] Solana: after pump.fun, ${missing3.length} mints still need metadata`);
     if (missing3.length > 0) {
       try {
         const r = await fetch(
@@ -364,20 +336,22 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
           const d = await r.json();
           for (const pair of (d.pairs ?? [])) {
             const mint = pair.baseToken?.address;
-            if (mint && !metaMap[mint]?.name) {
+            if (!mint) continue;
+            if (!metaMap[mint]?.name) {
               metaMap[mint] = {
                 symbol: pair.baseToken.symbol?.trim(),
                 name:   pair.baseToken.name?.trim(),
                 logo:   pair.info?.imageUrl,
               };
             }
+            if (priceMap[mint] == null && pair.priceUsd) {
+              const p = parseFloat(pair.priceUsd);
+              if (p > 0) priceMap[mint] = p;
+            }
           }
         }
       } catch {}
     }
-
-    const resolved = holdings.filter((h) => metaMap[h.mint]?.name).length;
-    console.log(`[NumPay] Solana: ${resolved}/${holdings.length} mints resolved with real metadata`);
 
     return holdings.map(({ mint, balance, decimals }) => {
       const meta = metaMap[mint] ?? {};
@@ -389,6 +363,7 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
         decimals,
         balance: balance.toString(),
         logo:    meta.logo,
+        priceUsd: priceMap[mint],
       };
     });
   } catch { return []; }

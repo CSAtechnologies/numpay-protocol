@@ -118,7 +118,45 @@ export async function fetchTronTokens(address: string): Promise<Array<{
       }
     }
 
-    const unknowns = tokens.filter((t) => !KNOWN_TRC20[t.address]);
+    // TRC-10 tokens (assetV2) — numeric asset IDs the trc20 field never lists.
+    // Resolve name/abbr/precision via Trongrid's asset endpoint.
+    const trc10List: Array<{ key: string; value: number | string }> =
+      data.data?.[0]?.assetV2 ?? [];
+    await Promise.allSettled(
+      trc10List.map(async (entry) => {
+        const id = entry.key;
+        const rawBal = Number(entry.value ?? 0);
+        if (!id || rawBal <= 0) return;
+        let name = id, symbol = id, decimals = 0, logo: string | undefined;
+        try {
+          const r = await fetch(`https://api.trongrid.io/v1/assets/${id}`, {
+            headers: { Accept: "application/json" },
+          });
+          if (r.ok) {
+            const info = (await r.json()).data?.[0];
+            if (info) {
+              name     = String(info.name || id).trim();
+              symbol   = String(info.abbr || info.name || id).trim();
+              decimals = Number(info.precision ?? 0);
+            }
+          }
+        } catch {}
+        const balance = rawBal / Math.pow(10, decimals);
+        if (balance <= 0) return;
+        tokens.push({
+          symbol,
+          name,
+          address: `trc10:${id}`,
+          decimals,
+          balance: balance.toString(),
+          logo,
+        });
+      }),
+    );
+
+    const unknowns = tokens.filter(
+      (t) => !KNOWN_TRC20[t.address] && !t.address.startsWith("trc10:"),
+    );
 
     // Resolve unknown contracts via TronScan token overview
     if (unknowns.length > 0) {
