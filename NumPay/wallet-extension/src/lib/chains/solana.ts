@@ -6,15 +6,12 @@ import { derivePath } from "./slip10";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
 import { ethers } from "ethers";
+import { ALCHEMY_KEY, MORALIS_KEY } from "../env";
 
 // Solana BIP44 derivation path
 const SOL_DERIVATION_PATH = "m/44'/501'/0'/0'";
 
-const ALCHEMY_KEY = "REDACTED_ROTATE_ME";
 const SOL_RPC = `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
-
-// Moralis Solana gateway — CDN-cached logos (survive dead origins) + spam/verify flags.
-const MORALIS_KEY = import.meta.env.VITE_MORALIS_KEY ?? "";
 
 /**
  * Derive a Solana address from a BIP39 mnemonic.
@@ -244,13 +241,32 @@ export async function executeJupiterSwap(
   for (let i = 0; i < txBytes.length; i++) binary += String.fromCharCode(txBytes[i]);
   const signedB64 = btoa(binary);
 
+  // Local simulation before broadcast. Jupiter recommends skipPreflight for the
+  // actual send (their v0 txs can fail node preflight on slot timing yet still
+  // land), so we run our own simulateTransaction first and abort if it would
+  // fail — never send a transaction we haven't checked against current state.
+  const simResp = await fetch(SOL_RPC, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 1,
+      method: "simulateTransaction",
+      params: [signedB64, { encoding: "base64", sigVerify: true, commitment: "confirmed" }],
+    }),
+  });
+  const simData = await simResp.json();
+  if (simData.error) throw new Error(simData.error.message ?? "Swap simulation failed");
+  if (simData.result?.value?.err) {
+    throw new Error("Swap simulation failed — the transaction would fail, so it was not sent.");
+  }
+
   const sendResp = await fetch(SOL_RPC, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       jsonrpc: "2.0", id: 1,
       method: "sendTransaction",
-      // Jupiter recommends skipPreflight for their pre-simulated v0 txs.
+      // Safe to skip node preflight here: we just simulated locally above.
       params: [signedB64, { encoding: "base64", skipPreflight: true, maxRetries: 3, preflightCommitment: "confirmed" }],
     }),
   });

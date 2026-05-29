@@ -1,3 +1,5 @@
+import { ALCHEMY_KEY } from "./env";
+
 // TrustWallet CDN base - higher quality logos than CoinGecko
 const TW = "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains";
 const twLogo = (chain: string) => `${TW}/${chain}/info/logo.png`;
@@ -7,7 +9,7 @@ const twLogo = (chain: string) => `${TW}/${chain}/info/logo.png`;
 // which network the user is currently on.
 export const BPAN_MAINNET_CONTRACT = "0xdB5206e06a7509b9181F0594752CD42cbD7eD371"; // V2
 export const BPAN_SEPOLIA_CONTRACT  = "0xF2C65Bc0e54b5694c13d7c5E5Accf6DD93d7267a"; // V2
-export const BPAN_MAINNET_RPC      = "https://eth-mainnet.g.alchemy.com/v2/REDACTED_ROTATE_ME";
+export const BPAN_MAINNET_RPC      = `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
 
 export interface Network {
   id: string;
@@ -26,7 +28,7 @@ export const NETWORKS: Record<string, Network> = {
   // ── Mainnets ─────────────────────────────────────────────────────────────────
   ethereum: {
     id: "ethereum", name: "Ethereum", chainId: 1,
-    rpcUrl: "https://eth-mainnet.g.alchemy.com/v2/REDACTED_ROTATE_ME",
+    rpcUrl: `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
     symbol: "ETH", decimals: 18,
     explorer: "https://etherscan.io",
     logo: twLogo("ethereum"),
@@ -34,7 +36,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   polygon: {
     id: "polygon", name: "Polygon", chainId: 137,
-    rpcUrl: "https://polygon-mainnet.g.alchemy.com/v2/REDACTED_ROTATE_ME",
+    rpcUrl: `https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
     symbol: "POL", decimals: 18,
     explorer: "https://polygonscan.com",
     logo: twLogo("polygon"),
@@ -182,7 +184,7 @@ export const NETWORKS: Record<string, Network> = {
   // ── Testnet ──────────────────────────────────────────────────────────────────
   sepolia: {
     id: "sepolia", name: "Sepolia", chainId: 11155111,
-    rpcUrl: "https://eth-sepolia.g.alchemy.com/v2/REDACTED_ROTATE_ME",
+    rpcUrl: `https://eth-sepolia.g.alchemy.com/v2/${ALCHEMY_KEY}`,
     symbol: "ETH", decimals: 18,
     explorer: "https://sepolia.etherscan.io",
     logo: twLogo("ethereum"),

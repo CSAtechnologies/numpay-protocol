@@ -1,30 +1,42 @@
 // NumPay Background Service Worker
-// Handles auto-lock timer and extension lifecycle
+// Handles auto-lock timer and extension lifecycle.
+//
+// The authoritative lock check lives in the popup (isLocked() enforces the
+// inactivity timeout on every open, even if this worker was suspended). This
+// timer is defense-in-depth for the case where an extension page stays open
+// and idle: when it fires we drop the decrypted session from in-memory
+// session storage so no plaintext key material survives the timeout.
 
 const AUTO_LOCK_MINUTES = 15;
+const SESSION_KEY  = "numpay_session";
+const ACTIVITY_KEY = "numpay_lastActivity";
+
 let lockTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function lockNow() {
+  await chrome.storage.session.remove([SESSION_KEY, ACTIVITY_KEY]);
+}
 
 function resetLockTimer() {
   if (lockTimer) clearTimeout(lockTimer);
-  lockTimer = setTimeout(async () => {
-    await chrome.storage.local.set({ numpay_locked: "true" });
-  }, AUTO_LOCK_MINUTES * 60 * 1000);
+  lockTimer = setTimeout(lockNow, AUTO_LOCK_MINUTES * 60 * 1000);
 }
 
-// Reset timer when popup opens
-chrome.runtime.onConnect.addListener(() => {
+// Popup opens a long-lived port on mount; treat that as activity.
+chrome.runtime.onConnect.addListener((port) => {
   resetLockTimer();
+  port.onDisconnect.addListener(() => { /* popup closed; timer keeps running */ });
 });
 
-// Listen for messages from popup
+// Explicit activity pings from the popup.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.type === "ACTIVITY") {
+  if (msg?.type === "ACTIVITY") {
     resetLockTimer();
     sendResponse({ ok: true });
   }
+  return false;
 });
 
-// Initial setup
 chrome.runtime.onInstalled.addListener(() => {
-  console.log("NumPay wallet installed");
+  // no-op
 });

@@ -8,7 +8,8 @@ import { CURRENCIES } from "@/lib/currency";
 import { useWallet } from "../hooks/useWallet";
 import { useCurrency } from "../hooks/useCurrency";
 import { useTheme } from "../hooks/useTheme";
-import { getItem, setItem, removeItem } from "@/lib/storage";
+import { removeItem, getSession, setSession, removeSession } from "@/lib/storage";
+import { SESSION_KEY } from "@/lib/wallet";
 import Layout from "../components/Layout";
 import { LockIcon, CopyIcon, CheckIcon, ShieldIcon, SearchIcon, ChevronDownIcon, SunIcon, MoonIcon } from "../components/Icons";
 
@@ -45,7 +46,7 @@ export default function Settings({ onLock, onReset }: Props) {
 
   async function handleReset() {
     await deleteWallet();
-    await removeItem("numpay_session");
+    await removeSession(SESSION_KEY);
     await removeItem("numpay_network");
     onReset();
   }
@@ -79,14 +80,14 @@ export default function Settings({ onLock, onReset }: Props) {
     const remaining = await deleteOneWallet(id);
 
     if (remaining === 0) {
-      await removeItem("numpay_session");
+      await removeSession(SESSION_KEY);
       await removeItem("numpay_network");
       onReset();
       return;
     }
 
     // Remove from session
-    const raw = await getItem("numpay_session");
+    const raw = await getSession(SESSION_KEY);
     if (raw) {
       try {
         const session = JSON.parse(raw);
@@ -95,7 +96,7 @@ export default function Settings({ onLock, onReset }: Props) {
           const newId = await getActiveId();
           session.activeId = newId ?? Object.keys(session.wallets)[0];
         }
-        await setItem("numpay_session", JSON.stringify(session));
+        await setSession(SESSION_KEY, JSON.stringify(session));
       } catch {}
     }
 

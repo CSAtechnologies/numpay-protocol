@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { ethers } from "ethers";
-import { type WalletData, type VaultMeta, listVaultMeta, getActiveId, setActiveId, updateWalletAvatar } from "@/lib/wallet";
-import { getItem, setItem } from "@/lib/storage";
+import { type WalletData, type VaultMeta, listVaultMeta, getActiveId, setActiveId, updateWalletAvatar, touchActivity, SESSION_KEY } from "@/lib/wallet";
+import { getItem, setItem, getSession, setSession } from "@/lib/storage";
 import { NETWORKS, DEFAULT_NETWORK, type Network } from "@/lib/networks";
 import { DEFAULT_TOKENS, getTokenBalance, type Token } from "@/lib/tokens";
 import {
@@ -135,7 +135,7 @@ export function useWallet(): WalletState {
         setCustomChains(chains);
       } catch {}
 
-      const cached = await getItem("numpay_session");
+      const cached = await getSession(SESSION_KEY);
       if (cached) {
         try {
           const parsed = JSON.parse(cached);
@@ -147,6 +147,7 @@ export function useWallet(): WalletState {
             setWallet(parsed as WalletData);
             setActiveWalletId("wallet-1");
           }
+          await touchActivity(); // opening the popup counts as activity
         } catch {}
       }
 
@@ -468,7 +469,7 @@ export function useWallet(): WalletState {
   }, [activeChainId, wallet, nonEvmWallet, customChains]);
 
   const switchActiveWallet = useCallback(async (id: string) => {
-    const raw = await getItem("numpay_session");
+    const raw = await getSession(SESSION_KEY);
     if (!raw) return;
     try {
       const session: WalletSession = JSON.parse(raw);
@@ -476,7 +477,7 @@ export function useWallet(): WalletState {
       if (!walletData) return;
 
       session.activeId = id;
-      await setItem("numpay_session", JSON.stringify(session));
+      await setSession(SESSION_KEY, JSON.stringify(session));
       await setActiveId(id);
 
       setWallet(walletData);
@@ -491,7 +492,7 @@ export function useWallet(): WalletState {
   }, []);
 
   const addWalletToSession = useCallback(async (walletData: WalletData, id: string, meta: VaultMeta) => {
-    const raw = await getItem("numpay_session");
+    const raw = await getSession(SESSION_KEY);
     let session: WalletSession = { activeId: id, wallets: {} };
     if (raw) {
       try {
@@ -504,7 +505,7 @@ export function useWallet(): WalletState {
     if (!session.wallets || typeof session.wallets !== "object") session.wallets = {};
     session.wallets[id] = walletData;
     session.activeId = id;
-    await setItem("numpay_session", JSON.stringify(session));
+    await setSession(SESSION_KEY, JSON.stringify(session));
     await setActiveId(id);
 
     setWallet(walletData);
@@ -543,10 +544,12 @@ export async function cacheAllWalletSessions(
 ): Promise<void> {
   const session: WalletSession = { activeId, wallets: {} };
   for (const { id, wallet } of wallets) session.wallets[id] = wallet;
-  await setItem("numpay_session", JSON.stringify(session));
+  await setSession(SESSION_KEY, JSON.stringify(session));
+  await touchActivity();
 }
 
 export async function cacheWalletSession(wallet: WalletData, id: string): Promise<void> {
   const session: WalletSession = { activeId: id, wallets: { [id]: wallet } };
-  await setItem("numpay_session", JSON.stringify(session));
+  await setSession(SESSION_KEY, JSON.stringify(session));
+  await touchActivity();
 }

@@ -5,9 +5,10 @@ import { useCurrency } from "../hooks/useCurrency";
 import Layout from "../components/Layout";
 import {
   ArrowLeftIcon, SendIcon, ReceiveIcon, ExternalLinkIcon,
-  TrendingUpIcon, TokenIcon, ChainIcon, RefreshIcon,
+  TrendingUpIcon, TokenIcon, ChainIcon, RefreshIcon, SwapIcon,
 } from "../components/Icons";
 import { NETWORKS } from "@/lib/networks";
+import { ALCHEMY_KEY } from "@/lib/env";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -64,7 +65,6 @@ const RANGES = [
   { label: "1Y", days: 365 },
 ] as const;
 
-const ALCHEMY_KEY = "REDACTED_ROTATE_ME";
 const ALCHEMY_NETS: Record<string, string> = {
   ethereum: "eth-mainnet", polygon: "polygon-mainnet",
   arbitrum: "arb-mainnet", optimism: "opt-mainnet", base: "base-mainnet",
@@ -607,28 +607,43 @@ export default function TokenDetail() {
       </div>
 
       {/* ── Actions ── */}
-      <div className="px-4 mb-4 grid grid-cols-2 gap-2.5">
-        <button
-          onClick={() => navigate("/send", { state: { prefillSymbol: token.symbol, prefillChain: token.chainId } })}
-          className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold transition-colors"
-          style={{
-            background: "linear-gradient(135deg, #b5a8ff 0%, #7c6df0 50%, #5b4cdb 100%)",
-            color: "#fff",
-            border: "none",
-            boxShadow: "0 6px 16px -6px rgba(124,109,240,0.7)",
-          }}
-        >
-          <SendIcon size={14} />
-          Send
-        </button>
-        <button
-          onClick={() => navigate("/receive", { state: { chainId: token.chainId } })}
-          className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold bg-surface-2 border border-border text-text-primary hover:border-brand-500/50 transition-colors"
-        >
-          <ReceiveIcon size={14} />
-          Receive
-        </button>
-      </div>
+      {(() => {
+        // Swap is offered where we can actually route it: EVM chains + Solana.
+        const canSwap = !!NETWORKS[token.chainId ?? ""] || token.chainId === "solana";
+        return (
+          <div className={`px-4 mb-4 grid gap-2.5 ${canSwap ? "grid-cols-3" : "grid-cols-2"}`}>
+            <button
+              onClick={() => navigate("/send", { state: { prefillSymbol: token.symbol, prefillChain: token.chainId } })}
+              className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold transition-colors"
+              style={{
+                background: "linear-gradient(135deg, #b5a8ff 0%, #7c6df0 50%, #5b4cdb 100%)",
+                color: "#fff",
+                border: "none",
+                boxShadow: "0 6px 16px -6px rgba(124,109,240,0.7)",
+              }}
+            >
+              <SendIcon size={14} />
+              Send
+            </button>
+            {canSwap && (
+              <button
+                onClick={() => navigate("/swap", { state: { prefillChain: token.chainId, prefillAddress: token.address, prefillSymbol: token.symbol } })}
+                className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold bg-surface-2 border border-border text-text-primary hover:border-brand-500/50 transition-colors"
+              >
+                <SwapIcon size={14} />
+                Swap
+              </button>
+            )}
+            <button
+              onClick={() => navigate("/receive", { state: { chainId: token.chainId } })}
+              className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold bg-surface-2 border border-border text-text-primary hover:border-brand-500/50 transition-colors"
+            >
+              <ReceiveIcon size={14} />
+              Receive
+            </button>
+          </div>
+        );
+      })()}
 
       {/* ── Market stats ── */}
       {coinId && (

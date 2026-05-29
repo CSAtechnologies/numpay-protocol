@@ -3,8 +3,7 @@ import { useWallet } from "../hooks/useWallet";
 import Layout from "../components/Layout";
 import { SendIcon, ReceiveIcon, ExternalLinkIcon, RefreshIcon, ActivityIcon, ChainIcon } from "../components/Icons";
 import { NETWORKS } from "@/lib/networks";
-
-const ALCHEMY_KEY = "REDACTED_ROTATE_ME";
+import { ALCHEMY_KEY } from "@/lib/env";
 
 const ALCHEMY_NETS: Record<string, string> = {
   ethereum: "eth-mainnet",

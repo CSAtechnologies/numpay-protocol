@@ -10,7 +10,7 @@ describe("BANPRegistry", function () {
   let user2: SignerWithAddress;
   let user3: SignerWithAddress;
 
-  const REGISTRATION_FEE = ethers.parseEther("0.01");
+  const REGISTRATION_FEE = ethers.parseEther("0.001"); // within V2 MAX_REGISTRATION_FEE (0.005)
   const VALID_NUMBER = 48290173462n;
   const VALID_NUMBER_2 = 10000000000n; // smallest valid
   const VALID_NUMBER_3 = 99999999999n; // largest valid
@@ -95,12 +95,14 @@ describe("BANPRegistry", function () {
       expect(await registry.ownerOf(VALID_NUMBER_3)).to.equal(user3.address);
     });
 
-    it("should allow one user to register multiple numbers", async function () {
+    it("should reject a second registration from the same address (one BPAN per address)", async function () {
       await registry.connect(user1).registerNumber(VALID_NUMBER, { value: REGISTRATION_FEE });
-      await registry.connect(user1).registerNumber(VALID_NUMBER_2, { value: REGISTRATION_FEE });
+      await expect(
+        registry.connect(user1).registerNumber(VALID_NUMBER_2, { value: REGISTRATION_FEE })
+      ).to.be.revertedWithCustomError(registry, "AlreadyOwnsNumber");
 
-      expect(await registry.balanceOf(user1.address)).to.equal(2);
-      expect(await registry.totalRegistered()).to.equal(2);
+      expect(await registry.balanceOf(user1.address)).to.equal(1);
+      expect(await registry.totalRegistered()).to.equal(1);
     });
 
     it("should accept overpayment without reverting", async function () {
@@ -172,7 +174,7 @@ describe("BANPRegistry", function () {
     });
 
     it("should revert if insufficient fee is sent", async function () {
-      const lowFee = ethers.parseEther("0.005");
+      const lowFee = ethers.parseEther("0.0005");
       await expect(
         registry.connect(user1).registerNumber(VALID_NUMBER, { value: lowFee })
       ).to.be.revertedWithCustomError(registry, "InsufficientFee");
@@ -246,10 +248,15 @@ describe("BANPRegistry", function () {
       expect(await registry.getWalletMapping(VALID_NUMBER, "polygon-zkevm")).to.equal("0xPOLY");
     });
 
-    it("should handle very long wallet addresses", async function () {
-      const longAddr = "0x" + "a".repeat(200);
-      await registry.connect(user1).setWalletMapping(VALID_NUMBER, "ethereum", longAddr);
-      expect(await registry.getWalletMapping(VALID_NUMBER, "ethereum")).to.equal(longAddr);
+    it("should accept an address up to MAX_WALLET_LENGTH and reject longer", async function () {
+      const maxAddr = "0x" + "a".repeat(126); // 128 chars total (the V2 cap)
+      await registry.connect(user1).setWalletMapping(VALID_NUMBER, "ethereum", maxAddr);
+      expect(await registry.getWalletMapping(VALID_NUMBER, "ethereum")).to.equal(maxAddr);
+
+      const tooLong = "0x" + "a".repeat(200);
+      await expect(
+        registry.connect(user1).setWalletMapping(VALID_NUMBER, "solana", tooLong)
+      ).to.be.revertedWithCustomError(registry, "WalletAddressTooLong");
     });
 
     // --- Revert cases ---
@@ -500,24 +507,29 @@ describe("BANPRegistry", function () {
       expect(await registry.getWalletMapping(VALID_NUMBER, "ethereum")).to.equal("0xNEW");
     });
 
-    it("new owner can add new chain mappings after transfer", async function () {
+    it("new owner can add new chain mappings after transfer (starting from a cleared slate)", async function () {
       await registry
         .connect(user1)
         .transferFrom(user1.address, user2.address, VALID_NUMBER);
 
       await registry.connect(user2).setWalletMapping(VALID_NUMBER, "sui", "0xSUI_NEW");
       expect(await registry.getWalletMapping(VALID_NUMBER, "sui")).to.equal("0xSUI_NEW");
+      // Previous owner's ethereum + solana mappings were wiped on transfer, so
+      // only the new owner's "sui" mapping remains.
       const chains = await registry.getChains(VALID_NUMBER);
-      expect(chains).to.have.lengthOf(3);
+      expect(chains).to.have.lengthOf(1);
+      expect(chains).to.deep.equal(["sui"]);
     });
 
-    it("new owner can remove existing mappings after transfer", async function () {
+    it("previous owner's mappings are cleared on transfer (cannot be removed by new owner)", async function () {
       await registry
         .connect(user1)
         .transferFrom(user1.address, user2.address, VALID_NUMBER);
 
-      await registry.connect(user2).removeWalletMapping(VALID_NUMBER, "ethereum");
-      expect(await registry.getWalletMapping(VALID_NUMBER, "ethereum")).to.equal("");
+      // The mapping no longer exists, so removing it reverts.
+      await expect(
+        registry.connect(user2).removeWalletMapping(VALID_NUMBER, "ethereum")
+      ).to.be.revertedWithCustomError(registry, "MappingNotFound");
     });
 
     it("previous owner cannot update mappings after transfer", async function () {
@@ -540,14 +552,15 @@ describe("BANPRegistry", function () {
       ).to.be.revertedWithCustomError(registry, "NotNumberOwner");
     });
 
-    it("existing wallet mappings persist after transfer", async function () {
+    it("clears the previous owner's wallet mappings on transfer", async function () {
       await registry
         .connect(user1)
         .transferFrom(user1.address, user2.address, VALID_NUMBER);
 
-      // Mappings set by previous owner should still be readable
-      expect(await registry.getWalletMapping(VALID_NUMBER, "ethereum")).to.equal("0xETH");
-      expect(await registry.getWalletMapping(VALID_NUMBER, "solana")).to.equal("SOL_ADDR");
+      // V2 wipes mappings on ownership change so the new owner starts clean.
+      expect(await registry.getWalletMapping(VALID_NUMBER, "ethereum")).to.equal("");
+      expect(await registry.getWalletMapping(VALID_NUMBER, "solana")).to.equal("");
+      expect(await registry.getChains(VALID_NUMBER)).to.have.lengthOf(0);
     });
 
     it("should support safeTransferFrom", async function () {
@@ -579,7 +592,7 @@ describe("BANPRegistry", function () {
   describe("Admin functions", function () {
     describe("setRegistrationFee", function () {
       it("owner can update the registration fee", async function () {
-        const newFee = ethers.parseEther("0.05");
+        const newFee = ethers.parseEther("0.003");
         await expect(registry.connect(owner).setRegistrationFee(newFee))
           .to.emit(registry, "RegistrationFeeUpdated")
           .withArgs(REGISTRATION_FEE, newFee);
@@ -588,7 +601,7 @@ describe("BANPRegistry", function () {
       });
 
       it("new fee applies to subsequent registrations", async function () {
-        const newFee = ethers.parseEther("0.05");
+        const newFee = ethers.parseEther("0.003");
         await registry.connect(owner).setRegistrationFee(newFee);
 
         // Old fee should fail
@@ -700,12 +713,11 @@ describe("BANPRegistry", function () {
       await registry.connect(user1).transferFrom(user1.address, user2.address, VALID_NUMBER);
       expect(await registry.ownerOf(VALID_NUMBER)).to.equal(user2.address);
 
-      // 7. New owner adds mapping
+      // 7. Transfer wiped all prior mappings; new owner adds a fresh one
       await registry.connect(user2).setWalletMapping(VALID_NUMBER, "sui", "0xSUI_NEW");
-      const [chainsAfter, walletsAfter] = await registry.getAllMappings(VALID_NUMBER);
-      expect(chainsAfter).to.have.lengthOf(2);
-      expect(chainsAfter).to.include("ethereum");
-      expect(chainsAfter).to.include("sui");
+      const [chainsAfter] = await registry.getAllMappings(VALID_NUMBER);
+      expect(chainsAfter).to.have.lengthOf(1);
+      expect(chainsAfter).to.deep.equal(["sui"]);
     });
 
     it("multiple users with independent number spaces", async function () {
