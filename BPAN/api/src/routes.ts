@@ -158,28 +158,12 @@ router.get("/account/:number/chains", ...lookupGuards, async (req: Request, res:
   }
 });
 
-// GET /api/v1/account/:number/status
-// Check if a number is registered
-router.get("/account/:number/status", ...lookupGuards, async (req: Request, res: Response) => {
-  const number = parseNumber(req.params.number);
-  if (!number) {
-    res.status(400).json({ error: "Invalid BANP number. Must be 11 digits." });
-    return;
-  }
-
-  try {
-    const contract = getContract();
-    const registered: boolean = await contract.isRegistered(number);
-
-    res.json({
-      number: number.toString(),
-      registered,
-    });
-  } catch (err: any) {
-    console.error("[status]", err);
-    res.status(500).json({ error: "Failed to check status" });
-  }
-});
+// NOTE: the former GET /api/v1/account/:number/status endpoint was removed.
+// It returned `registered: true/false` directly, which made it a fast, free
+// enumeration oracle over the small 11-digit namespace and defeated the
+// uniform-response anti-enumeration design of /resolve and /account. Callers
+// that genuinely need registration state can use /account/:number (uniform
+// shape) or read isRegistered() on-chain.
 
 // GET /api/v1/stats
 // Get protocol statistics
