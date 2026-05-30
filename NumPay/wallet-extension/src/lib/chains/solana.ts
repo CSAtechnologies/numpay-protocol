@@ -143,6 +143,19 @@ export const SOLANA_SWAP_TOKENS = [
   { symbol: "JUP",  name: "Jupiter",    address: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", decimals: 6 },
   { symbol: "WIF",  name: "dogwifhat",  address: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm", decimals: 6 },
   { symbol: "JTO",  name: "Jito",       address: "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL", decimals: 9 },
+  // Popular SPL tokens (mints + decimals verified on-chain via Solana RPC).
+  { symbol: "RAY",     name: "Raydium",        address: "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R", decimals: 6 },
+  { symbol: "PYTH",    name: "Pyth Network",   address: "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3", decimals: 6 },
+  { symbol: "JLP",     name: "Jupiter LP",     address: "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4", decimals: 6 },
+  { symbol: "W",       name: "Wormhole",       address: "85VBFQZC9TZkfaptBWjvUw7YbZjy52A6mjtPGjstQAmQ", decimals: 6 },
+  { symbol: "PENGU",   name: "Pudgy Penguins", address: "2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv", decimals: 6 },
+  { symbol: "POPCAT",  name: "Popcat",         address: "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr", decimals: 9 },
+  { symbol: "MEW",     name: "cat in a dogs world", address: "MEW1gQWJ3nEXg2qgERiKu7FAFj79PHvQVREQUzScPP5", decimals: 5 },
+  { symbol: "RENDER",  name: "Render",         address: "rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof", decimals: 8 },
+  { symbol: "HNT",     name: "Helium",         address: "hntyVP6YFm1Hg25TN9WGLqM12b8TQmcknKrdu1oxWux", decimals: 8 },
+  { symbol: "ORCA",    name: "Orca",           address: "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE", decimals: 6 },
+  { symbol: "JitoSOL", name: "Jito Staked SOL",address: "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn", decimals: 9 },
+  { symbol: "mSOL",    name: "Marinade SOL",   address: "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So", decimals: 9 },
 ] as const;
 
 export interface JupiterQuote {

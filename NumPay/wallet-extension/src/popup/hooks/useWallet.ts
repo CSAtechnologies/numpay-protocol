@@ -9,6 +9,7 @@ import {
   fetchNonEvmBalances,
   fetchSolanaTokens,
   fetchTronTokens,
+  fetchSuiTokens,
   type NonEvmWallet,
   type NonEvmChain,
 } from "@/lib/chains";
@@ -325,20 +326,23 @@ export function useWallet(): WalletState {
       // Last-known tokens, kept so a failed/offline fetch doesn't drop them.
       let prevSol: any[] = [];
       let prevTrx: any[] = [];
+      let prevSui: any[] = [];
       try {
         const raw = await getItem(cacheKey);
         if (raw) {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed.solanaTokens)) prevSol = parsed.solanaTokens;
           if (Array.isArray(parsed.tronTokens))   prevTrx = parsed.tronTokens;
+          if (Array.isArray(parsed.suiTokens))    prevSui = parsed.suiTokens;
           if (Array.isArray(parsed.chains)) {
             setNonEvmChains(parsed.chains);
-            // Restore cached SPL/TRC-20 tokens so they show instantly / when offline
-            if (prevSol.length || prevTrx.length) {
+            // Restore cached SPL/TRC-20/Sui tokens so they show instantly / when offline
+            if (prevSol.length || prevTrx.length || prevSui.length) {
               setTokensByChain((prev) => ({
                 ...prev,
                 ...(prevSol.length ? { solana: prevSol } : {}),
                 ...(prevTrx.length ? { tron: prevTrx }   : {}),
+                ...(prevSui.length ? { sui: prevSui }    : {}),
               }));
             }
             setNonEvmLoading(false);
@@ -353,29 +357,32 @@ export function useWallet(): WalletState {
         const nev = await deriveNonEvmAddresses(mnemonic);
         setNonEvmWallet(nev);
 
-        // Fetch native balances + SPL tokens + TRC-20 tokens in parallel
-        const [chains, splTokens, trc20Tokens] = await Promise.all([
+        // Fetch native balances + SPL + TRC-20 + Sui tokens in parallel
+        const [chains, splTokens, trc20Tokens, suiCoins] = await Promise.all([
           fetchNonEvmBalances(nev),
           fetchSolanaTokens(nev.solana.address).catch(() => []),
           fetchTronTokens(nev.tron.address).catch(() => []),
+          fetchSuiTokens(nev.sui.address).catch(() => []),
         ]);
 
         // Keep last-known tokens when a fetch came back empty (offline/flaky),
-        // so SPL/TRC-20 holdings don't vanish on a bad refresh.
+        // so SPL/TRC-20/Sui holdings don't vanish on a bad refresh.
         const sol = splTokens.length  ? splTokens  : prevSol;
         const trx = trc20Tokens.length ? trc20Tokens : prevTrx;
+        const sui = suiCoins.length ? suiCoins : prevSui;
 
         setNonEvmChains(chains);
         setTokensByChain((prev) => ({
           ...prev,
           ...(sol.length ? { solana: sol } : {}),
           ...(trx.length ? { tron: trx }   : {}),
+          ...(sui.length ? { sui: sui }    : {}),
         }));
 
         // Persist tokens too (not just native chains) so they survive offline.
         try {
           await setItem(cacheKey, JSON.stringify({
-            ts: Date.now(), chains, solanaTokens: sol, tronTokens: trx,
+            ts: Date.now(), chains, solanaTokens: sol, tronTokens: trx, suiTokens: sui,
           }));
         } catch {}
       } catch (e) {
@@ -391,35 +398,38 @@ export function useWallet(): WalletState {
     if (!nonEvmWallet) return;
     setNonEvmLoading(true);
     try {
-      const [chains, splTokens, trc20Tokens] = await Promise.all([
+      const [chains, splTokens, trc20Tokens, suiCoins] = await Promise.all([
         fetchNonEvmBalances(nonEvmWallet),
         fetchSolanaTokens(nonEvmWallet.solana.address).catch(() => []),
         fetchTronTokens(nonEvmWallet.tron.address).catch(() => []),
+        fetchSuiTokens(nonEvmWallet.sui.address).catch(() => []),
       ]);
 
       // Preserve last-known tokens (from cache) when a fetch returns empty.
       const addr = wallet?.address;
       const cacheKey = addr ? NONEVMCACHE_PFX + addr : null;
-      let prevSol: any[] = [], prevTrx: any[] = [];
+      let prevSol: any[] = [], prevTrx: any[] = [], prevSui: any[] = [];
       if (cacheKey) {
         try {
           const raw = await getItem(cacheKey);
-          if (raw) { const p = JSON.parse(raw); prevSol = p.solanaTokens ?? []; prevTrx = p.tronTokens ?? []; }
+          if (raw) { const p = JSON.parse(raw); prevSol = p.solanaTokens ?? []; prevTrx = p.tronTokens ?? []; prevSui = p.suiTokens ?? []; }
         } catch {}
       }
       const sol = splTokens.length  ? splTokens  : prevSol;
       const trx = trc20Tokens.length ? trc20Tokens : prevTrx;
+      const sui = suiCoins.length ? suiCoins : prevSui;
 
       setNonEvmChains(chains);
       setTokensByChain((prev) => ({
         ...prev,
         ...(sol.length ? { solana: sol } : {}),
         ...(trx.length ? { tron: trx }   : {}),
+        ...(sui.length ? { sui: sui }    : {}),
       }));
 
       if (cacheKey) {
         try {
-          await setItem(cacheKey, JSON.stringify({ ts: Date.now(), chains, solanaTokens: sol, tronTokens: trx }));
+          await setItem(cacheKey, JSON.stringify({ ts: Date.now(), chains, solanaTokens: sol, tronTokens: trx, suiTokens: sui }));
         } catch {}
       }
     } catch {}

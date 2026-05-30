@@ -77,6 +77,10 @@ const KNOWN_TRC20: Record<string, { name: string; symbol: string; decimals: numb
   "TNUC9Qb1rRpS5CbWLmNMxXBjyFoydXjWFR": { name: "Wrapped TRX",   symbol: "WTRX", decimals: 6,  logo: `${TW}/tron/assets/TNUC9Qb1rRpS5CbWLmNMxXBjyFoydXjWFR/logo.png` },
   "TUpMhErZL2fhh4sVNULAbNKLokS4GjC1F4": { name: "TrueUSD",       symbol: "TUSD", decimals: 18, logo: `${TW}/tron/assets/TUpMhErZL2fhh4sVNULAbNKLokS4GjC1F4/logo.png` },
   "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7": { name: "WINkLink",      symbol: "WIN",  decimals: 6,  logo: `${TW}/tron/assets/TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7/logo.png` },
+  // Decimals verified on-chain via TronGrid triggerconstantcontract.
+  "TThzxNRLrW2Brp9DcTQU8i4Wd9udCWEdZ3": { name: "Staked USDT",   symbol: "stUSDT", decimals: 18, logo: `${TW}/tron/assets/TThzxNRLrW2Brp9DcTQU8i4Wd9udCWEdZ3/logo.png` },
+  "TMwFHYXLJaRUPeW6421aqXL4ZEzPRFGkGT": { name: "JUST Stablecoin", symbol: "USDJ", decimals: 18, logo: `${TW}/tron/assets/TMwFHYXLJaRUPeW6421aqXL4ZEzPRFGkGT/logo.png` },
+  "TKfjV9RNKJJCqPvBtK8L7Knykh7DNWvnYt": { name: "Wrapped BTT",   symbol: "WBTT", decimals: 6,  logo: `${TW}/tron/assets/TKfjV9RNKJJCqPvBtK8L7Knykh7DNWvnYt/logo.png` },
 };
 
 /**

@@ -12,7 +12,7 @@ import { ethers } from "ethers";
 import { getItem, setItem } from "./storage";
 import { NETWORKS } from "./networks";
 import { DEFAULT_TOKENS, getTokenBalance } from "./tokens";
-import { ALCHEMY_KEY, MORALIS_KEY } from "./env";
+import { ALCHEMY_KEY, MORALIS_KEY, GOLDRUSH_KEY } from "./env";
 
 // Alchemy network sub-domains. Only networks enabled in our Alchemy app return
 // data; others return 403 and rely on the Layer 2 Multicall3 sweep instead.
@@ -45,6 +45,17 @@ const MORALIS_CHAINS: Record<string, string> = {
   blast:        "0x13e31",
   scroll:       "0x82750",
   polygonzkevm: "0x44d",
+};
+
+// GoldRush (Covalent) fallback indexer. Uses decimal chain ids. Mirrors the
+// Moralis set so the two back each other up when one hits its free-tier quota.
+// networkId → decimal chainId string. GOLDRUSH_KEY from .env (optional).
+const GOLDRUSH_CHAINS: Record<string, string> = {
+  ethereum: "1",     polygon: "137",   bsc: "56",        avalanche: "43114",
+  fantom: "250",     cronos: "25",     arbitrum: "42161", optimism: "10",
+  base: "8453",      gnosis: "100",    linea: "59144",   moonbeam: "1284",
+  zksync: "324",     mantle: "5000",   blast: "81457",   scroll: "534352",
+  polygonzkevm: "1101",
 };
 
 export interface AutoToken {
@@ -210,6 +221,51 @@ async function fetchMoralisERC20s(chainId: string, address: string): Promise<Aut
     return out;
   } catch (e) {
     console.warn(`[NumPay] Moralis ${chainId}: token fetch failed`, e);
+    return [];
+  }
+}
+
+/**
+ * Fetch all held ERC-20 tokens for one chain via GoldRush (Covalent), with USD
+ * price. Fallback to Moralis: when Moralis is over its daily quota this still
+ * returns the held tokens. No-op when GOLDRUSH_KEY is unset.
+ */
+async function fetchGoldRushERC20s(chainId: string, address: string): Promise<AutoToken[]> {
+  const cvChain = GOLDRUSH_CHAINS[chainId];
+  if (!cvChain || !GOLDRUSH_KEY) return [];
+  try {
+    const resp = await fetch(
+      `https://api.covalenthq.com/v1/${cvChain}/address/${address}/balances_v2/?no-nft-fetch=true&key=${GOLDRUSH_KEY}`,
+      { headers: { Accept: "application/json" } },
+    );
+    if (!resp.ok) return [];
+    const json = await resp.json();
+    const items: any[] = json?.data?.items ?? [];
+    const out: AutoToken[] = [];
+    for (const t of items) {
+      if (t.native_token) continue; // native coin handled by the chain balance
+      const addr = String(t.contract_address || "").toLowerCase();
+      if (!addr.startsWith("0x")) continue;
+      const decimals = Number(t.contract_decimals ?? 18);
+      const raw = String(t.balance ?? "0");
+      if (!raw || raw === "0") continue;
+      let balance: string;
+      try { balance = ethers.formatUnits(raw, decimals); } catch { continue; }
+      if (parseFloat(balance) <= 0) continue;
+      out.push({
+        symbol:   String(t.contract_ticker_symbol || addr.slice(0, 8)).trim(),
+        name:     String(t.contract_name || t.contract_ticker_symbol || addr.slice(0, 8)).trim(),
+        address:  addr,
+        decimals,
+        balance,
+        logo:     t.logo_url || undefined,
+        priceUsd: typeof t.quote_rate === "number" ? t.quote_rate : undefined,
+        possibleSpam: t.is_spam === true,
+      });
+    }
+    return out;
+  } catch (e) {
+    console.warn(`[NumPay] GoldRush ${chainId}: token fetch failed`, e);
     return [];
   }
 }
@@ -399,6 +455,14 @@ export async function sweepAllChainTokens(
     Promise.all(
       Object.keys(MORALIS_CHAINS).map(async (chainId) => {
         const tokens = await fetchMoralisERC20s(chainId, address);
+        merge(chainId, tokens);
+      }),
+    ),
+    // Layer 4: GoldRush (Covalent) — fallback indexer. Covers held tokens + USD
+    // price when Moralis is over its daily quota. No-op when GOLDRUSH_KEY unset.
+    Promise.all(
+      Object.keys(GOLDRUSH_CHAINS).map(async (chainId) => {
+        const tokens = await fetchGoldRushERC20s(chainId, address);
         merge(chainId, tokens);
       }),
     ),

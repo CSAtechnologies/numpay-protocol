@@ -9,6 +9,10 @@
 
 export const ALCHEMY_KEY = import.meta.env.VITE_ALCHEMY_KEY ?? "";
 export const MORALIS_KEY = import.meta.env.VITE_MORALIS_KEY ?? "";
+// GoldRush (Covalent) — free-tier held-token + price indexer. Acts as a
+// fallback to Moralis so token detection survives one provider's quota.
+// Optional: when empty, the GoldRush layer is simply skipped.
+export const GOLDRUSH_KEY = import.meta.env.VITE_GOLDRUSH_KEY ?? "";
 
 if (import.meta.env.DEV && !ALCHEMY_KEY) {
   console.warn("[NumPay] VITE_ALCHEMY_KEY is not set — Alchemy-backed RPCs will fail. Copy .env.example to .env.");

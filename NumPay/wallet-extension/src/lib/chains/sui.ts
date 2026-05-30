@@ -1,11 +1,14 @@
 /**
  * Sui support — Ed25519 address derivation + balance fetching.
  * Uses SLIP-0010 HD derivation with BIP44 path m/44'/784'/0'/0'/0'.
- * Sui address = 0x + hex(SHA3-256(0x00 || pubkey))
+ * Sui address = 0x + hex(BLAKE2b-256(0x00 || pubkey)), where 0x00 is the
+ * Ed25519 signature-scheme flag. This matches the Mysten Sui SDK/CLI; using
+ * SHA-256/SHA3-256 here produces an address the key does NOT control.
  */
 import { derivePath } from "./slip10";
 import nacl from "tweetnacl";
 import { ethers } from "ethers";
+import { blake2b } from "@noble/hashes/blake2b";
 
 // Sui BIP44 derivation path
 const SUI_DERIVATION_PATH = "m/44'/784'/0'/0'/0'";
@@ -17,18 +20,19 @@ const SUI_RPCS = [
 ];
 
 /**
- * Compute Sui address from Ed25519 public key.
- * address = SHA-256(0x00 || pubkey), hex-encoded with 0x prefix
+ * Compute Sui address from an Ed25519 public key.
+ * address = BLAKE2b-256(0x00 || pubkey), hex-encoded with 0x prefix.
+ * The 0x00 byte is the Ed25519 signature-scheme flag. This is the canonical
+ * Sui derivation (verified against the Mysten Sui SDK).
  */
-async function suiAddressFromPubkey(pubkey: Uint8Array): Promise<string> {
+function suiAddressFromPubkey(pubkey: Uint8Array): string {
   const payload = new Uint8Array(1 + pubkey.length);
   payload[0] = 0x00; // Ed25519 scheme flag
   payload.set(pubkey, 1);
 
-  const hashBuffer = await crypto.subtle.digest("SHA-256", payload);
-  const hashBytes = new Uint8Array(hashBuffer);
+  const hashBytes = blake2b(payload, { dkLen: 32 });
 
-  const hex = Array.from(hashBytes.slice(0, 32))
+  const hex = Array.from(hashBytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
   return "0x" + hex;
@@ -52,7 +56,7 @@ export async function deriveSuiAddress(mnemonic: string): Promise<{
   const keypair = nacl.sign.keyPair.fromSeed(derived.key);
 
   // Derive Sui address from public key
-  const address = await suiAddressFromPubkey(keypair.publicKey);
+  const address = suiAddressFromPubkey(keypair.publicKey);
 
   const pubHex = Array.from(keypair.publicKey)
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -89,4 +93,67 @@ export async function fetchSuiBalance(address: string): Promise<number> {
     } catch {}
   }
   return 0;
+}
+
+/**
+ * Fetch all non-native coin balances held by a Sui address.
+ * `suix_getAllBalances` enumerates every coin type the address holds (full
+ * auto-detect, no curated list needed); `suix_getCoinMetadata` resolves
+ * symbol/decimals/icon per type. Native SUI is skipped (shown via the chain
+ * balance). Returns [] on failure so a flaky fetch never drops holdings.
+ */
+export async function fetchSuiTokens(address: string): Promise<Array<{
+  symbol: string; name: string; address: string; decimals: number; balance: string; logo?: string;
+}>> {
+  const NATIVE = "0x2::sui::SUI";
+  for (const rpc of SUI_RPCS) {
+    try {
+      const resp = await fetch(rpc, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "suix_getAllBalances", params: [address] }),
+      });
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      const balances: any[] = data.result ?? [];
+      const held = balances.filter(
+        (b) => b.coinType && b.coinType !== NATIVE && b.totalBalance && b.totalBalance !== "0",
+      );
+      if (held.length === 0) return [];
+
+      // Resolve metadata per coin type (parallel, best-effort).
+      const out = await Promise.all(held.map(async (b) => {
+        let decimals = 9;
+        let symbol = "";
+        let name = "";
+        let logo: string | undefined;
+        try {
+          const m = await fetch(rpc, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "suix_getCoinMetadata", params: [b.coinType] }),
+          });
+          if (m.ok) {
+            const md = (await m.json()).result;
+            if (md) {
+              decimals = Number(md.decimals ?? 9);
+              symbol = String(md.symbol ?? "");
+              name = String(md.name ?? "");
+              logo = md.iconUrl || undefined;
+            }
+          }
+        } catch {}
+        // Fallback to the coin type's module/struct tail (e.g. 0x..::usdc::USDC).
+        const tail = b.coinType.split("::").pop() || b.coinType.slice(0, 8);
+        if (!symbol) symbol = tail;
+        if (!name) name = tail;
+        let balance = "0";
+        try { balance = ethers.formatUnits(b.totalBalance, decimals); } catch {}
+        return { symbol, name, address: b.coinType as string, decimals, balance, logo };
+      }));
+
+      return out.filter((t) => parseFloat(t.balance) > 0);
+    } catch {}
+  }
+  return [];
 }
