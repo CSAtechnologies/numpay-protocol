@@ -43,9 +43,20 @@ process.on("SIGTERM", () => {
   process.exit(0);
 });
 
+// Log only protocol + host so provider API keys in the RPC path/query are not
+// leaked to terminals, CI logs, or third-party log sinks.
+function redactRpc(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return "[invalid RPC URL]";
+  }
+}
+
 console.log("BANP Resolver Node");
 console.log(`  Contract: ${CONTRACT_ADDRESS}`);
-console.log(`  RPC: ${RPC_URL}`);
+console.log(`  RPC: ${redactRpc(RPC_URL)}`);
 console.log(`  Poll interval: ${POLL_INTERVAL_MS}ms`);
 console.log(`  Database: ${DB_PATH}`);
 

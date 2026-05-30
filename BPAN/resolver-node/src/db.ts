@@ -128,6 +128,14 @@ export class BANPDatabase {
       .run(number, chain);
   }
 
+  // Delete every mapping for a number. Mirrors the contract wiping all mappings
+  // when a BPAN NFT transfers to a new owner (AllMappingsCleared / Transfer).
+  clearMappings(number: string): void {
+    this.db
+      .prepare("DELETE FROM wallet_mappings WHERE number = ?")
+      .run(number);
+  }
+
   // ── Queries ──────────────────────────────────────
 
   resolve(number: string, chain: string): string | null {

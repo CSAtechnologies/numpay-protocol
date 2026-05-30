@@ -5,6 +5,7 @@ const BANPRegistryABI = [
   "event NumberRegistered(uint256 indexed number, address indexed owner)",
   "event WalletMappingSet(uint256 indexed number, string chain, string walletAddress)",
   "event WalletMappingRemoved(uint256 indexed number, string chain)",
+  "event AllMappingsCleared(uint256 indexed number, address indexed previousOwner, address indexed newOwner)",
   "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
 ];
 
@@ -96,96 +97,84 @@ export class BANPIndexer {
   ): Promise<void> {
     const address = await this.contract.getAddress();
 
-    // Fetch all relevant logs in parallel
-    const [registrationLogs, mappingSetLogs, mappingRemovedLogs, transferLogs] =
-      await Promise.all([
-        this.provider.getLogs({
-          address,
-          topics: [ethers.id("NumberRegistered(uint256,address)")],
-          fromBlock,
-          toBlock,
-        }),
-        this.provider.getLogs({
-          address,
-          topics: [ethers.id("WalletMappingSet(uint256,string,string)")],
-          fromBlock,
-          toBlock,
-        }),
-        this.provider.getLogs({
-          address,
-          topics: [ethers.id("WalletMappingRemoved(uint256,string)")],
-          fromBlock,
-          toBlock,
-        }),
-        this.provider.getLogs({
-          address,
-          topics: [ethers.id("Transfer(address,address,uint256)")],
-          fromBlock,
-          toBlock,
-        }),
-      ]);
+    // Fetch every relevant event in one query (OR over the topic-0 set), then
+    // apply them in exact chain order. Processing event classes separately would
+    // ignore (blockNumber, transactionIndex, logIndex) and could, e.g., apply a
+    // set before a remove that actually happened first on-chain.
+    const topic0 = [
+      ethers.id("NumberRegistered(uint256,address)"),
+      ethers.id("WalletMappingSet(uint256,string,string)"),
+      ethers.id("WalletMappingRemoved(uint256,string)"),
+      ethers.id("AllMappingsCleared(uint256,address,address)"),
+      ethers.id("Transfer(address,address,uint256)"),
+    ];
+    const logs = await this.provider.getLogs({
+      address,
+      topics: [topic0], // first-position OR-set
+      fromBlock,
+      toBlock,
+    });
 
-    // Process registrations
-    for (const log of registrationLogs) {
-      const parsed = this.contract.interface.parseLog({
-        topics: log.topics as string[],
-        data: log.data,
-      });
-      if (!parsed) continue;
+    // Canonical order: block, then transaction index, then log index.
+    logs.sort(
+      (a, b) =>
+        a.blockNumber - b.blockNumber ||
+        a.transactionIndex - b.transactionIndex ||
+        a.index - b.index,
+    );
 
-      const number = parsed.args[0].toString();
-      const owner = parsed.args[1];
-      this.db.insertRegistration(number, owner, log.blockNumber, log.transactionHash);
-      console.log(`[Indexer] Registered: ${number} -> ${owner}`);
-    }
-
-    // Process mapping sets
-    for (const log of mappingSetLogs) {
-      const parsed = this.contract.interface.parseLog({
-        topics: log.topics as string[],
-        data: log.data,
-      });
-      if (!parsed) continue;
-
-      const number = parsed.args[0].toString();
-      const chain = parsed.args[1];
-      const wallet = parsed.args[2];
-      this.db.upsertMapping(number, chain, wallet, log.blockNumber, log.transactionHash);
-      console.log(`[Indexer] Mapping set: ${number} ${chain} -> ${wallet}`);
-    }
-
-    // Process mapping removals
-    for (const log of mappingRemovedLogs) {
-      const parsed = this.contract.interface.parseLog({
-        topics: log.topics as string[],
-        data: log.data,
-      });
-      if (!parsed) continue;
-
-      const number = parsed.args[0].toString();
-      const chain = parsed.args[1];
-      this.db.removeMapping(number, chain);
-      console.log(`[Indexer] Mapping removed: ${number} ${chain}`);
-    }
-
-    // Process transfers (ownership changes, skip mint events where from = 0x0)
     const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-    for (const log of transferLogs) {
+
+    for (const log of logs) {
       const parsed = this.contract.interface.parseLog({
         topics: log.topics as string[],
         data: log.data,
       });
       if (!parsed) continue;
 
-      const from = parsed.args[0];
-      const to = parsed.args[1];
-      const tokenId = parsed.args[2].toString();
-
-      // Skip mint events (already handled by NumberRegistered)
-      if (from === ZERO_ADDRESS) continue;
-
-      this.db.updateOwner(tokenId, to, log.blockNumber, log.transactionHash);
-      console.log(`[Indexer] Transfer: ${tokenId} ${from} -> ${to}`);
+      switch (parsed.name) {
+        case "NumberRegistered": {
+          const number = parsed.args[0].toString();
+          const owner = parsed.args[1];
+          this.db.insertRegistration(number, owner, log.blockNumber, log.transactionHash);
+          console.log(`[Indexer] Registered: ${number} -> ${owner}`);
+          break;
+        }
+        case "WalletMappingSet": {
+          const number = parsed.args[0].toString();
+          const chain = parsed.args[1];
+          const wallet = parsed.args[2];
+          this.db.upsertMapping(number, chain, wallet, log.blockNumber, log.transactionHash);
+          console.log(`[Indexer] Mapping set: ${number} ${chain} -> ${wallet}`);
+          break;
+        }
+        case "WalletMappingRemoved": {
+          const number = parsed.args[0].toString();
+          const chain = parsed.args[1];
+          this.db.removeMapping(number, chain);
+          console.log(`[Indexer] Mapping removed: ${number} ${chain}`);
+          break;
+        }
+        case "AllMappingsCleared": {
+          // Contract wiped all mappings on an ownership change — mirror it.
+          const number = parsed.args[0].toString();
+          this.db.clearMappings(number);
+          console.log(`[Indexer] Mappings cleared: ${number}`);
+          break;
+        }
+        case "Transfer": {
+          const from = parsed.args[0];
+          const to = parsed.args[1];
+          const tokenId = parsed.args[2].toString();
+          // Skip mint events (already handled by NumberRegistered).
+          if (from === ZERO_ADDRESS) break;
+          this.db.updateOwner(tokenId, to, log.blockNumber, log.transactionHash);
+          // Defensive mirror of the on-chain clear, in case the event is missed.
+          this.db.clearMappings(tokenId);
+          console.log(`[Indexer] Transfer: ${tokenId} ${from} -> ${to}`);
+          break;
+        }
+      }
     }
   }
 }

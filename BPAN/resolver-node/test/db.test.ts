@@ -123,4 +123,31 @@ describe("BANPDatabase", () => {
       expect(db.getMappings("48290173462")).toHaveLength(0);
     });
   });
+
+  describe("Mapping clear on transfer (audit regression)", () => {
+    it("clearMappings removes all mappings for a number", () => {
+      db.insertRegistration("48290173462", "0xOldOwner", 100, "0xreg");
+      db.upsertMapping("48290173462", "ethereum", "0xOLD", 101, "0xa");
+      db.upsertMapping("48290173462", "solana", "SOL_OLD", 102, "0xb");
+
+      db.clearMappings("48290173462");
+
+      expect(db.getMappings("48290173462")).toHaveLength(0);
+      expect(db.resolve("48290173462", "ethereum")).toBeNull();
+      expect(db.resolve("48290173462", "solana")).toBeNull();
+    });
+
+    it("a transfer (updateOwner + clearMappings) does not resolve to the old owner's wallet", () => {
+      // Mirrors the indexer's Transfer handling. Pre-fix, the mapping survived
+      // the transfer and resolved to the previous owner's address.
+      db.insertRegistration("48290173462", "0xOldOwner", 100, "0xreg");
+      db.upsertMapping("48290173462", "ethereum", "0xOLD_WALLET", 101, "0xmap");
+
+      db.updateOwner("48290173462", "0xNewOwner", 200, "0xtransfer");
+      db.clearMappings("48290173462");
+
+      expect(db.getAccount("48290173462")?.owner).toBe("0xNewOwner");
+      expect(db.resolve("48290173462", "ethereum")).toBeNull();
+    });
+  });
 });
