@@ -2,7 +2,7 @@ import { useState } from "react";
 import {
   lockWallet, deleteWallet, deleteOneWallet,
   addEncryptedWallet, createWallet, importFromMnemonic, importFromPrivateKey,
-  getActiveId, type VaultMeta,
+  getActiveId, decryptVault, type VaultMeta,
 } from "@/lib/wallet";
 import { CURRENCIES } from "@/lib/currency";
 import { useWallet } from "../hooks/useWallet";
@@ -24,6 +24,48 @@ export default function Settings({ onLock, onReset }: Props) {
   const { theme, toggleTheme } = useTheme();
   const [showPrivateKey, setShowPrivateKey] = useState(false);
   const [showMnemonic, setShowMnemonic] = useState(false);
+  // Secret reveal requires password re-entry; auto-hides after a short timer.
+  const [revealTarget, setRevealTarget] = useState<null | "pk" | "mn">(null);
+  const [revealPw, setRevealPw] = useState("");
+  const [revealErr, setRevealErr] = useState("");
+  const [revealLoading, setRevealLoading] = useState(false);
+
+  const AUTO_HIDE_MS = 30_000;
+
+  async function confirmReveal() {
+    if (!revealTarget) return;
+    setRevealLoading(true);
+    setRevealErr("");
+    try {
+      // Throws on wrong password — verifies against the active vault.
+      await decryptVault(revealPw);
+      if (revealTarget === "pk") {
+        setShowPrivateKey(true);
+        setTimeout(() => setShowPrivateKey(false), AUTO_HIDE_MS);
+      } else {
+        setShowMnemonic(true);
+        setTimeout(() => setShowMnemonic(false), AUTO_HIDE_MS);
+      }
+      setRevealTarget(null);
+      setRevealPw("");
+    } catch {
+      setRevealErr("Incorrect password");
+    } finally {
+      setRevealLoading(false);
+    }
+  }
+
+  // Open the password prompt for a reveal, or hide an already-revealed secret.
+  function toggleReveal(target: "pk" | "mn") {
+    const shown = target === "pk" ? showPrivateKey : showMnemonic;
+    if (shown) {
+      target === "pk" ? setShowPrivateKey(false) : setShowMnemonic(false);
+      return;
+    }
+    setRevealErr("");
+    setRevealPw("");
+    setRevealTarget(target);
+  }
   const [confirmReset, setConfirmReset] = useState(false);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [copied, setCopied] = useState("");
@@ -386,7 +428,7 @@ export default function Settings({ onLock, onReset }: Props) {
         <p className="section-label mb-2">Security</p>
 
         <button
-          onClick={() => setShowPrivateKey(!showPrivateKey)}
+          onClick={() => toggleReveal("pk")}
           className="w-full premium-card px-3.5 py-3 mb-1.5 text-left hover:bg-surface-2 transition-colors"
         >
           <div className="flex items-center justify-between">
@@ -397,6 +439,12 @@ export default function Settings({ onLock, onReset }: Props) {
             <span className="text-xs text-muted">{showPrivateKey ? "Hide" : "Reveal"}</span>
           </div>
         </button>
+        {revealTarget === "pk" && (
+          <RevealPrompt
+            value={revealPw} onChange={setRevealPw} onConfirm={confirmReveal}
+            onCancel={() => setRevealTarget(null)} error={revealErr} loading={revealLoading}
+          />
+        )}
         {showPrivateKey && (
           <div className="mb-1.5 px-3.5 py-3 rounded-xl bg-accent-red/5 border border-accent-red/10 animate-slide-up">
             <p className="text-[11px] text-accent-red mb-1.5 font-medium">Never share your private key!</p>
@@ -414,7 +462,7 @@ export default function Settings({ onLock, onReset }: Props) {
         {wallet?.mnemonic && (
           <>
             <button
-              onClick={() => setShowMnemonic(!showMnemonic)}
+              onClick={() => toggleReveal("mn")}
               className="w-full premium-card px-3.5 py-3 mb-1.5 text-left hover:bg-surface-2 transition-colors"
             >
               <div className="flex items-center justify-between">
@@ -425,6 +473,12 @@ export default function Settings({ onLock, onReset }: Props) {
                 <span className="text-xs text-muted">{showMnemonic ? "Hide" : "Reveal"}</span>
               </div>
             </button>
+            {revealTarget === "mn" && (
+              <RevealPrompt
+                value={revealPw} onChange={setRevealPw} onConfirm={confirmReveal}
+                onCancel={() => setRevealTarget(null)} error={revealErr} loading={revealLoading}
+              />
+            )}
             {showMnemonic && (
               <div className="mb-1.5 px-3.5 py-3 rounded-xl bg-accent-red/5 border border-accent-red/10 animate-slide-up">
                 <p className="text-[11px] text-accent-red mb-1.5 font-medium">Never share your recovery phrase!</p>
@@ -476,5 +530,49 @@ export default function Settings({ onLock, onReset }: Props) {
       </div>
       </div>
     </Layout>
+  );
+}
+
+// Password re-entry gate shown before a secret (private key / recovery phrase)
+// is revealed. Verifies against the active vault before unlocking the display.
+function RevealPrompt({
+  value, onChange, onConfirm, onCancel, error, loading,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+  error: string;
+  loading: boolean;
+}) {
+  return (
+    <div className="mb-1.5 px-3.5 py-3 rounded-xl bg-surface-2 border border-border animate-slide-up">
+      <p className="text-[11px] text-muted mb-1.5">Enter your password to reveal this secret.</p>
+      <input
+        type="password"
+        autoFocus
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && value && !loading) onConfirm(); }}
+        placeholder="Password"
+        className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-[13px] text-text-primary outline-none focus:border-brand-400"
+      />
+      {error && <p className="text-[11px] text-accent-red mt-1.5">{error}</p>}
+      <div className="flex gap-2 mt-2">
+        <button
+          onClick={onConfirm}
+          disabled={!value || loading}
+          className="flex-1 py-2 rounded-lg bg-brand-500 text-white text-[13px] font-medium disabled:opacity-50"
+        >
+          {loading ? "Verifying…" : "Reveal"}
+        </button>
+        <button
+          onClick={onCancel}
+          className="px-4 py-2 rounded-lg bg-surface border border-border text-[13px] text-muted"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }

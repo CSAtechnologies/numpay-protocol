@@ -441,7 +441,7 @@ function RegisterSection({
         </div>
 
         <p className="text-xs text-muted mb-4 leading-relaxed">
-          Each wallet can hold multiple BPANs, but registering additional ones costs gas. To receive on more chains, add wallet mappings to your existing BPAN instead.
+          Each wallet holds one BPAN. To receive on more chains, add wallet mappings to your existing BPAN: one number works across every supported chain.
         </p>
 
         <button onClick={onGoMapping} className="btn-primary-premium text-[13px]">
@@ -564,7 +564,7 @@ function autoNonEvmAddress(chainId: string, nonEvmWallet: NonEvmWallet | null): 
   if (!nonEvmWallet) return "";
   switch (chainId) {
     case "bitcoin":  return nonEvmWallet.bitcoin.address;
-    case "litecoin": return nonEvmWallet.bitcoin.address; // derived from same BIP44 seed, same format
+    case "litecoin": return nonEvmWallet.litecoin.address; // ltc1 bech32 — distinct from the bitcoin address
     case "solana":   return nonEvmWallet.solana.address;
     case "sui":      return nonEvmWallet.sui.address;
     default:         return ""; // tron, xrp — user must enter manually

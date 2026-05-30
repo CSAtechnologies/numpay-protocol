@@ -203,7 +203,13 @@ export default function Send() {
     setSending(true); setError(""); setTxHash("");
     try {
       if (selectedChainId === "solana") {
-        const lamports = BigInt(Math.round(parseFloat(amount) * 1e9));
+        // Parse the decimal amount into integer lamports without floating point.
+        const sol = amount.trim();
+        if (!/^\d+(\.\d+)?$/.test(sol)) throw new Error("Invalid amount");
+        const [whole, frac = ""] = sol.split(".");
+        if (frac.length > 9) throw new Error("SOL supports at most 9 decimal places");
+        const lamports = BigInt(whole + frac.padEnd(9, "0"));
+        if (lamports <= 0n) throw new Error("Enter an amount greater than zero");
         const sig = await sendSolanaTransfer(nonEvmWallet.solana.secretKey, destinationAddress, lamports);
         setTxHash(sig);
       }
