@@ -12,8 +12,7 @@ import { ethers } from "ethers";
 import { getItem, setItem } from "./storage";
 import { NETWORKS } from "./networks";
 import { DEFAULT_TOKENS, getTokenBalance } from "./tokens";
-
-const ALCHEMY_KEY = "REDACTED_ROTATE_ME";
+import { ALCHEMY_KEY, MORALIS_KEY } from "./env";
 
 // Alchemy network sub-domains. Only networks enabled in our Alchemy app return
 // data; others return 403 and rely on the Layer 2 Multicall3 sweep instead.
@@ -27,8 +26,7 @@ export const ALCHEMY_CHAINS: Record<string, string> = {
 
 // Moralis covers held-token auto-detection + USD price on chains Alchemy can't
 // (BSC etc.) and enriches the rest with prices. networkId → hex chainId.
-// Key is injected from .env (VITE_MORALIS_KEY) at build time — never committed.
-const MORALIS_KEY = import.meta.env.VITE_MORALIS_KEY ?? "";
+// MORALIS_KEY comes from .env via lib/env — never committed.
 const MORALIS_CHAINS: Record<string, string> = {
   ethereum:     "0x1",
   polygon:      "0x89",

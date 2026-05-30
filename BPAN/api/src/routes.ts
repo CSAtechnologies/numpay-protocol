@@ -1,4 +1,5 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
+import rateLimit from "express-rate-limit";
 import { getContract } from "./contract";
 import { ethers } from "ethers";
 
@@ -7,6 +8,37 @@ const router = Router();
 const MIN_NUMBER = 10_000_000_000n;
 const MAX_NUMBER = 99_999_999_999n;
 const CHAIN_RE = /^[a-z0-9-]{1,32}$/;
+
+// ── Anti-enumeration controls ──────────────────────────────────────────────
+// BANP registrations are public on-chain data, so enumeration can never be
+// fully prevented (anyone can read the contract directly). These controls stop
+// the API from being a *fast, free* enumeration oracle: a tight per-IP limit
+// on lookups plus a response-time floor so hits and misses are indistinguishable
+// by timing. Lookup failures also use a uniform shape and status code so the
+// response body/status never reveals which numbers exist.
+
+const lookupLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 30, // per IP, stricter than the global limiter
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests, please try again later." },
+});
+
+const MIN_RESPONSE_MS = 200;
+function smoothTiming(_req: Request, res: Response, next: NextFunction) {
+  const start = Date.now();
+  const orig = res.json.bind(res);
+  res.json = (body: unknown): Response => {
+    const wait = Math.max(0, MIN_RESPONSE_MS - (Date.now() - start));
+    if (wait === 0) return orig(body);
+    setTimeout(() => orig(body), wait);
+    return res;
+  };
+  next();
+}
+
+const lookupGuards = [lookupLimiter, smoothTiming];
 
 function parseNumber(raw: string): bigint | null {
   try {
@@ -25,7 +57,7 @@ function parseChain(raw: string): string | null {
 
 // GET /api/v1/resolve/:number/:chain
 // Resolve a BANP number to a wallet address on a specific chain
-router.get("/resolve/:number/:chain", async (req: Request, res: Response) => {
+router.get("/resolve/:number/:chain", ...lookupGuards, async (req: Request, res: Response) => {
   const number = parseNumber(req.params.number);
   if (!number) {
     res.status(400).json({ error: "Invalid BANP number. Must be 11 digits." });
@@ -42,19 +74,13 @@ router.get("/resolve/:number/:chain", async (req: Request, res: Response) => {
     const contract = getContract();
     const wallet: string = await contract.getWalletMapping(number, chain);
 
-    if (!wallet) {
-      res.status(404).json({
-        error: "No wallet mapping found",
-        number: number.toString(),
-        chain,
-      });
-      return;
-    }
-
+    // Uniform 200 shape for found and not-found so the status code / error
+    // string never reveals whether the number or mapping exists.
     res.json({
+      found: Boolean(wallet),
       number: number.toString(),
       chain,
-      wallet,
+      wallet: wallet || null,
     });
   } catch (err: any) {
     console.error("[resolve]", err);
@@ -64,7 +90,7 @@ router.get("/resolve/:number/:chain", async (req: Request, res: Response) => {
 
 // GET /api/v1/account/:number
 // Get full account info including all chain mappings
-router.get("/account/:number", async (req: Request, res: Response) => {
+router.get("/account/:number", ...lookupGuards, async (req: Request, res: Response) => {
   const number = parseNumber(req.params.number);
   if (!number) {
     res.status(400).json({ error: "Invalid BANP number. Must be 11 digits." });
@@ -76,9 +102,12 @@ router.get("/account/:number", async (req: Request, res: Response) => {
     const registered: boolean = await contract.isRegistered(number);
 
     if (!registered) {
-      res.status(404).json({
-        error: "Number not registered",
+      // Uniform 200 shape (see resolve) instead of a distinguishing 404.
+      res.json({
+        found: false,
         number: number.toString(),
+        owner: null,
+        mappings: [],
       });
       return;
     }
@@ -95,6 +124,7 @@ router.get("/account/:number", async (req: Request, res: Response) => {
     }));
 
     res.json({
+      found: true,
       number: number.toString(),
       owner,
       mappings,
@@ -107,7 +137,7 @@ router.get("/account/:number", async (req: Request, res: Response) => {
 
 // GET /api/v1/account/:number/chains
 // Get all chains mapped for a number
-router.get("/account/:number/chains", async (req: Request, res: Response) => {
+router.get("/account/:number/chains", ...lookupGuards, async (req: Request, res: Response) => {
   const number = parseNumber(req.params.number);
   if (!number) {
     res.status(400).json({ error: "Invalid BANP number. Must be 11 digits." });
@@ -130,7 +160,7 @@ router.get("/account/:number/chains", async (req: Request, res: Response) => {
 
 // GET /api/v1/account/:number/status
 // Check if a number is registered
-router.get("/account/:number/status", async (req: Request, res: Response) => {
+router.get("/account/:number/status", ...lookupGuards, async (req: Request, res: Response) => {
   const number = parseNumber(req.params.number);
   if (!number) {
     res.status(400).json({ error: "Invalid BANP number. Must be 11 digits." });

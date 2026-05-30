@@ -1,6 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { hasWallet, isLocked } from "@/lib/wallet";
+import { hasWallet, isLocked, touchActivity, lockWallet } from "@/lib/wallet";
 import { CurrencyProvider } from "./contexts/CurrencyContext";
 
 import Welcome from "./pages/Welcome";
@@ -36,6 +36,41 @@ export default function App() {
     const locked = await isLocked();
     setState(locked ? "locked" : "unlocked");
   }
+
+  // Auto-lock plumbing: open a port so the background worker arms its timer,
+  // record user activity (throttled), and re-lock on inactivity even while the
+  // popup stays open.
+  useEffect(() => {
+    if (state !== "unlocked") return;
+
+    let port: chrome.runtime.Port | undefined;
+    try { port = chrome.runtime?.connect?.({ name: "popup" }); } catch {}
+
+    let lastTouch = 0;
+    const onActivity = () => {
+      const now = Date.now();
+      if (now - lastTouch < 30_000) return; // throttle storage writes
+      lastTouch = now;
+      void touchActivity();
+      try { chrome.runtime?.sendMessage?.({ type: "ACTIVITY" }); } catch {}
+    };
+    window.addEventListener("pointerdown", onActivity);
+    window.addEventListener("keydown", onActivity);
+
+    const interval = setInterval(async () => {
+      if (await isLocked()) {
+        await lockWallet();
+        setState("locked");
+      }
+    }, 60_000);
+
+    return () => {
+      window.removeEventListener("pointerdown", onActivity);
+      window.removeEventListener("keydown", onActivity);
+      clearInterval(interval);
+      try { port?.disconnect(); } catch {}
+    };
+  }, [state]);
 
   if (state === "loading") {
     return (

@@ -239,7 +239,9 @@ async function lookupNumber() {
   const resultEl = document.getElementById("lookupResult");
   if (!num || num.length !== 11) { log("Enter a valid 11-digit number", "error"); return; }
   try {
-    const readContract = new ethers.Contract(CONTRACT, ABI, provider || new ethers.JsonRpcProvider("https://eth-sepolia.g.alchemy.com/v2/REDACTED_ROTATE_ME"));
+    // Keyless public Sepolia RPC fallback when no wallet provider is injected.
+    // Do not embed provider API keys in this tracked test page.
+    const readContract = new ethers.Contract(CONTRACT, ABI, provider || new ethers.JsonRpcProvider("https://ethereum-sepolia-rpc.publicnode.com"));
     const registered = await readContract.isRegistered(BigInt(num));
     if (!registered) {
       resultEl.style.display = "block";

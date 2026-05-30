@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { ethers } from "ethers";
 import { useLocation } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
 import { isBPANInput, isValidBPAN, resolveBPAN, formatBPAN } from "@/lib/bpan";
-import { BPAN_CHAINS, DEFAULT_NETWORK, type BPANChainId } from "@/lib/networks";
+import { BPAN_CHAINS, DEFAULT_NETWORK, NETWORKS, type BPANChainId, type Network } from "@/lib/networks";
 import { getSigner } from "@/lib/wallet";
 import { sendToken, type Token } from "@/lib/tokens";
 import { sendSolanaTransfer } from "@/lib/chains";
@@ -43,7 +43,7 @@ export default function Send() {
   const {
     wallet, network, balance, tokens,
     activeChainId, nonEvmWallet, nonEvmChains, nonEvmLoading,
-    switchChain,
+    switchChain, customChains,
   } = useWallet();
 
   const location = useLocation();
@@ -76,19 +76,41 @@ export default function Send() {
   const chainInfo  = BPAN_CHAINS.find((c) => c.id === selectedChainId)!;
   const isEvmChain = chainInfo?.isEVM ?? true;
 
+  // Resolve the EVM network from the chain the user actually selected, NOT the
+  // global wallet network. Without this, arriving with a prefilled chain (or a
+  // lagging global switch) could sign on the wrong RPC/chain id.
+  const sendNetwork = useMemo<Network>(() => {
+    if (NETWORKS[selectedChainId]) return NETWORKS[selectedChainId];
+    const custom = customChains.find((c) => c.id === selectedChainId);
+    if (custom) {
+      return {
+        id: custom.id, name: custom.name, chainId: custom.chainId,
+        rpcUrl: custom.rpcUrl, symbol: custom.symbol, decimals: custom.decimals,
+        explorer: custom.explorer, logo: custom.logo || "",
+      };
+    }
+    return network;
+  }, [selectedChainId, customChains, network]);
+
+  // Keep the global wallet chain aligned with the selection so balances and the
+  // signer reference the same chain (covers the navigation-prefill case).
+  useEffect(() => {
+    if (isEvmChain && activeChainId !== selectedChainId) switchChain(selectedChainId);
+  }, [isEvmChain, selectedChainId, activeChainId, switchChain]);
+
   // Non-EVM metadata
   const nonEvmMeta      = NON_EVM_META[selectedChainId];
   const activeNonEvmChain = !isEvmChain ? nonEvmChains.find((c) => c.id === selectedChainId) : null;
 
   // Unified send values — work for both EVM and non-EVM
   const sendSymbol = isEvmChain
-    ? (selectedToken ? selectedToken.symbol : network.symbol)
+    ? (selectedToken ? selectedToken.symbol : sendNetwork.symbol)
     : (nonEvmMeta?.symbol ?? selectedChainId.toUpperCase());
   const sendBalance = isEvmChain
     ? (selectedToken ? parseFloat(selectedToken.balance || "0") : parseFloat(balance))
     : (activeNonEvmChain?.balance ?? 0);
   const sendDecimals = isEvmChain
-    ? (selectedToken ? selectedToken.decimals : network.decimals)
+    ? (selectedToken ? selectedToken.decimals : sendNetwork.decimals)
     : (nonEvmMeta?.decimals ?? 9);
 
   const canSendNative = !isEvmChain && !!CAN_SEND_NATIVE[selectedChainId];
@@ -145,14 +167,24 @@ export default function Send() {
     if (parseFloat(amount) > sendBalance) { setError("Insufficient balance"); return; }
     setSending(true); setError(""); setTxHash("");
     try {
-      const signer = getSigner(wallet.privateKey, network.rpcUrl);
+      const signer = getSigner(wallet.privateKey, sendNetwork.rpcUrl);
+
+      // Guard: confirm the RPC actually serves the selected chain before
+      // signing, so a stale/wrong RPC can never produce a wrong-chain send.
+      const providerNet = await signer.provider!.getNetwork();
+      if (Number(providerNet.chainId) !== sendNetwork.chainId) {
+        throw new Error(
+          `Network mismatch: RPC reports chain ${providerNet.chainId}, expected ${sendNetwork.chainId} (${sendNetwork.name}). Send cancelled.`
+        );
+      }
+
       if (selectedToken) {
         const tx = await sendToken(selectedToken.address, destinationAddress, amount, selectedToken.decimals, signer);
         setTxHash(tx.hash);
       } else {
         const tx = await signer.sendTransaction({
           to: destinationAddress,
-          value: ethers.parseUnits(amount, network.decimals),
+          value: ethers.parseUnits(amount, sendNetwork.decimals),
         });
         setTxHash(tx.hash);
       }
@@ -183,7 +215,7 @@ export default function Send() {
   }
 
   const explorerUrl = isEvmChain
-    ? `${network.explorer}/tx/${txHash}`
+    ? `${sendNetwork.explorer}/tx/${txHash}`
     : `${nonEvmMeta?.explorer ?? ""}/${txHash}`;
 
   return (
@@ -281,9 +313,9 @@ export default function Send() {
                     onClick={() => { setSelectedToken(null); setShowTokenPicker(false); setAmount(""); }}
                     className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] hover:bg-surface-2 transition-colors ${!selectedToken ? "text-brand-400" : "text-text-primary"}`}
                   >
-                    <TokenIcon symbol={network.symbol} size={22} />
+                    <TokenIcon symbol={sendNetwork.symbol} size={22} />
                     <div className="flex-1 text-left">
-                      <span className="font-medium">{network.symbol}</span>
+                      <span className="font-medium">{sendNetwork.symbol}</span>
                       <span className="text-[11px] text-muted ml-2">{parseFloat(balance).toFixed(4)}</span>
                     </div>
                     {!selectedToken && <CheckIcon size={14} className="text-brand-400" />}
@@ -329,7 +361,7 @@ export default function Send() {
                     {sendBalance.toFixed(sendBalance < 1 ? 6 : 4)} {sendSymbol}
                   </span>
                 </p>
-                <p className="text-[11px] text-muted">{network.name}</p>
+                <p className="text-[11px] text-muted">{isEvmChain ? sendNetwork.name : chainInfo?.name}</p>
               </div>
 
               <div className="flex gap-2 mb-5">

@@ -403,6 +403,16 @@ contract BANPRegistry is ERC721, Ownable, ReentrancyGuard {
         internal override returns (address)
     {
         address from = _ownerOf(tokenId);
+
+        // Enforce the one-number-per-address invariant on transfers too, not
+        // just at registration. Without this, an address that already owns a
+        // BPAN could receive a second one via ERC-721 transfer. Mints
+        // (from == address(0)) are already gated in registerNumber; burns
+        // (to == address(0)) are exempt.
+        if (from != address(0) && to != address(0) && from != to && balanceOf(to) > 0) {
+            revert AlreadyOwnsNumber(to);
+        }
+
         address result = super._update(to, tokenId, auth);
 
         if (from != address(0) && to != address(0) && from != to) {

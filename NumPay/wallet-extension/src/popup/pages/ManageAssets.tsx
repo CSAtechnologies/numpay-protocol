@@ -5,8 +5,8 @@ import { NETWORKS } from "@/lib/networks";
 import { BPAN_CHAINS } from "@/lib/networks";
 import { getCustomTokens, addCustomToken, removeCustomToken, type CustomToken } from "@/lib/customTokens";
 import { getCustomChains, saveCustomChain, removeCustomChain, type CustomChain } from "@/lib/customChains";
+import { ALCHEMY_KEY } from "@/lib/env";
 
-const ALCHEMY_KEY = "REDACTED_ROTATE_ME";
 const SOL_RPC = `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
 
 const ERC20_ABI = [
@@ -72,6 +72,42 @@ async function detectChainId(rpcUrl: string): Promise<number> {
   const data = await res.json();
   if (!data.result) throw new Error("No response");
   return parseInt(data.result, 16);
+}
+
+// ── Custom RPC safety ─────────────────────────────────────────────────────────
+
+function isLocalHost(host: string): boolean {
+  return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+}
+
+// An untrusted RPC can lie about balances, gas, and transaction state, so we
+// at least require a secure transport. Plain http is allowed only for local
+// dev nodes and only in a development build.
+function validateRpcUrl(raw: string): URL {
+  let u: URL;
+  try {
+    u = new URL(raw.trim());
+  } catch {
+    throw new Error("Enter a valid URL, e.g. https://rpc.example.com");
+  }
+  if (u.protocol === "https:") return u;
+  if (u.protocol === "http:" && isLocalHost(u.hostname) && import.meta.env.DEV) return u;
+  if (u.protocol === "http:") {
+    throw new Error("RPC URL must use https:// (plain http is insecure).");
+  }
+  throw new Error("RPC URL must use https://");
+}
+
+// Request access to the custom RPC origin at runtime (granted from the
+// optional_host_permissions declared in the manifest) so fetches succeed under
+// the narrowed default host permissions.
+async function requestRpcHostPermission(u: URL): Promise<void> {
+  try {
+    if (typeof chrome === "undefined" || !chrome.permissions) return;
+    const origins = [`${u.origin}/*`];
+    if (await chrome.permissions.contains({ origins })) return;
+    await chrome.permissions.request({ origins });
+  } catch { /* permission flow unavailable (e.g. dev web build) */ }
 }
 
 // ── Subcomponents ─────────────────────────────────────────────────────────────
@@ -167,14 +203,16 @@ export default function ManageAssets() {
   const [netAddErr, setNetAddErr] = useState("");
 
   async function handleDetectChain() {
-    const url = netRpc.trim();
-    if (!url) { setNetDetectErr("Enter an RPC URL."); return; }
     setNetDetecting(true); setNetDetectErr("");
     try {
-      const id = await detectChainId(url);
+      const u = validateRpcUrl(netRpc);
+      await requestRpcHostPermission(u);
+      const id = await detectChainId(u.toString());
       setNetChainId(id);
-    } catch {
-      setNetDetectErr("Could not reach this RPC. Check the URL.");
+    } catch (e: any) {
+      setNetDetectErr(e?.message?.startsWith("RPC URL") || e?.message?.startsWith("Enter a valid")
+        ? e.message
+        : "Could not reach this RPC. Check the URL.");
     } finally { setNetDetecting(false); }
   }
 
@@ -185,10 +223,31 @@ export default function ManageAssets() {
     }
     setNetAdding(true); setNetAddErr("");
     try {
+      const u = validateRpcUrl(netRpc);
+
+      // Reject chain ids that collide with a built-in or an existing custom
+      // network — duplicates make balances/routing ambiguous.
+      const builtinChainIds = Object.values(NETWORKS).map((n) => n.chainId);
+      if (builtinChainIds.includes(netChainId)) {
+        throw new Error(`Chain ID ${netChainId} is already a built-in network.`);
+      }
+      if (customNetworks.some((c) => c.chainId === netChainId)) {
+        throw new Error(`Chain ID ${netChainId} is already added as a custom network.`);
+      }
+      const nameLc = netName.trim().toLowerCase();
+      const nameTaken =
+        Object.values(NETWORKS).some((n) => n.name.toLowerCase() === nameLc) ||
+        customNetworks.some((c) => c.name.toLowerCase() === nameLc);
+      if (nameTaken) {
+        throw new Error(`A network named "${netName.trim()}" already exists.`);
+      }
+
+      await requestRpcHostPermission(u);
+
       const chain: CustomChain = {
         id: `custom_${netChainId}_${Date.now()}`,
         name: netName.trim(), chainId: netChainId,
-        rpcUrl: netRpc.trim(), symbol: netSymbol.trim(),
+        rpcUrl: u.toString(), symbol: netSymbol.trim(),
         decimals: netDecimals, explorer: netExplorer.trim(),
       };
       await saveCustomChain(chain);
@@ -361,6 +420,9 @@ export default function ManageAssets() {
           <div className="px-4 pt-4 space-y-4 pb-6">
             <p className="text-[12px] text-muted leading-relaxed">
               Add any EVM-compatible network. Paste the RPC URL, then tap Detect to fill the Chain ID automatically.
+            </p>
+            <p className="text-[11px] leading-relaxed" style={{ color: "#f5b301" }}>
+              Only add RPC endpoints you trust. A malicious RPC can report fake balances, gas, and transaction results. Use https:// URLs.
             </p>
 
             <div className="premium-card p-3.5 space-y-3">

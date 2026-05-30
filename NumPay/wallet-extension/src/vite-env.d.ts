@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
   readonly VITE_MORALIS_KEY: string;
+  readonly VITE_ALCHEMY_KEY: string;
 }
 
 interface ImportMeta {

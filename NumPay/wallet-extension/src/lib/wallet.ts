@@ -1,10 +1,22 @@
 import { ethers } from "ethers";
-import { getItem, setItem, removeItem } from "./storage";
+import { getItem, setItem, removeItem, getSession, setSession, removeSession } from "./storage";
 
 const VAULTS_KEY  = "numpay_vaults";
 const OLD_VAULT_KEY = "numpay_vault"; // legacy single-wallet key, migrated on first load
 const ACTIVE_ID_KEY = "numpay_active_id";
-const LOCK_KEY    = "numpay_locked";
+const LOCK_KEY    = "numpay_locked"; // legacy on-disk flag; cleared on lock, no longer trusted
+
+// Decrypted session + activity timestamp live in in-memory session storage only.
+export const SESSION_KEY  = "numpay_session";
+const ACTIVITY_KEY        = "numpay_lastActivity";
+export const AUTO_LOCK_MS = 15 * 60 * 1000; // inactivity window before re-lock
+
+// KDF strength. 600k is the OWASP 2023 minimum for PBKDF2-HMAC-SHA256.
+// Vaults written before this upgrade have no `iter` field and were derived at
+// the legacy count; they still decrypt, then get re-encrypted at the new count
+// transparently on the next successful unlock (see decryptAllVaults).
+const PBKDF2_ITERATIONS = 600_000;
+const LEGACY_PBKDF2_ITERATIONS = 100_000;
 
 export interface WalletData {
   mnemonic: string;
@@ -23,6 +35,7 @@ interface VaultEntry extends VaultMeta {
   salt: number[];
   iv: number[];
   data: number[];
+  iter?: number; // PBKDF2 iteration count; absent on legacy vaults (= LEGACY_PBKDF2_ITERATIONS)
 }
 
 interface VaultList {
@@ -66,26 +79,31 @@ async function saveVaultList(list: VaultList): Promise<void> {
 
 async function encryptData(
   plain: string, password: string
-): Promise<Pick<VaultEntry, "salt" | "iv" | "data">> {
+): Promise<Pick<VaultEntry, "salt" | "iv" | "data" | "iter">> {
   const enc = new TextEncoder();
   const km = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const key = await crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: 100_000, hash: "SHA-256" },
+    { name: "PBKDF2", salt, iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
     km, { name: "AES-GCM", length: 256 }, false, ["encrypt"]
   );
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const buf = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(plain));
-  return { salt: Array.from(salt), iv: Array.from(iv), data: Array.from(new Uint8Array(buf)) };
+  return {
+    salt: Array.from(salt),
+    iv: Array.from(iv),
+    data: Array.from(new Uint8Array(buf)),
+    iter: PBKDF2_ITERATIONS,
+  };
 }
 
 async function decryptData(
-  entry: Pick<VaultEntry, "salt" | "iv" | "data">, password: string
+  entry: Pick<VaultEntry, "salt" | "iv" | "data" | "iter">, password: string
 ): Promise<string> {
   const enc = new TextEncoder();
   const km = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
   const key = await crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt: new Uint8Array(entry.salt), iterations: 100_000, hash: "SHA-256" },
+    { name: "PBKDF2", salt: new Uint8Array(entry.salt), iterations: entry.iter ?? LEGACY_PBKDF2_ITERATIONS, hash: "SHA-256" },
     km, { name: "AES-GCM", length: 256 }, false, ["decrypt"]
   );
   const buf = await crypto.subtle.decrypt(
@@ -122,7 +140,6 @@ export async function encryptAndSave(
   const list: VaultList = { wallets: [{ id, name, address: wallet.address, ...enc }] };
   await saveVaultList(list);
   await setItem(ACTIVE_ID_KEY, id);
-  await setItem(LOCK_KEY, "false");
   return id;
 }
 
@@ -177,7 +194,6 @@ export async function decryptVault(password: string, id?: string): Promise<Walle
   const entry = list.wallets.find((w) => w.id === activeId) ?? list.wallets[0];
 
   const plain = await decryptData(entry, password);
-  await setItem(LOCK_KEY, "false");
   return JSON.parse(plain);
 }
 
@@ -198,6 +214,17 @@ export async function decryptAllVaults(
       const plain = await decryptData(entry, password);
       const wallet = JSON.parse(plain) as WalletData;
       if (!entry.address) entry.address = wallet.address;
+
+      // Transparent KDF upgrade: re-encrypt any legacy (sub-target) vault at the
+      // current iteration count now that we hold the plaintext + password.
+      if ((entry.iter ?? LEGACY_PBKDF2_ITERATIONS) < PBKDF2_ITERATIONS) {
+        const reEnc = await encryptData(plain, password);
+        entry.salt = reEnc.salt;
+        entry.iv = reEnc.iv;
+        entry.data = reEnc.data;
+        entry.iter = reEnc.iter;
+      }
+
       results.push({ id: entry.id, name: entry.name, wallet });
     } catch {
       const isActive = entry.id === activeId || (!activeId && entry === list.wallets[0]);
@@ -209,7 +236,6 @@ export async function decryptAllVaults(
   if (results.length === 0) throw new Error("Incorrect password");
 
   await saveVaultList(list);
-  await setItem(LOCK_KEY, "false");
   return results;
 }
 
@@ -236,13 +262,31 @@ export async function deleteOneWallet(id: string): Promise<number> {
 
 // ── Lock / Unlock ──────────────────────────────────────────────────────────────
 
+// Lock = drop all decrypted material from in-memory session storage. There is
+// no persisted "unlocked" flag to revoke; absence of a session means locked.
 export async function lockWallet(): Promise<void> {
-  await setItem(LOCK_KEY, "true");
-  await removeItem("numpay_session"); // clear decrypted data from storage
+  await removeSession(SESSION_KEY);
+  await removeSession(ACTIVITY_KEY);
+  await removeItem(LOCK_KEY); // clear legacy on-disk flag from older installs
 }
 
+// Refresh the inactivity timer. Call on unlock and on user activity.
+export async function touchActivity(): Promise<void> {
+  await setSession(ACTIVITY_KEY, String(Date.now()));
+}
+
+// Locked unless a decrypted session exists AND it is within the inactivity
+// window. Enforced on every popup open and before signing, so a suspended
+// service-worker timer can never leave the wallet "unlocked" past the timeout.
 export async function isLocked(): Promise<boolean> {
-  return (await getItem(LOCK_KEY)) !== "false";
+  const raw = await getSession(SESSION_KEY);
+  if (!raw) return true;
+  const last = Number((await getSession(ACTIVITY_KEY)) || 0);
+  if (!last || Date.now() - last > AUTO_LOCK_MS) {
+    await lockWallet();
+    return true;
+  }
+  return false;
 }
 
 export async function hasWallet(): Promise<boolean> {
@@ -256,6 +300,8 @@ export async function deleteWallet(): Promise<void> {
   await removeItem(OLD_VAULT_KEY);
   await removeItem(ACTIVE_ID_KEY);
   await removeItem(LOCK_KEY);
+  await removeSession(SESSION_KEY);
+  await removeSession(ACTIVITY_KEY);
 }
 
 // ── Provider & Signer ─────────────────────────────────────────────────────────

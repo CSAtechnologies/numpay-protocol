@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import { ethers } from "ethers";
 import { useWallet } from "../hooks/useWallet";
 import { useCurrency } from "../hooks/useCurrency";
@@ -9,6 +10,10 @@ import { type NonEvmChain } from "@/lib/chains";
 import { fetchJupiterQuote, executeJupiterSwap, resolveSolanaToken, WSOL_MINT, SOLANA_SWAP_TOKENS } from "@/lib/chains/solana";
 import { getSigner } from "@/lib/wallet";
 import { getItem, setItem } from "@/lib/storage";
+import {
+  assertTrustedSpender, assertTrustedRouter, assertChainId,
+  assertIsContract, assertNativeValue, simulateOrThrow,
+} from "@/lib/swapGuards";
 import Layout from "../components/Layout";
 import {
   SwapIcon, ChevronDownIcon, SettingsIcon, TokenIcon, ChainIcon,
@@ -101,6 +106,16 @@ const TAG_STYLE: Record<string, string> = {
   FASTEST:     "bg-amber/15 text-amber",
 };
 
+// Chain filter ordering by user base / activity (lower = shown first).
+// Unlisted chains fall after these, keeping their natural order.
+const CHAIN_RANK: Record<string, number> = {
+  ethereum: 0, bsc: 1, solana: 2, tron: 3, base: 4, arbitrum: 5,
+  polygon: 6, optimism: 7, avalanche: 8, bitcoin: 9, xrp: 10,
+  litecoin: 11, sui: 12, linea: 13, scroll: 14, zksync: 15,
+  fantom: 16, cronos: 17, mantle: 18, blast: 19, gnosis: 20,
+};
+const chainRank = (id: string) => CHAIN_RANK[id] ?? 99;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const isAddress = (s: string) => /^0x[0-9a-fA-F]{40}$/.test(s.trim());
@@ -112,6 +127,7 @@ const SOL_FEE_RESERVE = 0.01;
 function buildAllSwapTokens(
   chainBals: any[], currentTokens: any[], currentNetId: string,
   customTokens: SwapToken[], nonEvmChains: NonEvmChain[], solanaHeld: SwapToken[],
+  evmHeld: SwapToken[],
 ): SwapToken[] {
   const items: SwapToken[] = [];
   const seen = new Set<string>();
@@ -153,6 +169,16 @@ function buildAllSwapTokens(
   for (const t of solList) {
     if (!t.address) continue;
     const key = `solana:${t.address.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push(t);
+  }
+
+  // The user's held EVM tokens (memecoins/alts on any chain) — added before the
+  // default list so their real balances win on dedupe.
+  for (const t of evmHeld) {
+    if (!t.address) continue;
+    const key = `${t.chainId}:${t.address.toLowerCase()}`;
     if (seen.has(key)) continue;
     seen.add(key);
     items.push(t);
@@ -248,6 +274,23 @@ export default function Swap() {
     }));
   }, [tokensByChain]);
 
+  // The user's held EVM tokens across all chains (so any held token is swappable).
+  const evmHeld = useMemo<SwapToken[]>(() => {
+    const out: SwapToken[] = [];
+    for (const [chainId, toks] of Object.entries(tokensByChain)) {
+      const net = NETWORKS[chainId];
+      if (!net) continue; // EVM built-in chains only (solana handled above)
+      for (const t of toks) {
+        if (!t.address) continue;
+        out.push({
+          symbol: t.symbol, name: t.name, logo: t.logo, address: t.address,
+          decimals: t.decimals, balance: t.balance || "0", chainId, chainName: net.name,
+        });
+      }
+    }
+    return out;
+  }, [tokensByChain]);
+
   // Custom tokens (persisted)
   const [customTokens, setCustomTokens] = useState<SwapToken[]>([]);
   useEffect(() => {
@@ -257,8 +300,8 @@ export default function Swap() {
   }, []);
 
   const allTokens = useMemo(
-    () => buildAllSwapTokens(chainBalances, tokens, network.id, customTokens, nonEvmChains, solanaHeld),
-    [chainBalances, tokens, network.id, customTokens, nonEvmChains, solanaHeld],
+    () => buildAllSwapTokens(chainBalances, tokens, network.id, customTokens, nonEvmChains, solanaHeld, evmHeld),
+    [chainBalances, tokens, network.id, customTokens, nonEvmChains, solanaHeld, evmHeld],
   );
 
   // Default tokens
@@ -311,6 +354,8 @@ export default function Swap() {
   const [bridgeTxHash,  setBridgeTxHash]  = useState("");
 
   const quoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const location = useLocation();
+  const prefillApplied = useRef(false);
 
   // Sync native balances from chainBalances
   useEffect(() => {
@@ -333,6 +378,31 @@ export default function Swap() {
     setFromToken(sync);
     setToToken(sync);
   }, [tokens, network.id]);
+
+  // Prefill the "sell" token when arriving from a token's detail page (Swap button).
+  // Applied once, after allTokens is populated so we can resolve full token data.
+  useEffect(() => {
+    if (prefillApplied.current) return;
+    const st = location.state as { prefillChain?: string; prefillAddress?: string; prefillSymbol?: string } | null;
+    if (!st?.prefillChain) return;
+    const addrL = st.prefillAddress?.toLowerCase();
+    const match = allTokens.find((t) =>
+      t.chainId === st.prefillChain &&
+      (addrL ? t.address?.toLowerCase() === addrL
+             : (!t.address && (!st.prefillSymbol || t.symbol === st.prefillSymbol)))
+    );
+    if (!match) return;
+    prefillApplied.current = true;
+    setFromToken(match);
+    // Pick a sensible same-chain counterpart so it's a swap, not a bridge.
+    const sameChainOther = (t: SwapToken) =>
+      t.chainId === match.chainId && (t.address || "") !== (match.address || "");
+    const counterpart =
+      allTokens.find((t) => sameChainOther(t) && t.symbol === "USDC") ??
+      allTokens.find((t) => sameChainOther(t) && !t.address) ??
+      allTokens.find(sameChainOther);
+    if (counterpart) setToToken(counterpart);
+  }, [allTokens, location.state]);
 
   const isBridge = fromToken.chainId !== toToken.chainId;
 
@@ -563,6 +633,12 @@ export default function Swap() {
     try {
       const signer    = getSigner(wallet.privateKey, net.rpcUrl);
       const srcAmount = ethers.parseUnits(fromAmount, fromToken.decimals).toString();
+      const srcAmountBn = BigInt(srcAmount);
+      const isNativeSwap = !fromToken.address;
+
+      // Guard 1: confirm the RPC serves the chain we built the route for.
+      await assertChainId(signer, net.chainId);
+
       if (route.provider === "paraswap") {
         const txRes = await fetch(`${PARASWAP_API}/transactions/${net.chainId}?ignoreChecks=true`, {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -575,13 +651,21 @@ export default function Swap() {
         });
         if (!txRes.ok) { const e = await txRes.json().catch(() => ({})); throw new Error(e.error || `Build failed (${txRes.status})`); }
         const txData = await txRes.json();
+
+        const value = txData.value ? BigInt(txData.value) : 0n;
+        // Augustus varies per chain, so validate by contract-code + value + sim.
+        await assertIsContract(signer.provider!, txData.to);
+        assertNativeValue(isNativeSwap, value, srcAmountBn);
+
         if (fromToken.address && route.priceRoute?.tokenTransferProxy) {
+          // Approval spender is chain-constant — gate it hard. Exact amount only.
+          assertTrustedSpender("paraswap", route.priceRoute.tokenTransferProxy);
           const erc20 = new ethers.Contract(fromToken.address, ["function approve(address,uint256) returns (bool)"], signer);
           await (await erc20.approve(route.priceRoute.tokenTransferProxy, srcAmount)).wait();
         }
+        await simulateOrThrow(signer, { to: txData.to, data: txData.data, value });
         const tx = await signer.sendTransaction({
-          to: txData.to, data: txData.data,
-          value: txData.value ? BigInt(txData.value) : 0n,
+          to: txData.to, data: txData.data, value,
           gasLimit: txData.gas ? BigInt(txData.gas) : undefined,
         });
         setTxHash(tx.hash);
@@ -599,13 +683,19 @@ export default function Swap() {
         const bd = await buildRes.json();
         if (!bd?.data) throw new Error("No transaction data from KyberSwap");
         const { routerAddress, data } = bd.data;
+
+        // Router + approval spender are the same chain-constant address — gate both.
+        assertTrustedRouter("kyberswap", routerAddress);
+        const value = !fromToken.address ? srcAmountBn : 0n;
+        assertNativeValue(isNativeSwap, value, srcAmountBn);
+
         if (fromToken.address) {
+          assertTrustedSpender("kyberswap", routerAddress);
           const erc20 = new ethers.Contract(fromToken.address, ["function approve(address,uint256) returns (bool)"], signer);
           await (await erc20.approve(routerAddress, srcAmount)).wait();
         }
-        const tx = await signer.sendTransaction({
-          to: routerAddress, data, value: !fromToken.address ? BigInt(srcAmount) : 0n,
-        });
+        await simulateOrThrow(signer, { to: routerAddress, data, value });
+        const tx = await signer.sendTransaction({ to: routerAddress, data, value });
         setTxHash(tx.hash);
       }
     } catch (e: any) { setSwapError(e.message || "Swap failed"); }
@@ -642,16 +732,24 @@ export default function Swap() {
       if (!txReq?.to || !txReq?.data) throw new Error("Bridge provider returned incomplete transaction data");
 
       const signer = getSigner(wallet.privateKey, fromNet.rpcUrl);
-      // Approve the bridge contract if spending an ERC-20
+      await assertChainId(signer, fromNet.chainId);
+
+      // The LI.FI diamond (router + approval target) is chain-constant — gate it.
+      assertTrustedRouter("lifi", txReq.to);
+      const value = txReq.value ? BigInt(txReq.value) : 0n;
+
+      // Approve the bridge contract if spending an ERC-20 (exact amount only).
       const approvalAddr = qData?.estimate?.approvalAddress;
       if (fromToken.address && approvalAddr) {
+        assertTrustedSpender("lifi", approvalAddr);
         const erc20 = new ethers.Contract(fromToken.address, ["function approve(address,uint256) returns (bool)"], signer);
         await (await erc20.approve(approvalAddr, fromAmtRaw)).wait();
       }
+      await simulateOrThrow(signer, { to: txReq.to, data: txReq.data, value });
       const tx = await signer.sendTransaction({
         to:       txReq.to,
         data:     txReq.data,
-        value:    txReq.value    ? BigInt(txReq.value)    : 0n,
+        value,
         gasLimit: txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined,
       });
       setBridgeTxHash(tx.hash);
@@ -694,10 +792,12 @@ export default function Swap() {
   // Picker data — always grouped by chain so every chain is visible up front
   const pickerChains = useMemo(() => {
     const seen = new Set<string>();
-    return allTokens.reduce<Array<{ id: string; name: string; logo?: string }>>((acc, t) => {
+    const list = allTokens.reduce<Array<{ id: string; name: string; logo?: string }>>((acc, t) => {
       if (!seen.has(t.chainId)) { seen.add(t.chainId); acc.push({ id: t.chainId, name: t.chainName, logo: NETWORKS[t.chainId]?.logo }); }
       return acc;
     }, []);
+    // Order by user base / activity (ETH, BNB, SOL, TRX, BASE, …), unlisted last.
+    return list.sort((a, b) => chainRank(a.id) - chainRank(b.id));
   }, [allTokens]);
 
   const pickerGrouped = useMemo(() => {

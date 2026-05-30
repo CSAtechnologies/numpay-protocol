@@ -1,0 +1,15 @@
+// Centralised public client API keys.
+//
+// These are client-side provider keys (Alchemy, Moralis), not server secrets:
+// they ship in the bundle by nature. Keeping them in the gitignored .env (see
+// .env.example) instead of hardcoded in source lets us rotate them, restrict
+// them by origin in the provider dashboard, and use separate keys per
+// environment without code changes. Restore on a fresh clone by copying
+// .env.example to .env and pasting the keys.
+
+export const ALCHEMY_KEY = import.meta.env.VITE_ALCHEMY_KEY ?? "";
+export const MORALIS_KEY = import.meta.env.VITE_MORALIS_KEY ?? "";
+
+if (import.meta.env.DEV && !ALCHEMY_KEY) {
+  console.warn("[NumPay] VITE_ALCHEMY_KEY is not set — Alchemy-backed RPCs will fail. Copy .env.example to .env.");
+}
