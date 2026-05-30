@@ -22,7 +22,16 @@ const V1_BY_NETWORK: Record<string, string> = {
   sepolia : "0xB57A18C0ebfF1fa9610C2D06985cbB9761685C83",
 };
 
-const ALCHEMY_KEY = "REDACTED_ROTATE_ME"; // same key used throughout the project
+// Read the Alchemy key from the environment. Never hardcode provider keys in
+// tracked source. Set it before running, e.g.:
+//   ALCHEMY_KEY=xxxx npx hardhat run deploy/migrate.ts --network mainnet
+const ALCHEMY_KEY = process.env.ALCHEMY_KEY ?? "";
+if (!ALCHEMY_KEY) {
+  throw new Error(
+    "ALCHEMY_KEY env var is not set. Export it before running migrate.ts " +
+    "(e.g. ALCHEMY_KEY=... npx hardhat run deploy/migrate.ts --network mainnet)."
+  );
+}
 
 // Alchemy NFT API base differs by network
 const ALCHEMY_NFT_BASE: Record<string, string> = {
