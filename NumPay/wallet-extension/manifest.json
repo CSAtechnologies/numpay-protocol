@@ -28,6 +28,8 @@
     "https://*.nodeinfra.com/*",
     "https://xrplcluster.com/*",
     "https://*.trongrid.io/*",
+    "https://blockstream.info/*",
+    "https://litecoinspace.org/*",
     "https://aggregator-api.kyberswap.com/*",
     "https://*.paraswap.io/*",
     "https://li.quest/*",
