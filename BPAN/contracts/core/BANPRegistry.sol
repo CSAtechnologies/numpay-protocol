@@ -110,6 +110,7 @@ contract BANPRegistry is ERC721, Ownable, ReentrancyGuard {
     error InsufficientFee(uint256 sent, uint256 required);
     error FeeTooHigh(uint256 requested, uint256 max);
     error WithdrawFailed();
+    error ZeroAddress();
     error MigrationAlreadyClosed();
     error MigrationLengthMismatch();
 
@@ -166,7 +167,9 @@ contract BANPRegistry is ERC721, Ownable, ReentrancyGuard {
         if (msg.value < registrationFee)    revert InsufficientFee(msg.value, registrationFee);
         if (balanceOf(msg.sender) > 0)      revert AlreadyOwnsNumber(msg.sender);
 
-        _mint(msg.sender, number);
+        // _safeMint so a contract recipient that cannot receive ERC-721s reverts
+        // instead of locking the BPAN. nonReentrant guards the onERC721Received hook.
+        _safeMint(msg.sender, number);
         totalRegistered++;
 
         emit NumberRegistered(number, msg.sender);
@@ -338,6 +341,10 @@ contract BANPRegistry is ERC721, Ownable, ReentrancyGuard {
             // Skip if this number already landed in V2 (idempotent batching).
             if (_ownerOf(num) != address(0)) continue;
 
+            // Use _mint (not _safeMint) here on purpose: this faithfully restores
+            // historical V1 ownership, the recipients already held this NFT on V1,
+            // and _safeMint could revert the whole batch on a contract owner that
+            // does not implement onERC721Received. Owner-only, migration-window only.
             _mint(owners[i], num);
             totalRegistered++;
             emit NumberRegistered(num, owners[i]);
@@ -384,6 +391,7 @@ contract BANPRegistry is ERC721, Ownable, ReentrancyGuard {
      * @param to Recipient address.
      */
     function withdrawFees(address payable to) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress(); // never burn accumulated fees
         uint256 bal = address(this).balance;
         (bool success, ) = to.call{value: bal}("");
         if (!success) revert WithdrawFailed();
