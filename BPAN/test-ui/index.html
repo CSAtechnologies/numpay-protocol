@@ -135,7 +135,11 @@ let provider, signer, contract;
 function log(msg, type = "info") {
   const el = document.getElementById("log");
   const time = new Date().toLocaleTimeString();
-  el.innerHTML = `<div class="entry ${type}">[${time}] ${msg}</div>` + el.innerHTML;
+  // Build with textContent so logged contract/API values can never become markup.
+  const entry = document.createElement("div");
+  entry.className = `entry ${type}`;
+  entry.textContent = `[${time}] ${msg}`;
+  el.insertBefore(entry, el.firstChild);
 }
 
 async function connectWallet() {
@@ -251,16 +255,38 @@ async function lookupNumber() {
     }
     const owner = await readContract.ownerOf(BigInt(num));
     const [chains, wallets] = await readContract.getAllMappings(BigInt(num));
-    let html = `<div style="margin-bottom:8px;font-size:12px;color:#8888aa">Owner: <span style="color:#f0f0f5;font-family:monospace">${owner}</span></div>`;
+    // Build the result with DOM nodes + textContent. Wallet mapping strings are
+    // attacker-controlled (up to the protocol length cap) and must never be
+    // interpolated into innerHTML.
+    resultEl.replaceChildren();
+    const ownerLine = document.createElement("div");
+    ownerLine.style.cssText = "margin-bottom:8px;font-size:12px;color:#8888aa";
+    ownerLine.append("Owner: ");
+    const ownerVal = document.createElement("span");
+    ownerVal.style.cssText = "color:#f0f0f5;font-family:monospace";
+    ownerVal.textContent = owner;
+    ownerLine.append(ownerVal);
+    resultEl.append(ownerLine);
     if (chains.length === 0) {
-      html += '<div style="color:#8888aa;text-align:center">No mappings set</div>';
+      const empty = document.createElement("div");
+      empty.style.cssText = "color:#8888aa;text-align:center";
+      empty.textContent = "No mappings set";
+      resultEl.append(empty);
     } else {
       chains.forEach((chain, i) => {
-        html += `<div class="chain-row"><span class="chain-name">${chain}</span><span class="wallet-addr">${wallets[i]}</span></div>`;
+        const row = document.createElement("div");
+        row.className = "chain-row";
+        const nameEl = document.createElement("span");
+        nameEl.className = "chain-name";
+        nameEl.textContent = chain;
+        const addrEl = document.createElement("span");
+        addrEl.className = "wallet-addr";
+        addrEl.textContent = wallets[i];
+        row.append(nameEl, addrEl);
+        resultEl.append(row);
       });
     }
     resultEl.style.display = "block";
-    resultEl.innerHTML = html;
     log(`Looked up #${num}: ${chains.length} mappings found`, "success");
   } catch (e) {
     log(`Lookup failed: ${e.shortMessage || e.message}`, "error");
