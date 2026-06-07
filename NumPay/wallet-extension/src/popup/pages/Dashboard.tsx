@@ -57,6 +57,21 @@ function getErc20UsdValue(symbol: string, balance: number, currencyCode: string,
   return usdToCurrency(balance * priceUsd, currencyCode, rates);
 }
 
+/** Uppercased native symbol for a chain id (built-in, custom, or non-EVM), or
+ *  undefined if unknown. Used to drop indexer pseudo-tokens that duplicate the
+ *  chain's own native-balance row. */
+function nativeSymbolFor(
+  chainId: string,
+  customChains: ReadonlyArray<{ id: string; symbol: string }>,
+  nonEvmChains: ReadonlyArray<{ id: string; symbol: string }>,
+): string | undefined {
+  const sym =
+    NETWORKS[chainId]?.symbol ??
+    customChains.find((c) => c.id === chainId)?.symbol ??
+    nonEvmChains.find((c) => c.id === chainId)?.symbol;
+  return sym?.toUpperCase();
+}
+
 import { useWallet } from "../hooks/useWallet";
 import { useCurrency } from "../hooks/useCurrency";
 import Layout from "../components/Layout";
@@ -243,7 +258,11 @@ export default function Dashboard({ onLock }: Props) {
     // or the known-token coingecko map (EVM). Unpriced tokens contribute 0.
     for (const [chainId, chainTokens] of Object.entries(tokensByChain)) {
       const isEvmChain = !!NETWORKS[chainId] || customChains.some((c) => c.id === chainId);
+      const nativeSym = nativeSymbolFor(chainId, customChains, nonEvmChains);
       for (const t of chainTokens) {
+        // Skip a token that is really the chain's native coin (an indexer
+        // pseudo-token) — its value is already counted in chainBalances/nonEvmChains.
+        if (nativeSym && t.symbol.toUpperCase() === nativeSym) continue;
         const bal = parseFloat(t.balance || "0");
         if (bal <= 0) continue;
         if (t.priceUsd != null) total += usdToCurrency(bal * t.priceUsd, currencyCode, rates);
@@ -284,8 +303,13 @@ export default function Dashboard({ onLock }: Props) {
       if (!chainName) continue;
 
       const isEvmChain = !!net || !!custom;
+      const nativeSym = (net?.symbol ?? custom?.symbol ?? nonEvm?.symbol)?.toUpperCase();
 
       for (const t of chainTokens) {
+        // A non-native token whose symbol matches the chain's native coin is an
+        // indexer pseudo-token that duplicates the native row — drop it. Wrapped
+        // natives (WBNB/WETH) keep their own symbol and are unaffected.
+        if (nativeSym && t.symbol.toUpperCase() === nativeSym) continue;
         const bal = parseFloat(t.balance || "0");
         // Prefer a live per-token price when the fetcher resolved one (Solana/DexScreener);
         // else fall back to the known-token coingecko map (EVM). Unknown → 0 so it still shows.

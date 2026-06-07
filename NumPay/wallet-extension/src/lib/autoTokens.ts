@@ -71,6 +71,27 @@ export interface AutoToken {
   verifiedContract?: boolean;
 }
 
+// Indexers (Moralis/GoldRush) occasionally return a chain's native coin as a
+// pseudo-token. Such a row would duplicate the real native-balance row already
+// shown for the chain (and double-count in the portfolio total), so strip it.
+// Catches the EIP-7528 / zero native placeholder address, and any token whose
+// symbol matches the chain's own native symbol (e.g. BNB on BNB Chain, ETH on
+// Ethereum). Wrapped natives keep their own symbol (WBNB, WETH) and are kept.
+const NATIVE_PLACEHOLDER_ADDRS = new Set([
+  "0x0000000000000000000000000000000000000000",
+  "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+]);
+
+function stripNativeToken(chainId: string, tokens: AutoToken[]): AutoToken[] {
+  const nativeSym = NETWORKS[chainId]?.symbol?.toUpperCase();
+  return tokens.filter((t) => {
+    const addr = (t.address || "").toLowerCase();
+    if (NATIVE_PLACEHOLDER_ADDRS.has(addr)) return false;
+    if (nativeSym && t.symbol.toUpperCase() === nativeSym) return false;
+    return true;
+  });
+}
+
 // Multicall3 — deployed at the same address on all major EVM chains
 const MC3_ADDR = "0xcA11bde05977b3631167028862bE2a173976CA11";
 // zkSync Era uses a different deployment address
@@ -383,7 +404,7 @@ async function sweepTokensByRPC(
   );
 }
 
-const CACHE_PFX = "numpay_autotok5_";
+const CACHE_PFX = "numpay_autotok6_";
 const CACHE_TTL = 3 * 60 * 1000; // 3 minutes
 
 /**
@@ -402,7 +423,7 @@ export async function sweepAllChainTokens(
     const raw = await getItem(cacheKey);
     if (raw) {
       const { ts, data } = JSON.parse(raw) as { ts: number; data: Record<string, AutoToken[]> };
-      for (const [chainId, tokens] of Object.entries(data)) onUpdate(chainId, tokens);
+      for (const [chainId, tokens] of Object.entries(data)) onUpdate(chainId, stripNativeToken(chainId, tokens));
       if (Date.now() - ts < CACHE_TTL) cacheIsFresh = true;
     }
   } catch {}
@@ -414,7 +435,8 @@ export async function sweepAllChainTokens(
   // Merge incoming tokens into a chain, deduping by address. Order-independent:
   // fills in price/logo from whichever source has them, and replaces a
   // truncated-address placeholder symbol/name with a real one.
-  const merge = (chainId: string, incoming: AutoToken[]) => {
+  const merge = (chainId: string, incomingRaw: AutoToken[]) => {
+    const incoming = stripNativeToken(chainId, incomingRaw);
     if (incoming.length === 0) return;
     const byAddr = new Map<string, AutoToken>(
       (freshData[chainId] ?? []).map((t) => [t.address.toLowerCase(), t]),
