@@ -37,6 +37,7 @@
     "https://*.coingecko.com/*",
     "https://*.dexscreener.com/*",
     "https://*.moralis.io/*",
+    "https://*.covalenthq.com/*",
     "https://*.tronscanapi.com/*",
     "https://*.xrpscan.com/*",
     "https://*.etherscan.io/*",
@@ -58,6 +59,8 @@
     "https://*.seitrace.com/*",
     "https://flagcdn.com/*",
     "https://*.githubusercontent.com/*",
+    "https://assets.coincap.io/*",
+    "https://icons.llamao.fi/*",
     "https://cf-ipfs.com/*"
   ],
   "optional_host_permissions": ["https://*/*"],

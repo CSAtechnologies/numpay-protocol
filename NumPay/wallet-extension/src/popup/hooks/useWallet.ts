@@ -14,6 +14,7 @@ import {
   type NonEvmChain,
 } from "@/lib/chains";
 import { getCustomTokens } from "@/lib/customTokens";
+import { fetchRates, getUsdPrice, type Rates } from "@/lib/currency";
 import { getCustomChains, type CustomChain } from "@/lib/customChains";
 import { sweepAllChainTokens } from "@/lib/autoTokens";
 
@@ -64,6 +65,9 @@ export interface WalletState {
   customChains: CustomChain[];
 }
 
+// Last-resort price table, used only when the live CoinGecko rates (15-min
+// cached via fetchRates) are unavailable. Dashboard overlays live rates for
+// display; these values mostly affect chain sorting and the offline fallback.
 const NATIVE_USD_PRICES: Record<string, number> = {
   ETH: 1800, BTC: 65000, SOL: 140, SUI: 1.2, POL: 0.45,
   AVAX: 25, BNB: 300, FTM: 0.35, MNT: 0.55, SEI: 0.35,
@@ -238,6 +242,13 @@ export function useWallet(): WalletState {
 
     const allChainIds = [...AGGREGATE_CHAINS, ...customChainList.map((c) => c.id)];
 
+    // Live prices (15-min cached). On failure fall back to the static table so
+    // the sweep still completes offline.
+    let liveRates: Rates | null = null;
+    try { liveRates = await fetchRates(); } catch {}
+    const priceFor = (symbol: string) =>
+      (liveRates ? getUsdPrice(symbol, liveRates) : 0) || NATIVE_USD_PRICES[symbol] || 0;
+
     const promises = allChainIds.map(async (chainId) => {
       const net = NETWORKS[chainId] || customNetMap[chainId];
       if (!net) return null;
@@ -251,7 +262,7 @@ export function useWallet(): WalletState {
         const num = parseFloat(formatted);
         return {
           networkId: chainId, name: net.name, symbol: net.symbol, logo: net.logo,
-          balance: formatted, balanceNum: num, usdValue: num * (NATIVE_USD_PRICES[net.symbol] || 0),
+          balance: formatted, balanceNum: num, usdValue: num * priceFor(net.symbol),
         } as ChainBalance;
       } catch {
         // Mark as failed so we can retain the last-known balance below.

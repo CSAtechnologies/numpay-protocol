@@ -124,6 +124,15 @@ const isSolanaMint = (s: string) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s.trim(
 // SOL left untouched on a max swap so the network fee + any ATA rent can be paid.
 const SOL_FEE_RESERVE = 0.01;
 
+// The slippage field is free text; sanitize before it reaches any aggregator.
+// NaN/zero falls back to 0.5%, and the cap stops fat-fingered values (e.g. 50)
+// from authorizing a sandwich-sized tolerance.
+function sanitizeSlippagePct(raw: string): number {
+  const n = parseFloat(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0.5;
+  return Math.min(n, 5);
+}
+
 function buildAllSwapTokens(
   chainBals: any[], currentTokens: any[], currentNetId: string,
   customTokens: SwapToken[], nonEvmChains: NonEvmChain[], solanaHeld: SwapToken[],
@@ -441,7 +450,7 @@ export default function Swap() {
             toTokenAddress:   toTokenAddr,
             fromAmount:       ethers.parseUnits(amt, from.decimals).toString(),
             fromAddress: fromAddr, toAddress: toAddr,
-            options: { slippage: parseFloat(slippage) / 100, order: "RECOMMENDED", integrator: "numpay" },
+            options: { slippage: sanitizeSlippagePct(slippage) / 100, order: "RECOMMENDED", integrator: "numpay" },
           }),
         });
         if (!res.ok) {
@@ -469,7 +478,7 @@ export default function Swap() {
         const inMint  = from.address || WSOL_MINT;
         const outMint = to.address   || WSOL_MINT;
         const amountRaw = ethers.parseUnits(amt, from.decimals).toString();
-        const q = await fetchJupiterQuote(inMint, outMint, amountRaw, Math.round(parseFloat(slippage) * 100));
+        const q = await fetchJupiterQuote(inMint, outMint, amountRaw, Math.round(sanitizeSlippagePct(slippage) * 100));
         if (q) {
           setRouteOptions([{
             provider: "jupiter", label: "Jupiter",
@@ -645,7 +654,7 @@ export default function Swap() {
           body: JSON.stringify({
             srcToken: fromToken.address || NATIVE_ADDR, destToken: toToken.address || NATIVE_ADDR,
             srcAmount,
-            slippage: Math.round(parseFloat(slippage) * 100),
+            slippage: Math.round(sanitizeSlippagePct(slippage) * 100),
             userAddress: wallet.address, priceRoute: route.priceRoute, partner: "numpay",
           }),
         });
@@ -675,7 +684,7 @@ export default function Swap() {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             routeSummary: route.routeSummary, sender: wallet.address, recipient: wallet.address,
-            slippageTolerance: Math.round(parseFloat(slippage) * 100),
+            slippageTolerance: Math.round(sanitizeSlippagePct(slippage) * 100),
             deadline: Math.floor(Date.now() / 1000) + 1800, source: "numpay",
           }),
         });

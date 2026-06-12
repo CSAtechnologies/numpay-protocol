@@ -124,7 +124,7 @@ export async function fetchRates(): Promise<Rates> {
     } catch {}
   }
 
-  const coinIds = "ethereum,bitcoin,matic-network,avalanche-2,binancecoin,fantom,mantle,sei-network,solana,sui,tron,ripple,litecoin,tether";
+  const coinIds = "ethereum,bitcoin,matic-network,avalanche-2,binancecoin,fantom,mantle,sei-network,solana,sui,tron,ripple,litecoin,tether,crypto-com-chain,celo,xdai,moonbeam,klay-token,metis-token";
   const vsCurrencies = CURRENCIES.map((c) => c.code).join(",");
 
   const res = await fetch(
@@ -159,11 +159,19 @@ const SYMBOL_TO_COINGECKO: Record<string, string> = {
   TRX: "tron",
   XRP: "ripple",
   LTC: "litecoin",
+  CRO: "crypto-com-chain",
+  CELO: "celo",
+  xDAI: "xdai",
+  GLMR: "moonbeam",
+  KLAY: "klay-token",
+  METIS: "metis-token",
 };
 
-// Get USD price for a native symbol using live rates
+// Get USD price for a native symbol using live rates.
+// Unknown symbols return 0 — never another coin's price.
 export function getUsdPrice(networkSymbol: string, rates: Rates): number {
-  const coinId = SYMBOL_TO_COINGECKO[networkSymbol] || "ethereum";
+  const coinId = SYMBOL_TO_COINGECKO[networkSymbol];
+  if (!coinId) return 0;
   return rates[coinId]?.["usd"] || 0;
 }
 
@@ -201,8 +209,10 @@ export function convertBalance(
     };
   }
 
-  const coinId = SYMBOL_TO_COINGECKO[networkSymbol] || "ethereum";
-  const rate = rates[coinId]?.[targetCurrency];
+  // No price feed for this symbol → fall through to the native-amount display
+  // below rather than pricing it as some other coin.
+  const coinId = SYMBOL_TO_COINGECKO[networkSymbol];
+  const rate = coinId ? rates[coinId]?.[targetCurrency] : undefined;
 
   if (!rate) {
     return { value: amount.toFixed(4), display: `${amount.toFixed(4)} ${networkSymbol}` };

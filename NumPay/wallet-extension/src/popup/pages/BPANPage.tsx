@@ -12,6 +12,7 @@ import {
   BPAN_MAINNET_RPC, NETWORKS, BPAN_CHAINS,
 } from "@/lib/networks";
 import { getSigner } from "@/lib/wallet";
+import { isValidChainAddress } from "@/lib/addressValidation";
 import Layout from "../components/Layout";
 import {
   SearchIcon, CheckIcon, ExternalLinkIcon, ChevronDownIcon,
@@ -567,7 +568,9 @@ function autoNonEvmAddress(chainId: string, nonEvmWallet: NonEvmWallet | null): 
     case "litecoin": return nonEvmWallet.litecoin.address; // ltc1 bech32 — distinct from the bitcoin address
     case "solana":   return nonEvmWallet.solana.address;
     case "sui":      return nonEvmWallet.sui.address;
-    default:         return ""; // tron, xrp — user must enter manually
+    case "tron":     return nonEvmWallet.tron.address;
+    case "xrp":      return nonEvmWallet.xrp.address;
+    default:         return "";
   }
 }
 
@@ -655,9 +658,22 @@ function MappingSection({
     if (!isValidBPAN(number)) { setError("Enter a valid 11-digit BPAN"); return; }
     if (selectedChains.size === 0) { setError("Select at least one chain"); return; }
     if (!allAddressesFilled) { setError("Fill in all wallet addresses before mapping"); return; }
-    setError(""); setLoading(true); setTxHashes([]);
 
     const chains = Array.from(selectedChains);
+
+    // Validate every address against its chain's format BEFORE any on-chain
+    // write. A malformed or wrong-chain mapping in the registry misdirects
+    // every future payment to this BPAN.
+    for (const chainId of chains) {
+      const chainDef = BPAN_CHAINS.find((c) => c.id === chainId);
+      const addr = chainDef?.isEVM ? evmAddr.trim() : (nonEvmAddrs[chainId] || "").trim();
+      if (!isValidChainAddress(addr, chainId, chainDef?.isEVM ?? true)) {
+        setError(`"${addr.slice(0, 24)}${addr.length > 24 ? "…" : ""}" is not a valid ${chainDef?.name || chainId} address.`);
+        return;
+      }
+    }
+
+    setError(""); setLoading(true); setTxHashes([]);
     setProgress({ current: 0, total: chains.length, chain: "" });
 
     try {
