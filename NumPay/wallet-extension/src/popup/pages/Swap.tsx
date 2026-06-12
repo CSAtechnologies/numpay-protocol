@@ -639,10 +639,29 @@ export default function Swap() {
       if (!nonEvmWallet?.solana) { setSwapError("Solana wallet not ready"); return; }
       setSwapping(true); setSwapError(""); setTxHash("");
       try {
+        // Jupiter quotes go stale within seconds; a stale quote fails the
+        // pre-broadcast simulation (slippage/blockhash). Re-quote now and use
+        // the fresh route — but abort if the price dropped more than the
+        // user's slippage versus what was on screen.
+        const inMint    = fromToken.address || WSOL_MINT;
+        const outMint   = toToken.address   || WSOL_MINT;
+        const amountRaw = ethers.parseUnits(fromAmount, fromToken.decimals).toString();
+        const slipBps   = Math.round(sanitizeSlippagePct(slippage) * 100);
+        let quoteToUse  = route.priceRoute;
+        const fresh = await fetchJupiterQuote(inMint, outMint, amountRaw, slipBps);
+        if (fresh) {
+          const shown = BigInt(route.destAmountRaw || "0");
+          const now   = BigInt(fresh.outAmount);
+          if (shown > 0n && now < shown - (shown * BigInt(slipBps)) / 10000n) {
+            scheduleQuote(fromAmount, fromToken, toToken); // refresh the displayed rate
+            throw new Error("The price moved since this quote was shown. Review the updated rate and try again.");
+          }
+          quoteToUse = fresh.raw;
+        }
         const txid = await executeJupiterSwap(
           nonEvmWallet.solana.secretKey,
           nonEvmWallet.solana.address,
-          route.priceRoute, // the Jupiter quote carried from fetchQuotesForPair
+          quoteToUse,
         );
         setTxHash(txid);
       } catch (e: any) {

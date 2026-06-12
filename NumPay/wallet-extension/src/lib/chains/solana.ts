@@ -199,6 +199,27 @@ export async function fetchJupiterQuote(
   } catch { return null; }
 }
 
+/**
+ * Turn a simulateTransaction failure into an actionable message. The raw err
+ * object ("InstructionError: Custom 6001") means nothing to a user; the common
+ * cases are missing SOL for fee/rent and a stale quote past slippage.
+ */
+function decodeSimulationFailure(err: any, logs: string[]): string {
+  const haystack = logs.join("\n") + " " + JSON.stringify(err);
+  if (/insufficient lamports|InsufficientFundsForRent|InsufficientFundsForFee|insufficient funds for rent/i.test(haystack)) {
+    return "Not enough SOL to pay the network fee and token-account rent. Keep at least ~0.01 SOL in your wallet and try again.";
+  }
+  if (/SlippageToleranceExceeded|0x1771|RequireGteViolated/i.test(haystack)) {
+    return "The price moved beyond your slippage tolerance before sending. Re-enter the amount for a fresh quote, or raise slippage slightly.";
+  }
+  if (/BlockhashNotFound/i.test(haystack)) {
+    return "The quote expired before sending. Re-enter the amount to get a fresh quote and try again.";
+  }
+  const lastErrLog = [...logs].reverse().find((l) => /error|failed/i.test(l));
+  return "Swap simulation failed — the transaction would fail, so it was not sent." +
+    (lastErrLog ? ` (${lastErrLog.trim()})` : "");
+}
+
 /** Decode a Solana compact-u16 (shortvec) length prefix. */
 function decodeCompactU16(bytes: Uint8Array, offset: number): { value: number; length: number } {
   let value = 0, shift = 0, i = offset;
@@ -270,7 +291,7 @@ export async function executeJupiterSwap(
   const simData = await simResp.json();
   if (simData.error) throw new Error(simData.error.message ?? "Swap simulation failed");
   if (simData.result?.value?.err) {
-    throw new Error("Swap simulation failed — the transaction would fail, so it was not sent.");
+    throw new Error(decodeSimulationFailure(simData.result.value.err, simData.result?.value?.logs ?? []));
   }
 
   const sendResp = await fetch(SOL_RPC, {
