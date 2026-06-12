@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import { ICON_DATA } from "../../lib/icons/iconData";
+import { ICON_GLYPHS } from "../../lib/icons/iconGlyphs";
 
 interface IconProps {
   size?: number;
@@ -229,118 +231,156 @@ export function AlertIcon({ size = 20, className, style }: IconProps) {
   );
 }
 
-// ── Chain brand colors (used as fallback when logo fails to load) ──────────────
-const CHAIN_COLORS: Record<string, string> = {
-  ethereum:     "#627EEA",
-  sepolia:      "#627EEA",
-  polygon:      "#8247E5",
-  arbitrum:     "#28A0F0",
-  optimism:     "#FF0420",
-  base:         "#0052FF",
-  avalanche:    "#E84142",
-  bsc:          "#F3BA2F",
-  zksync:       "#8C8DFC",
-  scroll:       "#FFDBA0",
-  linea:        "#121212",
-  mantle:       "#1B1B1B",
-  blast:        "#FCFC03",
-  polygonzkevm: "#8247E5",
-  fantom:       "#1969FF",
-  cronos:       "#002D74",
-  celo:         "#35D07F",
-  gnosis:       "#04795B",
-  moonbeam:     "#53CBC9",
-  aurora:       "#78D64B",
-  sei:          "#9E1F19",
-  klaytn:       "#FF6B00",
-  metis:        "#00DACC",
-  solana:       "#9945FF",
-  bitcoin:      "#F7931A",
-  tron:         "#FF0013",
-  xrp:          "#346AA9",
-  sui:          "#6FBCF0",
-  litecoin:     "#BFBBBB",
+// ── Real-logo resolution (symbol-keyed) + house framing ───────────────────────
+// Port of design_handoff_icons (icon-render.js). PRIMARY art is each asset's own
+// brand logo, keyed by SYMBOL (never by contract address): one canonical icon per
+// ticker, identical on every chain. Chain art is composited separately as a
+// corner badge by the caller. The drawn glyph/monogram coin (ICON_DATA +
+// ICON_GLYPHS) is the deterministic FALLBACK when the CDN has no logo.
+
+const FONT = "Geist, 'Helvetica Neue', Arial, 'Noto Sans', system-ui, sans-serif";
+const TOK_BASE = "https://assets.coincap.io/assets/icons/";
+const CHAIN_BASE = "https://icons.llamao.fi/icons/chains/rsz_";
+
+// our network id -> DefiLlama chain slug
+const CHAIN_SLUG: Record<string, string> = {
+  ethereum: "ethereum", sepolia: "ethereum", polygon: "polygon", arbitrum: "arbitrum",
+  optimism: "optimism", base: "base", avalanche: "avalanche", bsc: "binance",
+  zksync: "zksync-era", scroll: "scroll", linea: "linea", mantle: "mantle",
+  blast: "blast", polygonzkevm: "polygon_zkevm", fantom: "fantom", cronos: "cronos",
+  celo: "celo", gnosis: "xdai", moonbeam: "moonbeam", aurora: "aurora", sei: "sei",
+  klaytn: "kaia", metis: "metis", solana: "solana", bitcoin: "bitcoin",
+  tron: "tron", xrp: "ripple", sui: "sui", litecoin: "litecoin",
 };
 
-// ── Token logo resolution via TrustWallet CDN ────────────────────────────────
-// TrustWallet chain names differ from our network IDs in some cases.
-const TW_CHAIN: Record<string, string> = {
-  ethereum:     "ethereum",
-  sepolia:      "ethereum",
-  polygon:      "polygon",
-  arbitrum:     "arbitrum",
-  optimism:     "optimism",
-  base:         "base",
-  avalanche:    "avalanchec",
-  bsc:          "smartchain",
-  zksync:       "zksync",
-  scroll:       "scroll",
-  linea:        "linea",
-  mantle:       "mantle",
-  blast:        "blast",
-  polygonzkevm: "polygonzkevm",
-  fantom:       "fantom",
-  cronos:       "cronos",
-  celo:         "celo",
-  gnosis:       "xdai",
-  moonbeam:     "moonbeam",
-  aurora:       "aurora",
-  sei:          "sei",
-  klaytn:       "klaytn",
-  metis:        "metis",
-  solana:       "solana",
-  bitcoin:      "bitcoin",
-  tron:         "tron",
-  xrp:          "ripple",
-  sui:          "sui",
-  litecoin:     "litecoin",
-};
-
-const TW_BASE = "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains";
-
-export function getTrustWalletChainLogo(chainId: string): string {
-  const chain = TW_CHAIN[chainId] || "ethereum";
-  return `${TW_BASE}/${chain}/info/logo.png`;
+// ── Deterministic fallback-coin builder (pure, from ICON_DATA + ICON_GLYPHS) ──
+function hashStr(s: string): number {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+function hexToRgb(h: string): number[] {
+  h = h.replace("#", "");
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  const n = parseInt(h, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function relLum(rgb: number[]): number {
+  const a = rgb.map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+  return 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2];
+}
+function contrastText(disc: string): string { return relLum(hexToRgb(disc)) > 0.42 ? "#16181E" : "#FFFFFF"; }
+function isNearBlack(disc: string): boolean { return relLum(hexToRgb(disc)) < 0.045; }
+function paletteFor(sym: string): string { const p = ICON_DATA.palette; return p[hashStr(sym.toUpperCase()) % p.length]; }
+function escapeXml(s: string): string {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function monogram(sym: string): string { return sym.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4); }
+function fontSizeFor(txt: string): number { const n = txt.length; return n <= 1 ? 60 : n === 2 ? 46 : n === 3 ? 35 : 27; }
+function markText(txt: string, color: string): string {
+  const n = txt.length;
+  const ls = n >= 4 ? -1.6 : n === 3 ? -0.8 : 0;
+  return '<text x="64" y="65" text-anchor="middle" dominant-baseline="central" font-family="' +
+    FONT + '" font-weight="600" font-size="' + fontSizeFor(txt) + '" letter-spacing="' + ls +
+    '" fill="' + color + '">' + escapeXml(txt) + "</text>";
 }
 
-export function getTrustWalletTokenLogo(chainId: string, tokenAddress: string): string {
-  const chain = TW_CHAIN[chainId] || "ethereum";
-  return `${TW_BASE}/${chain}/assets/${tokenAddress}/logo.png`;
+interface ResolvedRec { disc?: string; mark?: string; glyph?: string; char?: string; mono?: string; }
+
+function buildSvg(rec: ResolvedRec | null | undefined, sym: string): string {
+  const discColor = (rec && rec.disc) || paletteFor(sym);
+  const mark = (rec && rec.mark) || contrastText(discColor);
+  let inner: string;
+  if (rec && rec.glyph && ICON_GLYPHS[rec.glyph]) {
+    inner = ICON_GLYPHS[rec.glyph](mark, discColor);
+  } else if (rec && rec.char) {
+    inner = markText(rec.char, mark);
+  } else {
+    const label = (rec && rec.mono) || monogram(sym);
+    inner = markText(label, mark);
+  }
+  const ring = isNearBlack(discColor)
+    ? '<circle cx="64" cy="64" r="59" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1.5"/>'
+    : "";
+  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">' +
+    '<circle cx="64" cy="64" r="60" fill="' + discColor + '"/>' + inner + ring + "</svg>";
 }
 
-// Well-known token logos by symbol (TrustWallet Ethereum chain addresses)
-const TOKEN_LOGO_BY_SYMBOL: Record<string, string> = {
-  ETH:  `${TW_BASE}/ethereum/info/logo.png`,
-  BTC:  `${TW_BASE}/bitcoin/info/logo.png`,
-  SOL:  `${TW_BASE}/solana/info/logo.png`,
-  BNB:  `${TW_BASE}/smartchain/info/logo.png`,
-  MATIC:`${TW_BASE}/polygon/info/logo.png`,
-  POL:  `${TW_BASE}/polygon/info/logo.png`,
-  AVAX: `${TW_BASE}/avalanchec/info/logo.png`,
-  FTM:  `${TW_BASE}/fantom/info/logo.png`,
-  SUI:  `${TW_BASE}/sui/info/logo.png`,
-  TRX:  `${TW_BASE}/tron/info/logo.png`,
-  XRP:  `${TW_BASE}/ripple/info/logo.png`,
-  LTC:  `${TW_BASE}/litecoin/info/logo.png`,
-  USDT: `${TW_BASE}/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png`,
-  USDC: `${TW_BASE}/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png`,
-  DAI:  `${TW_BASE}/ethereum/assets/0x6B175474E89094C44Da98b954EedeAC495271d0F/logo.png`,
-  WBTC: `${TW_BASE}/ethereum/assets/0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599/logo.png`,
-  LINK: `${TW_BASE}/ethereum/assets/0x514910771AF9Ca656af840dff83E8264EcF986CA/logo.png`,
-  UNI:  `${TW_BASE}/ethereum/assets/0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984/logo.png`,
-  AAVE: `${TW_BASE}/ethereum/assets/0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9/logo.png`,
-  ARB:  `${TW_BASE}/arbitrum/info/logo.png`,
-  OP:   `${TW_BASE}/optimism/info/logo.png`,
-  MNT:  `${TW_BASE}/mantle/info/logo.png`,
-  SEI:  `${TW_BASE}/sei/info/logo.png`,
-  CRO:  `${TW_BASE}/cronos/info/logo.png`,
-  CELO: `${TW_BASE}/celo/info/logo.png`,
-  GLMR: `${TW_BASE}/moonbeam/info/logo.png`,
-  KLAY: `${TW_BASE}/klaytn/info/logo.png`,
-  METIS:`${TW_BASE}/metis/info/logo.png`,
-};
+function tokenFallbackSvg(sym: string): string {
+  const u = sym.toUpperCase();
+  const key = ICON_DATA.aliases[u] || u;
+  const brand = ICON_DATA.brand[key] || ICON_DATA.brand[u];
+  return buildSvg(brand, key);
+}
+function chainFallbackSvg(chainId: string): string {
+  const rec = ICON_DATA.chains[chainId];
+  if (!rec) return buildSvg(null, chainId);
+  return buildSvg(rec, rec.label || chainId);
+}
+
+// ── Real-logo URL resolvers ────────────────────────────────────────────────────
+// Resolve a packaged asset path (e.g. logoOverride "token-logos/x.png") to an
+// extension URL; pass through absolute http(s) values unchanged.
+function assetUrl(p: string): string {
+  if (/^https?:/.test(p)) return p;
+  try {
+    if (typeof chrome !== "undefined" && chrome.runtime?.getURL) return chrome.runtime.getURL(p);
+  } catch { /* not in an extension context */ }
+  return p;
+}
+
+export function tokenIconUrl(symbol: string): string {
+  const canon = (ICON_DATA.aliases[symbol.toUpperCase()] || symbol).toUpperCase();
+  const ov = ICON_DATA.logoOverrides[canon];
+  if (ov) return assetUrl(ov);
+  const slug = canon.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return TOK_BASE + slug + "@2x.png";
+}
+
+export function chainIconUrl(chainId: string): string | null {
+  const s = CHAIN_SLUG[chainId];
+  return s ? CHAIN_BASE + s + "?w=64&h=64" : null;
+}
+
+// ── FramedCoin — house disc + ring, walks candidate logo URLs then the SVG ─────
+function FramedCoin({
+  sources,
+  fallbackSvg,
+  alt,
+  size,
+}: {
+  sources: string[];
+  fallbackSvg: string;
+  alt: string;
+  size: number;
+}) {
+  const srcs = sources.filter(Boolean);
+  const listKey = srcs.join("|");
+  const [idx, setIdx] = useState(0);
+
+  useEffect(() => { setIdx(0); }, [listKey]);
+
+  const exhausted = idx >= srcs.length;
+
+  return (
+    <span className="coin" style={{ width: size, height: size }}>
+      {!exhausted ? (
+        <img
+          src={srcs[idx]}
+          alt={alt}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setIdx((i) => i + 1)}
+        />
+      ) : (
+        <span className="coin-fb" dangerouslySetInnerHTML={{ __html: fallbackSvg }} />
+      )}
+    </span>
+  );
+}
 
 // ── ChainIcon component ────────────────────────────────────────────────────────
+// Real chain logo (DefiLlama, by slug) → app-supplied logo → drawn fallback.
 export function ChainIcon({
   chainId,
   logo,
@@ -350,44 +390,17 @@ export function ChainIcon({
   logo?: string;
   size?: number;
 }) {
-  const color = CHAIN_COLORS[chainId] || "#6366f1";
-  const letter = chainId.charAt(0).toUpperCase();
-  const [errored, setErrored] = useState(false);
-
-  // Prefer TrustWallet CDN over whatever URL is passed in
-  const resolvedLogo = logo || getTrustWalletChainLogo(chainId);
-
-  useEffect(() => { setErrored(false); }, [resolvedLogo]);
-
-  return (
-    <div
-      className="rounded-full flex items-center justify-center font-bold text-white flex-shrink-0 overflow-hidden"
-      style={{ width: size, height: size, backgroundColor: color, fontSize: size * 0.42 }}
-    >
-      {!errored ? (
-        <img
-          src={resolvedLogo}
-          alt={chainId}
-          width={size}
-          height={size}
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          className="w-full h-full object-cover"
-          onError={() => setErrored(true)}
-        />
-      ) : (
-        letter
-      )}
-    </div>
-  );
+  const sources = [chainIconUrl(chainId) || "", logo || ""];
+  return <FramedCoin sources={sources} fallbackSvg={chainFallbackSvg(chainId)} alt={chainId} size={size} />;
 }
 
 // ── TokenIcon component ───────────────────────────────────────────────────────
+// Symbol-keyed: pinned override / coincap (by symbol) → app-streamed logo →
+// drawn coin. Identical icon for a ticker on every chain. `chainId`/`tokenAddress`
+// are accepted for call-site compatibility but intentionally not used for art.
 export function TokenIcon({
   symbol,
   logo,
-  chainId,
-  tokenAddress,
   size = 32,
 }: {
   symbol: string;
@@ -396,51 +409,6 @@ export function TokenIcon({
   tokenAddress?: string;
   size?: number;
 }) {
-  const fallback = symbol.slice(0, 2).toUpperCase();
-  const [errored, setErrored] = useState(false);
-  const [src, setSrc] = useState("");
-
-  useEffect(() => {
-    setErrored(false);
-    // Resolution priority:
-    // 1. Passed-in logo URL
-    // 2. TrustWallet by token address + chain
-    // 3. Well-known symbol lookup
-    if (logo) { setSrc(logo); return; }
-    if (chainId && tokenAddress) { setSrc(getTrustWalletTokenLogo(chainId, tokenAddress)); return; }
-    const bySymbol = TOKEN_LOGO_BY_SYMBOL[symbol.toUpperCase()];
-    if (bySymbol) { setSrc(bySymbol); return; }
-    setSrc("");
-  }, [logo, symbol, chainId, tokenAddress]);
-
-  return (
-    <div
-      className="rounded-full flex items-center justify-center font-bold flex-shrink-0 overflow-hidden"
-      style={{
-        width: size,
-        height: size,
-        fontSize: size * 0.35,
-        background: src && !errored
-          ? "transparent"
-          : "linear-gradient(135deg, rgba(139,92,246,0.25) 0%, rgba(99,102,241,0.18) 100%)",
-        color: "#c4b5fd",
-        border: src && !errored ? "none" : "1px solid rgba(139,92,246,0.22)",
-      }}
-    >
-      {src && !errored ? (
-        <img
-          src={src}
-          alt={symbol}
-          width={size}
-          height={size}
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          className="w-full h-full object-cover"
-          onError={() => setErrored(true)}
-        />
-      ) : (
-        fallback
-      )}
-    </div>
-  );
+  const sources = [tokenIconUrl(symbol), logo || ""];
+  return <FramedCoin sources={sources} fallbackSvg={tokenFallbackSvg(symbol)} alt={symbol} size={size} />;
 }

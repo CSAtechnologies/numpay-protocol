@@ -776,3 +776,32 @@ input[type="number"]::-webkit-outer-spin-button {
 .wallet-avatar.inactive {
   background: var(--surface-4);
 }
+
+/* ─── Icon house framing (TokenIcon / ChainIcon) ──────────────── */
+/* Circular disc + hairline ring + neutral backing for transparent logos.
+   Flat only: no gradients, shadows, glow, or 3D. From the icon design handoff. */
+.coin {
+  border-radius: 50%;
+  overflow: hidden;
+  display: block;
+  flex: none;
+  background: #1b1830;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.coin img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: inherit;
+}
+.coin .coin-fb,
+.coin .coin-fb svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+[data-theme="light"] .coin {
+  background: #eceaf6;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.07);
+}
