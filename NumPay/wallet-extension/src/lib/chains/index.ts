@@ -109,7 +109,7 @@ export async function fetchNonEvmBalances(wallet: NonEvmWallet): Promise<NonEvmC
 
 export { deriveBitcoinAddress,  fetchBitcoinBalance  } from "./bitcoin";
 export { deriveSolanaAddress,   fetchSolanaBalance, sendSolanaTransfer, fetchSolanaTokens } from "./solana";
-export { deriveSuiAddress,      fetchSuiBalance, fetchSuiTokens } from "./sui";
-export { deriveTronAddress,     fetchTronBalance, fetchTronTokens } from "./tron";
+export { deriveSuiAddress,      fetchSuiBalance, fetchSuiTokens, sendSuiTransfer } from "./sui";
+export { deriveTronAddress,     fetchTronBalance, fetchTronTokens, sendTronTransfer } from "./tron";
 export { deriveXrpAddress,      fetchXrpBalance       } from "./xrp";
 export { deriveLitecoinAddress, fetchLitecoinBalance  } from "./litecoin";

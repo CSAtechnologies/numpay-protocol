@@ -34,6 +34,111 @@ export function deriveTronAddress(mnemonic: string): {
   return { address: bs58.encode(payload), privateKey: hdNode.privateKey };
 }
 
+const TRON_RPC = "https://api.trongrid.io";
+
+/** Decode a Tron base58check address to its 21-byte (0x41-prefixed) hex form. */
+function tronAddressToHex(address: string): string {
+  const decoded = bs58.decode(address); // 25 bytes: 21 payload + 4 checksum
+  const payload = decoded.slice(0, 21);
+  return Array.from(payload).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Decode TronGrid's hex-encoded broadcast error message into readable text. */
+function decodeTronMessage(hex?: string): string {
+  if (!hex) return "";
+  try {
+    const bytes = hex.match(/.{1,2}/g)?.map((h) => parseInt(h, 16)) ?? [];
+    return new TextDecoder().decode(new Uint8Array(bytes));
+  } catch {
+    return hex;
+  }
+}
+
+/**
+ * Send native TRX (a TransferContract) and return the transaction id (hex).
+ *
+ * Flow (matches TronWeb / the Tron protocol):
+ *   1. TronGrid builds the unsigned transfer (`/wallet/createtransaction`).
+ *   2. We verify the node-built transaction matches our intent — recipient,
+ *      sender, amount, and that the recipient is actually encoded in the bytes
+ *      we are about to sign — so a tampering/MITM RPC can never make us sign a
+ *      transfer to a different address or amount.
+ *   3. txID = SHA256(raw_data_hex); we sign that digest with secp256k1 and
+ *      append the raw recovery id (0/1) as TRON expects (NOT Ethereum's +27).
+ *   4. Broadcast via `/wallet/broadcasttransaction`.
+ *
+ * @param privateKey 0x-prefixed secp256k1 key from the Tron derivation path.
+ * @param fromAddress Sender, base58 (T...).
+ * @param toAddress   Recipient, base58 (T...).
+ * @param amountSun   Amount in sun (1 TRX = 1_000_000 sun).
+ */
+export async function sendTronTransfer(
+  privateKey: string,
+  fromAddress: string,
+  toAddress: string,
+  amountSun: bigint,
+): Promise<string> {
+  if (amountSun <= 0n) throw new Error("Enter an amount greater than zero");
+  // createtransaction takes amount as a JSON number; guard against precision loss.
+  if (amountSun > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error("Amount too large");
+  }
+  const amount = Number(amountSun);
+
+  // 1. Build the unsigned transfer. visible:true → base58 addresses in/out.
+  const createResp = await fetch(`${TRON_RPC}/wallet/createtransaction`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ owner_address: fromAddress, to_address: toAddress, amount, visible: true }),
+  });
+  const tx = await createResp.json();
+  if (tx.Error || !tx.raw_data_hex || !tx.txID) {
+    // TronGrid reports activation/format problems here (e.g. inactive account).
+    throw new Error(decodeTronMessage(tx.Error) || tx.Error || "Could not build the Tron transaction");
+  }
+
+  // 2. Verify the node-built transaction encodes exactly what we asked for.
+  const contract = tx.raw_data?.contract?.[0];
+  const value = contract?.parameter?.value;
+  if (contract?.type !== "TransferContract") {
+    throw new Error("Unexpected transaction type returned by the node");
+  }
+  if (value?.owner_address !== fromAddress) throw new Error("Sender mismatch in built transaction");
+  if (value?.to_address !== toAddress)       throw new Error("Recipient mismatch in built transaction");
+  if (BigInt(value?.amount ?? -1) !== amountSun) throw new Error("Amount mismatch in built transaction");
+
+  // The bytes we sign are raw_data_hex, not the JSON. Confirm the intended
+  // recipient is literally encoded in those bytes before trusting them.
+  const toHex = tronAddressToHex(toAddress);
+  if (!String(tx.raw_data_hex).toLowerCase().includes(toHex.toLowerCase())) {
+    throw new Error("Built transaction does not encode the intended recipient");
+  }
+
+  // 3. txID = SHA256(raw_data_hex); recompute and cross-check the node's txID.
+  const txID = ethers.sha256("0x" + tx.raw_data_hex).slice(2);
+  if (txID.toLowerCase() !== String(tx.txID).toLowerCase()) {
+    throw new Error("Transaction id mismatch — refusing to sign");
+  }
+
+  // Sign the digest. TRON signature = r(32) || s(32) || recoveryId(1, raw 0/1).
+  const sig = new ethers.SigningKey(privateKey).sign("0x" + txID);
+  const signature = sig.r.slice(2) + sig.s.slice(2) + sig.yParity.toString(16).padStart(2, "0");
+
+  // 4. Broadcast the signed transaction.
+  const broadcastResp = await fetch(`${TRON_RPC}/wallet/broadcasttransaction`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ ...tx, signature: [signature] }),
+  });
+  const result = await broadcastResp.json();
+  if (result.result === true || result.code === "SUCCESS") {
+    return txID;
+  }
+  throw new Error(
+    decodeTronMessage(result.message) || result.code || result.Error || "Broadcast failed",
+  );
+}
+
 export async function fetchTronBalance(address: string): Promise<number> {
   // Primary: Trongrid REST API
   try {
@@ -84,6 +189,33 @@ const KNOWN_TRC20: Record<string, { name: string; symbol: string; decimals: numb
 };
 
 /**
+ * Read a TRC-20 contract's decimals() on-chain via TronGrid's constant-call
+ * endpoint. Returns null if the call fails or yields a nonsensical value.
+ */
+async function fetchTrc20DecimalsOnChain(contract: string, owner: string): Promise<number | null> {
+  try {
+    const r = await fetch(`${TRON_RPC}/wallet/triggerconstantcontract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        owner_address: owner,
+        contract_address: contract,
+        function_selector: "decimals()",
+        visible: true,
+      }),
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const hex = d.constant_result?.[0];
+    if (!hex) return null;
+    const n = parseInt(hex, 16);
+    return Number.isFinite(n) && n >= 0 && n <= 36 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Fetch TRC-20 token balances for a Tron address.
  * Uses Trongrid account data for balances, known list for metadata,
  * and DexScreener for any unknown contracts.
@@ -105,19 +237,26 @@ export async function fetchTronTokens(address: string): Promise<Array<{
       symbol: string; name: string; address: string; decimals: number; balance: string; logo?: string;
     }> = [];
 
+    // Unknown contracts are deferred: their decimals must be resolved before a
+    // balance can be computed (guessing scales the balance by up to 10^12).
+    const deferred: Array<{ contract: string; raw: string }> = [];
+
     for (const entry of trc20List) {
       for (const [contract, rawBalance] of Object.entries(entry)) {
         const known = KNOWN_TRC20[contract];
-        const decimals = known?.decimals ?? 6;
-        const balance = Number(rawBalance) / Math.pow(10, decimals);
+        if (!known) {
+          if (Number(rawBalance) > 0) deferred.push({ contract, raw: rawBalance });
+          continue;
+        }
+        const balance = Number(rawBalance) / Math.pow(10, known.decimals);
         if (balance <= 0) continue;
         tokens.push({
-          symbol:   known?.symbol ?? contract.slice(0, 6),
-          name:     known?.name   ?? contract.slice(0, 6),
+          symbol:   known.symbol,
+          name:     known.name,
           address:  contract,
-          decimals,
+          decimals: known.decimals,
           balance:  balance.toString(),
-          logo:     known?.logo,
+          logo:     known.logo,
         });
       }
     }
@@ -158,30 +297,38 @@ export async function fetchTronTokens(address: string): Promise<Array<{
       }),
     );
 
-    const unknowns = tokens.filter(
-      (t) => !KNOWN_TRC20[t.address] && !t.address.startsWith("trc10:"),
-    );
-
-    // Resolve unknown contracts via TronScan token overview
-    if (unknowns.length > 0) {
-      await Promise.allSettled(
-        unknowns.map(async (token) => {
-          try {
-            const r = await fetch(
-              `https://apilist.tronscanapi.com/api/token/overview?address=${token.address}`,
-              { headers: { Accept: "application/json" } },
-            );
-            if (!r.ok) return;
-            const d = await r.json();
-            if (d?.name || d?.symbol) {
-              token.name   = d.name?.trim()   || token.name;
-              token.symbol = d.symbol?.trim() || token.symbol;
-              if (d.logo) token.logo = d.logo;
+    // Resolve deferred unknown TRC-20s. TronScan supplies name/symbol/decimals/
+    // logo in one call; if it misses, read decimals() on-chain so the balance is
+    // never displayed at the wrong scale. Tokens whose decimals cannot be
+    // resolved at all are skipped rather than shown with a guessed magnitude.
+    await Promise.allSettled(
+      deferred.map(async ({ contract, raw }) => {
+        let name = contract.slice(0, 6);
+        let symbol = contract.slice(0, 6);
+        let decimals: number | null = null;
+        let logo: string | undefined;
+        try {
+          const r = await fetch(
+            `https://apilist.tronscanapi.com/api/token_trc20?contract=${contract}&showAll=1`,
+            { headers: { Accept: "application/json" } },
+          );
+          if (r.ok) {
+            const info = (await r.json())?.trc20_tokens?.[0];
+            if (info) {
+              name   = String(info.name   || name).trim();
+              symbol = String(info.symbol || symbol).trim();
+              if (Number.isInteger(info.decimals)) decimals = info.decimals;
+              logo = info.icon_url || undefined;
             }
-          } catch {}
-        }),
-      );
-    }
+          }
+        } catch {}
+        if (decimals == null) decimals = await fetchTrc20DecimalsOnChain(contract, address);
+        if (decimals == null) return;
+        const balance = Number(raw) / Math.pow(10, decimals);
+        if (balance <= 0) return;
+        tokens.push({ symbol, name, address: contract, decimals, balance: balance.toString(), logo });
+      }),
+    );
 
     // DexScreener fallback for still-unknown tokens (covers Tron DEX pairs)
     const stillUnknown = tokens.filter((t) => !KNOWN_TRC20[t.address] && t.symbol === t.address.slice(0, 6));

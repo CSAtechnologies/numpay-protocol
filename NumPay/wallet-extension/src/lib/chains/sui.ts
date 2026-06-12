@@ -69,6 +69,113 @@ export async function deriveSuiAddress(mnemonic: string): Promise<{
   };
 }
 
+/** Minimal Sui JSON-RPC call; throws on transport or RPC-level errors. */
+async function suiRpc(rpc: string, method: string, params: any[]): Promise<any> {
+  const resp = await fetch(rpc, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  if (!resp.ok) throw new Error(`Sui RPC ${resp.status}`);
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error.message || `Sui RPC error (${method})`);
+  return data.result;
+}
+
+// Max gas the transfer may burn (0.01 SUI). Unused gas is refunded by the network.
+const SUI_GAS_BUDGET = 10_000_000n;
+
+/**
+ * Send native SUI and return the transaction digest.
+ *
+ * Uses the same "node builds, we sign" approach as the Tron path so the only
+ * client-side crypto is the well-defined Sui intent signature:
+ *   1. Gather SUI coin objects covering amount + gas (`suix_getCoins`).
+ *   2. The node builds the unsigned transfer (`unsafe_paySui`, which merges and
+ *      splits the input coins and uses the first as the gas coin).
+ *   3. Intent-sign: digest = BLAKE2b-256([0,0,0] || txBytes); Ed25519 over the
+ *      digest; serialized signature = flag(0x00) || sig(64) || pubkey(32).
+ *   4. Execute once (`sui_executeTransactionBlock`).
+ *
+ * Build is retried across RPCs, but signing/execution happen once on a single
+ * node so a flaky response can never cause a double-spend re-submit.
+ *
+ * @param secretKey  tweetnacl 64-byte secret key (seed || pubkey).
+ * @param fromAddress Sender (0x...).
+ * @param toAddress   Recipient (0x...).
+ * @param amountMist  Amount in MIST (1 SUI = 1e9 MIST).
+ */
+export async function sendSuiTransfer(
+  secretKey: Uint8Array,
+  fromAddress: string,
+  toAddress: string,
+  amountMist: bigint,
+): Promise<string> {
+  if (amountMist <= 0n) throw new Error("Enter an amount greater than zero");
+
+  // ── Phase 1: find a working RPC and build the unsigned transfer ──────────
+  let rpc = "";
+  let txBytesB64 = "";
+  let buildErr: Error | null = null;
+  for (const candidate of SUI_RPCS) {
+    try {
+      const coins = await suiRpc(candidate, "suix_getCoins", [fromAddress, "0x2::sui::SUI", null, 50]);
+      const list: any[] = coins?.data ?? [];
+      if (list.length === 0) throw new Error("No SUI coins available to spend");
+      list.sort((a, b) => (BigInt(b.balance) > BigInt(a.balance) ? 1 : -1));
+
+      const needed = amountMist + SUI_GAS_BUDGET;
+      const selected: string[] = [];
+      let sum = 0n;
+      for (const c of list) {
+        selected.push(c.coinObjectId);
+        sum += BigInt(c.balance);
+        if (sum >= needed) break;
+      }
+      if (sum < needed) throw new Error("Insufficient SUI to cover the amount plus network gas");
+
+      const built = await suiRpc(candidate, "unsafe_paySui", [
+        fromAddress, selected, [toAddress], [amountMist.toString()], SUI_GAS_BUDGET.toString(),
+      ]);
+      if (!built?.txBytes) throw new Error("Could not build the Sui transaction");
+      rpc = candidate;
+      txBytesB64 = built.txBytes;
+      break;
+    } catch (e: any) {
+      buildErr = e instanceof Error ? e : new Error(String(e));
+    }
+  }
+  if (!txBytesB64) throw buildErr ?? new Error("Could not reach a Sui node");
+
+  // ── Phase 2: intent-sign (once) ──────────────────────────────────────────
+  const txBytes = Uint8Array.from(atob(txBytesB64), (c) => c.charCodeAt(0));
+  const intentMessage = new Uint8Array(3 + txBytes.length);
+  intentMessage.set([0, 0, 0], 0); // intent: TransactionData / V0 / Sui
+  intentMessage.set(txBytes, 3);
+  const digest = blake2b(intentMessage, { dkLen: 32 });
+  const signature = nacl.sign.detached(digest, secretKey);
+
+  const pubkey = secretKey.slice(32);
+  const serialized = new Uint8Array(1 + signature.length + pubkey.length);
+  serialized[0] = 0x00; // Ed25519 scheme flag
+  serialized.set(signature, 1);
+  serialized.set(pubkey, 1 + signature.length);
+  let bin = "";
+  for (let i = 0; i < serialized.length; i++) bin += String.fromCharCode(serialized[i]);
+  const sigB64 = btoa(bin);
+
+  // ── Phase 3: execute (once, on the node that built it) ───────────────────
+  const exec = await suiRpc(rpc, "sui_executeTransactionBlock", [
+    txBytesB64, [sigB64], { showEffects: true }, "WaitForLocalExecution",
+  ]);
+  const status = exec?.effects?.status?.status;
+  if (status && status !== "success") {
+    throw new Error(exec?.effects?.status?.error || "Transaction failed on-chain");
+  }
+  if (!exec?.digest) throw new Error("No transaction digest returned");
+  return exec.digest as string;
+}
+
 /**
  * Fetch Sui balance using JSON-RPC.
  * Returns balance in SUI.

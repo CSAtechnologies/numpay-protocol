@@ -8,7 +8,8 @@ import { isBPANInput, isValidBPAN, resolveBPAN, formatBPAN } from "@/lib/bpan";
 import { BPAN_CHAINS, DEFAULT_NETWORK, NETWORKS, type BPANChainId, type Network } from "@/lib/networks";
 import { getSigner } from "@/lib/wallet";
 import { sendToken, type Token } from "@/lib/tokens";
-import { sendSolanaTransfer } from "@/lib/chains";
+import { sendSolanaTransfer, sendTronTransfer, sendSuiTransfer } from "@/lib/chains";
+import { isValidNonEvmAddress } from "@/lib/addressValidation";
 import Layout from "../components/Layout";
 import {
   CheckIcon, ExternalLinkIcon, HashIcon, ChevronDownIcon,
@@ -25,18 +26,19 @@ const NON_EVM_META: Record<string, { symbol: string; decimals: number; explorer:
   litecoin: { symbol: "LTC", decimals: 8,  explorer: "https://litecoinspace.org/tx" },
 };
 
-// Native send is live only for Solana right now
-const CAN_SEND_NATIVE: Record<string, boolean> = { solana: true };
+// Chains with native sending wired up. The rest fall back to "copy the address".
+const CAN_SEND_NATIVE: Record<string, boolean> = { solana: true, tron: true, sui: true };
 
-function isValidNonEvmAddress(addr: string, chainId: string): boolean {
-  if (!addr) return false;
-  if (chainId === "solana")   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
-  if (chainId === "bitcoin")  return /^(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,62}$/.test(addr);
-  if (chainId === "sui")      return /^0x[0-9a-fA-F]{64}$/.test(addr);
-  if (chainId === "tron")     return /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(addr);
-  if (chainId === "xrp")      return /^r[1-9A-HJ-NP-Za-km-z]{24,34}$/.test(addr);
-  if (chainId === "litecoin") return /^(ltc1|[LM])[a-zA-HJ-NP-Z0-9]{26,90}$/.test(addr);
-  return false;
+// Parse a decimal amount string into an integer base-unit bigint without
+// floating point, rejecting more fraction digits than the chain supports.
+function toBaseUnits(amount: string, decimals: number): bigint {
+  const v = amount.trim();
+  if (!/^\d+(\.\d+)?$/.test(v)) throw new Error("Invalid amount");
+  const [whole, frac = ""] = v.split(".");
+  if (frac.length > decimals) throw new Error(`At most ${decimals} decimal places are supported`);
+  const base = BigInt(whole + frac.padEnd(decimals, "0"));
+  if (base <= 0n) throw new Error("Enter an amount greater than zero");
+  return base;
 }
 
 export default function Send() {
@@ -128,17 +130,36 @@ export default function Send() {
     setAmount(val > 0 ? val.toFixed(Math.min(sendDecimals, 8)) : "0");
   }
 
+  // Guards against out-of-order async BPAN resolutions (fast typing): only the
+  // latest lookup may write state.
+  const resolveSeq = useRef(0);
+
   async function handleToChange(value: string) {
     setTo(value);
     setResolvedAddr(""); setResolvedBPAN(""); setError("");
 
     const clean = value.trim().replace(/\D/g, "");
     if (isBPANInput(value) && isValidBPAN(clean)) {
+      const seq = ++resolveSeq.current;
       setResolving(true);
       try {
         const addr = await resolveBPAN(clean, selectedChainId);
+        if (seq !== resolveSeq.current) return; // a newer lookup superseded this one
         if (addr) {
-          setResolvedAddr(addr);
+          // Registry mappings are free-form strings set by the BPAN owner.
+          // Validate the resolved address against the selected chain's format
+          // so a wrong-chain or malformed mapping can never become a send target.
+          const looksValid = isEvmChain
+            ? ethers.isAddress(addr)
+            : isValidNonEvmAddress(addr.trim(), selectedChainId);
+          if (!looksValid) {
+            setError(
+              `BPAN ${formatBPAN(clean)} has a "${selectedChainId}" mapping, but it is not a valid ` +
+              `${chainInfo.name} address. Ask the owner to fix their mapping.`
+            );
+            return;
+          }
+          setResolvedAddr(addr.trim());
           setResolvedBPAN(clean);
         } else {
           setError(
@@ -147,9 +168,9 @@ export default function Send() {
           );
         }
       } catch {
-        setError("BPAN lookup failed. Check your connection and try again.");
+        if (seq === resolveSeq.current) setError("BPAN lookup failed. Check your connection and try again.");
       } finally {
-        setResolving(false);
+        if (seq === resolveSeq.current) setResolving(false);
       }
     }
   }
@@ -203,15 +224,23 @@ export default function Send() {
     setSending(true); setError(""); setTxHash("");
     try {
       if (selectedChainId === "solana") {
-        // Parse the decimal amount into integer lamports without floating point.
-        const sol = amount.trim();
-        if (!/^\d+(\.\d+)?$/.test(sol)) throw new Error("Invalid amount");
-        const [whole, frac = ""] = sol.split(".");
-        if (frac.length > 9) throw new Error("SOL supports at most 9 decimal places");
-        const lamports = BigInt(whole + frac.padEnd(9, "0"));
-        if (lamports <= 0n) throw new Error("Enter an amount greater than zero");
+        const lamports = toBaseUnits(amount, 9);
         const sig = await sendSolanaTransfer(nonEvmWallet.solana.secretKey, destinationAddress, lamports);
         setTxHash(sig);
+      } else if (selectedChainId === "tron") {
+        const sun = toBaseUnits(amount, 6);
+        const hash = await sendTronTransfer(
+          nonEvmWallet.tron.privateKey, nonEvmWallet.tron.address, destinationAddress, sun,
+        );
+        setTxHash(hash);
+      } else if (selectedChainId === "sui") {
+        const mist = toBaseUnits(amount, 9);
+        const digest = await sendSuiTransfer(
+          nonEvmWallet.sui.secretKey, nonEvmWallet.sui.address, destinationAddress, mist,
+        );
+        setTxHash(digest);
+      } else {
+        throw new Error(`Native ${selectedChainId} sending is not available yet`);
       }
     } catch (e: any) {
       setError(e.message || "Transaction failed");
