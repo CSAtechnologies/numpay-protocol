@@ -388,6 +388,23 @@ export default function Swap() {
     setToToken(sync);
   }, [tokens, network.id]);
 
+  // Sync balances for tokens on ANY chain as held-token data streams in
+  // (Solana SPL / Tron / Sui fetches, the cross-chain auto-token sweep).
+  // Without this, a token prefilled from its detail page — or picked before
+  // its chain's data loaded — shows balance 0 until manually reselected.
+  useEffect(() => {
+    const sync = (prev: SwapToken): SwapToken => {
+      if (!prev.address) return prev; // natives are synced from chainBalances above
+      const found = allTokens.find(
+        (t) => t.chainId === prev.chainId && t.address?.toLowerCase() === prev.address!.toLowerCase(),
+      );
+      if (!found || !found.balance || found.balance === prev.balance) return prev;
+      return { ...prev, balance: found.balance };
+    };
+    setFromToken(sync);
+    setToToken(sync);
+  }, [allTokens]);
+
   // Prefill the "sell" token when arriving from a token's detail page (Swap button).
   // Applied once, after allTokens is populated so we can resolve full token data.
   useEffect(() => {
