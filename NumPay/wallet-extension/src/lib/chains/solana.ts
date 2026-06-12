@@ -209,6 +209,11 @@ function decodeSimulationFailure(err: any, logs: string[]): string {
   if (/insufficient lamports|InsufficientFundsForRent|InsufficientFundsForFee|insufficient funds for rent/i.test(haystack)) {
     return "Not enough SOL to pay the network fee and token-account rent. Keep at least ~0.01 SOL in your wallet and try again.";
   }
+  // Jupiter 6024 (0x1788) InsufficientFunds — swap amount, fee, or rent.
+  if (/0x1788|InsufficientFunds/i.test(haystack)) {
+    return "Insufficient funds: the amount plus network fees exceeds what this wallet holds. " +
+      "Lower the amount slightly, and make sure you keep ~0.01 SOL for fees and token-account rent.";
+  }
   if (/SlippageToleranceExceeded|0x1771|RequireGteViolated/i.test(haystack)) {
     return "The price moved beyond your slippage tolerance before sending. Re-enter the amount for a fresh quote, or raise slippage slightly.";
   }

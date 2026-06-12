@@ -639,6 +639,24 @@ export default function Swap() {
       if (!nonEvmWallet?.solana) { setSwapError("Solana wallet not ready"); return; }
       setSwapping(true); setSwapError(""); setTxHash("");
       try {
+        // Fail fast on the most common Solana swap error (Jupiter 6024
+        // InsufficientFunds): every swap needs SOL for the fee plus ~0.002 SOL
+        // rent if the output token account doesn't exist yet.
+        const solBal = nonEvmChains.find((c) => c.id === "solana")?.balance ?? 0;
+        if (!fromToken.address) {
+          if (parseFloat(fromAmount) + SOL_FEE_RESERVE > solBal) {
+            throw new Error(
+              `Amount too high: keep at least ${SOL_FEE_RESERVE} SOL for the network fee. ` +
+              `Your balance is ${solBal.toFixed(4)} SOL.`
+            );
+          }
+        } else if (solBal > 0 && solBal < 0.005) {
+          throw new Error(
+            `You need a small SOL balance to swap on Solana (network fee + token-account rent). ` +
+            `You have ${solBal.toFixed(4)} SOL — top up to ~0.01 SOL and try again.`
+          );
+        }
+
         // Jupiter quotes go stale within seconds; a stale quote fails the
         // pre-broadcast simulation (slippage/blockhash). Re-quote now and use
         // the fresh route — but abort if the price dropped more than the
