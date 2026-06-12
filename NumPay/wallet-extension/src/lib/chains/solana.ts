@@ -254,7 +254,11 @@ export async function executeJupiterSwap(
       userPublicKey,
       wrapAndUnwrapSol: true,
       dynamicComputeUnitLimit: true,
-      prioritizationFeeLamports: "auto",
+      // Bounded priority fee (max 0.001 SOL) so the total cost of a swap is
+      // predictable; "auto" could spend an uncapped estimate during congestion.
+      prioritizationFeeLamports: {
+        priorityLevelWithMaxLamports: { maxLamports: 1_000_000, priorityLevel: "veryHigh" },
+      },
     }),
   });
   const swapData = await swapResp.json();
@@ -312,6 +316,29 @@ export async function executeJupiterSwap(
   const sendData = await sendResp.json();
   if (sendData.error) throw new Error(sendData.error.message ?? JSON.stringify(sendData.error));
   return sendData.result as string;
+}
+
+/**
+ * Whether `owner` already has a token account for `mint` (SPL or Token2022).
+ * Used to predict if a swap must pay ~0.002 SOL rent to create one.
+ * Returns null when the check itself fails (caller should not assume either way).
+ */
+export async function hasTokenAccount(owner: string, mint: string): Promise<boolean | null> {
+  try {
+    const resp = await fetch(SOL_RPC, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1,
+        method: "getTokenAccountsByOwner",
+        params: [owner, { mint }, { encoding: "jsonParsed" }],
+      }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data.error) return null;
+    return (data.result?.value?.length ?? 0) > 0;
+  } catch { return null; }
 }
 
 // ---------- balance ----------

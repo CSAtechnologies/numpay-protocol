@@ -7,7 +7,7 @@ import { usdToDisplayCurrency } from "@/lib/currency";
 import { NETWORKS } from "@/lib/networks";
 import { DEFAULT_TOKENS } from "@/lib/tokens";
 import { type NonEvmChain } from "@/lib/chains";
-import { fetchJupiterQuote, executeJupiterSwap, resolveSolanaToken, WSOL_MINT, SOLANA_SWAP_TOKENS } from "@/lib/chains/solana";
+import { fetchJupiterQuote, executeJupiterSwap, resolveSolanaToken, hasTokenAccount, WSOL_MINT, SOLANA_SWAP_TOKENS } from "@/lib/chains/solana";
 import { getSigner } from "@/lib/wallet";
 import { getItem, setItem } from "@/lib/storage";
 import {
@@ -639,21 +639,28 @@ export default function Swap() {
       if (!nonEvmWallet?.solana) { setSwapError("Solana wallet not ready"); return; }
       setSwapping(true); setSwapError(""); setTxHash("");
       try {
-        // Fail fast on the most common Solana swap error (Jupiter 6024
-        // InsufficientFunds): every swap needs SOL for the fee plus ~0.002 SOL
-        // rent if the output token account doesn't exist yet.
+        // Compute what THIS swap actually needs in SOL (Jupiter 6024 fails
+        // otherwise): a bounded fee (base + priority capped at 0.001 SOL),
+        // plus ~0.002 SOL rent per token account that must be created — the
+        // temporary wrapped-SOL account when SOL is on either side (refunded
+        // after the swap), and the output token account if it doesn't exist.
+        const FEE_HEADROOM = 0.0015;
+        const ATA_RENT     = 0.00204;
         const solBal = nonEvmChains.find((c) => c.id === "solana")?.balance ?? 0;
-        if (!fromToken.address) {
-          if (parseFloat(fromAmount) + SOL_FEE_RESERVE > solBal) {
-            throw new Error(
-              `Amount too high: keep at least ${SOL_FEE_RESERVE} SOL for the network fee. ` +
-              `Your balance is ${solBal.toFixed(4)} SOL.`
-            );
-          }
-        } else if (solBal > 0 && solBal < 0.005) {
+        let requiredSol = FEE_HEADROOM;
+        if (!fromToken.address || !toToken.address) requiredSol += ATA_RENT;
+        if (toToken.address) {
+          const exists = await hasTokenAccount(nonEvmWallet.solana.address, toToken.address);
+          if (exists === false) requiredSol += ATA_RENT;
+        }
+        const totalNeeded = (!fromToken.address ? parseFloat(fromAmount) : 0) + requiredSol;
+        // solBal of 0 may just mean the balance fetch failed; in that case let
+        // the pre-broadcast simulation be the judge instead of false-blocking.
+        if (solBal > 0 && totalNeeded > solBal) {
           throw new Error(
-            `You need a small SOL balance to swap on Solana (network fee + token-account rent). ` +
-            `You have ${solBal.toFixed(4)} SOL — top up to ~0.01 SOL and try again.`
+            `This swap needs ~${requiredSol.toFixed(4)} SOL for the network fee and account rent` +
+            (!fromToken.address ? ` on top of the ${fromAmount} SOL being swapped` : "") +
+            `, but the wallet has ${solBal.toFixed(4)} SOL. Lower the amount or add a little SOL.`
           );
         }
 
