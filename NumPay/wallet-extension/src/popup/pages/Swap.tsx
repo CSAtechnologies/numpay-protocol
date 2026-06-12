@@ -18,7 +18,7 @@ import Layout from "../components/Layout";
 import {
   SwapIcon, ChevronDownIcon, SettingsIcon, TokenIcon, ChainIcon,
   SearchIcon, ArrowLeftIcon, AlertIcon, ExternalLinkIcon, RefreshIcon, CheckIcon,
-  LayersIcon,
+  LayersIcon, ShieldIcon,
 } from "../components/Icons";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -267,6 +267,130 @@ async function fetchKyberQuote(chainId: number, from: SwapToken, to: SwapToken, 
       routeSummary: rs, kyberRouterAddress: data.data.routerAddress,
     };
   } catch { return null; }
+}
+
+// ── Error card ────────────────────────────────────────────────────────────────
+
+interface ParsedSwapError {
+  title: string;
+  body: string;
+  hint?: string;
+  // Required vs available SOL, when the message carries exact figures.
+  figures?: { required: string; available: string };
+  preSend: boolean; // true when we know nothing left the wallet
+}
+
+// Map raw error strings from the swap/bridge paths to a titled, actionable
+// card. Unrecognized messages fall through to a generic "Swap Failed".
+function parseSwapError(msg: string): ParsedSwapError {
+  const solFigures = msg.match(/needs ~?([\d.]+) SOL[\s\S]*?has ([\d.]+) SOL/i);
+  if (solFigures || /not enough sol|keep at least .* sol/i.test(msg)) {
+    return {
+      title: "Not Enough SOL for Fees",
+      body: "Every Solana swap needs a little SOL on top of the amount: the network fee, plus rent when a token account has to be created.",
+      hint: "Top up a little SOL or lower the swap amount, then try again.",
+      figures: solFigures ? { required: solFigures[1], available: solFigures[2] } : undefined,
+      preSend: true,
+    };
+  }
+  if (/insufficient funds|insufficient balance/i.test(msg)) {
+    return {
+      title: "Insufficient Balance",
+      body: msg,
+      hint: "Fees and rent count against your balance too — lower the amount slightly.",
+      preSend: true,
+    };
+  }
+  if (/price moved|slippage/i.test(msg)) {
+    return {
+      title: "Price Moved",
+      body: msg,
+      hint: "Markets move fast. Review the refreshed rate and confirm again.",
+      preSend: true,
+    };
+  }
+  if (/quote expired|blockhash/i.test(msg)) {
+    return {
+      title: "Quote Expired",
+      body: msg,
+      hint: "Re-enter the amount to fetch a fresh quote.",
+      preSend: true,
+    };
+  }
+  if (/simulation failed/i.test(msg)) {
+    return {
+      title: "Transaction Blocked",
+      body: msg,
+      hint: "The pre-flight check stops anything that would fail on-chain before it can cost you fees.",
+      preSend: true,
+    };
+  }
+  if (/no .*routes? found|no jupiter route|bridge not supported/i.test(msg)) {
+    return {
+      title: "No Route Found",
+      body: msg,
+      hint: "Try a different amount, token pair, or chain.",
+      preSend: true,
+    };
+  }
+  if (/blocked for safety/i.test(msg)) {
+    return {
+      title: "Blocked for Safety",
+      body: msg,
+      hint: "The aggregator response failed a local security check, so it was never signed.",
+      preSend: true,
+    };
+  }
+  return { title: "Swap Failed", body: msg, preSend: false };
+}
+
+function SwapErrorCard({ message, tone }: { message: string; tone: "danger" | "amber" }) {
+  const e = parseSwapError(message);
+  const color = tone === "danger" ? "var(--danger)" : "var(--amber)";
+  const iconBg = tone === "danger" ? "rgba(239,68,68,0.12)" : "rgba(245,158,11,0.12)";
+  return (
+    <div className="premium-card overflow-hidden mb-4 animate-slide-up">
+      <div className="h-[2px] w-full" style={{ background: `linear-gradient(90deg, transparent, ${color}, transparent)`, opacity: 0.7 }} />
+      <div className="p-3.5">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: iconBg }}>
+            <AlertIcon size={16} style={{ color }} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[13px] font-bold mb-0.5" style={{ color }}>{e.title}</p>
+            <p className="text-[11px] text-text-secondary leading-relaxed break-words">{e.body}</p>
+          </div>
+        </div>
+        {e.figures && (
+          <div className="flex gap-2 mt-3">
+            <div className="flex-1 rounded-xl bg-surface-2 px-3 py-2">
+              <p className="text-[9px] uppercase tracking-wider text-muted mb-0.5">Required</p>
+              <p className="text-[13px] font-bold text-text-primary tabular-nums">
+                ~{e.figures.required} <span className="text-[10px] text-muted font-semibold">SOL</span>
+              </p>
+            </div>
+            <div className="flex-1 rounded-xl bg-surface-2 px-3 py-2">
+              <p className="text-[9px] uppercase tracking-wider text-muted mb-0.5">Available</p>
+              <p className="text-[13px] font-bold tabular-nums" style={{ color }}>
+                {e.figures.available} <span className="text-[10px] text-muted font-semibold">SOL</span>
+              </p>
+            </div>
+          </div>
+        )}
+        {e.hint && (
+          <div className="mt-3 px-3 py-2 rounded-xl bg-surface-1 border border-border">
+            <p className="text-[10.5px] text-muted leading-relaxed">{e.hint}</p>
+          </div>
+        )}
+        {e.preSend && (
+          <div className="flex items-center gap-1.5 mt-3">
+            <ShieldIcon size={11} className="text-accent-green flex-shrink-0" />
+            <p className="text-[10px] text-accent-green font-medium">Nothing was sent — your funds are safe.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -1263,20 +1387,10 @@ export default function Swap() {
           )}
 
           {/* Route error */}
-          {routeError && !isLoading && (
-            <div className="flex items-center gap-2 mb-4 px-3 py-2.5 rounded-xl bg-amber/5 border border-amber/20">
-              <AlertIcon size={13} style={{ color: "var(--amber)" }} className="flex-shrink-0" />
-              <p className="text-[11px]" style={{ color: "var(--amber)" }}>{routeError}</p>
-            </div>
-          )}
+          {routeError && !isLoading && <SwapErrorCard message={routeError} tone="amber" />}
 
           {/* Execution error */}
-          {activeExecErr && activeExecErr !== routeError && (
-            <div className="flex items-center gap-2 mb-4 px-3 py-2.5 rounded-xl bg-danger/5 border border-danger/20">
-              <AlertIcon size={13} className="flex-shrink-0" style={{ color: "var(--danger)" }} />
-              <p className="text-[11px]" style={{ color: "var(--danger)" }}>{activeExecErr}</p>
-            </div>
-          )}
+          {activeExecErr && activeExecErr !== routeError && <SwapErrorCard message={activeExecErr} tone="danger" />}
 
           {/* Success */}
           {activeTxHash && (
