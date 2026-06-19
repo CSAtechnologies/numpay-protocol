@@ -1,13 +1,16 @@
 import { useNavigate, useLocation } from "react-router-dom";
-import { WalletIcon, SendIcon, ReceiveIcon, HashIcon, SettingsIcon, ArrowLeftIcon, ActivityIcon } from "./Icons";
+import {
+  NavWalletIcon, NavSendIcon, NavReceiveIcon, NavBpanIcon,
+  NavActivityIcon, NavSettingsIcon, ArrowLeftIcon,
+} from "./Icons";
 
 const NAV_ITEMS = [
-  { path: "/", label: "Wallet", Icon: WalletIcon },
-  { path: "/send", label: "Send", Icon: SendIcon },
-  { path: "/receive", label: "Receive", Icon: ReceiveIcon },
-  { path: "/bpan", label: "BPAN", Icon: HashIcon },
-  { path: "/history", label: "Activity", Icon: ActivityIcon },
-  { path: "/settings", label: "Settings", Icon: SettingsIcon },
+  { path: "/", label: "Wallet", Icon: NavWalletIcon },
+  { path: "/send", label: "Send", Icon: NavSendIcon },
+  { path: "/receive", label: "Receive", Icon: NavReceiveIcon },
+  { path: "/bpan", label: "BPAN", Icon: NavBpanIcon },
+  { path: "/history", label: "Activity", Icon: NavActivityIcon },
+  { path: "/settings", label: "Settings", Icon: NavSettingsIcon },
 ];
 
 interface LayoutProps {
@@ -73,7 +76,7 @@ export default function Layout({ children, title, showBack, showNav = true }: La
                     }}
                   />
                 )}
-                <item.Icon size={17} className="relative z-10" />
+                <item.Icon size={17} active={active} className="relative z-10" />
                 <span
                   className="relative z-10 font-semibold tracking-wider"
                   style={{ fontSize: 9, letterSpacing: "0.06em" }}

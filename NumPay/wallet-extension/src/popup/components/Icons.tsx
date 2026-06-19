@@ -231,6 +231,86 @@ export function AlertIcon({ size = 20, className, style }: IconProps) {
   );
 }
 
+// ── Nav icons — custom duotone set (NumPay Nav Icons design handoff) ──────────
+// Heavier 1.9 strokes on a 24px grid. Each glyph carries an inner fill that
+// fades up to 16% on the active tab; inactive tabs render as a clean line.
+// BPAN / Send / Activity come from the handoff; Wallet / Receive / Settings are
+// drawn in the same language for the tabs the prototype's 5-tab nav didn't have.
+
+interface NavIconProps extends IconProps {
+  active?: boolean;
+}
+
+const navFill = (active?: boolean): React.CSSProperties => ({
+  opacity: active ? 0.16 : 0,
+  transition: "opacity .2s ease",
+});
+
+export function NavWalletIcon({ size = 20, className, active }: NavIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="3" y="6.2" width="18" height="13.2" rx="3.6" fill="currentColor" stroke="none" style={navFill(active)} />
+      <rect x="3" y="6.2" width="18" height="13.2" rx="3.6" />
+      <path d="M21 11h-3.4a1.9 1.9 0 0 0 0 3.8H21" />
+    </svg>
+  );
+}
+
+export function NavSendIcon({ size = 20, className, active }: NavIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M21 3 15 21l-3.6-7.4L3.6 9.9Z" fill="currentColor" stroke="none" style={navFill(active)} />
+      <path d="M21 3 3.6 9.9l7.8 3.7L15 21Z" />
+      <path d="M21 3l-9.6 10.6" />
+    </svg>
+  );
+}
+
+export function NavReceiveIcon({ size = 20, className, active }: NavIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M3.6 14v3.2a3.2 3.2 0 0 0 3.2 3.2h10.4a3.2 3.2 0 0 0 3.2-3.2V14Z" fill="currentColor" stroke="none" style={navFill(active)} />
+      <path d="M12 3.6v9.8" />
+      <path d="m8.1 9.7 3.9 3.9 3.9-3.9" />
+      <path d="M3.6 14v3.2a3.2 3.2 0 0 0 3.2 3.2h10.4a3.2 3.2 0 0 0 3.2-3.2V14" />
+    </svg>
+  );
+}
+
+export function NavBpanIcon({ size = 20, className, active }: NavIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="3" y="4.6" width="18" height="14.8" rx="4.4" fill="currentColor" stroke="none" style={navFill(active)} />
+      <rect x="3" y="4.6" width="18" height="14.8" rx="4.4" />
+      <path d="M10.4 8.7 9 15.3" />
+      <path d="M15.2 8.7 13.8 15.3" />
+      <path d="M8.2 11.1h7.6" />
+      <path d="M7.8 13.4h7.6" />
+    </svg>
+  );
+}
+
+export function NavActivityIcon({ size = 20, className, active }: NavIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M2.6 12.6H6l2.6-6.2 3.4 11.2 2.6-7.8 1.4 2.8h3.4V20.5H2.6Z" fill="currentColor" stroke="none" style={navFill(active)} />
+      <path d="M2.6 12.6H6l2.6-6.2 3.4 11.2 2.6-7.8 1.4 2.8h3.4" />
+    </svg>
+  );
+}
+
+const GEAR_D = "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z";
+
+export function NavSettingsIcon({ size = 20, className, active }: NavIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d={GEAR_D} fill="currentColor" stroke="none" style={navFill(active)} />
+      <path d={GEAR_D} />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
 // ── Real-logo resolution (symbol-keyed) + house framing ───────────────────────
 // Port of design_handoff_icons (icon-render.js). PRIMARY art is each asset's own
 // brand logo, keyed by SYMBOL (never by contract address): one canonical icon per
