@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { ethers } from "ethers";
-import { type WalletData, type VaultMeta, listVaultMeta, getActiveId, setActiveId, updateWalletAvatar, touchActivity, SESSION_KEY } from "@/lib/wallet";
+import { type WalletData, type VaultMeta, listVaultMeta, getActiveId, setActiveId, updateWalletAvatar, touchActivity, unlockActiveVault, SESSION_KEY } from "@/lib/wallet";
 import { getItem, setItem, getSession, setSession } from "@/lib/storage";
 import { NETWORKS, DEFAULT_NETWORK, type Network } from "@/lib/networks";
 import { DEFAULT_TOKENS, getTokenBalance, type Token } from "@/lib/tokens";
@@ -58,7 +58,7 @@ export interface WalletState {
   nonEvmLoading: boolean;
   walletMetas: VaultMeta[];
   activeWalletId: string;
-  switchActiveWallet: (id: string) => Promise<void>;
+  switchActiveWallet: (id: string, password: string) => Promise<void>;
   addWalletToSession: (wallet: WalletData, id: string, meta: VaultMeta) => Promise<void>;
   removeWalletMeta: (id: string) => void;
   setWalletAvatar: (id: string, avatar: string) => Promise<void>;
@@ -489,45 +489,38 @@ export function useWallet(): WalletState {
     return "";
   }, [activeChainId, wallet, nonEvmWallet, customChains]);
 
-  const switchActiveWallet = useCallback(async (id: string) => {
-    const raw = await getSession(SESSION_KEY);
-    if (!raw) return;
-    try {
-      const session: WalletSession = JSON.parse(raw);
-      const walletData = session.wallets?.[id];
-      if (!walletData) return;
+  // Switching wallets decrypts the target vault on demand, because only the
+  // active wallet's keys are kept in session at a time (decrypt-only-active).
+  // The caller must supply the password; an incorrect one throws so the UI can
+  // surface it. On success the session is replaced so it holds ONLY the new
+  // active wallet.
+  const switchActiveWallet = useCallback(async (id: string, password: string) => {
+    if (id === activeWalletId) return;
+    const { wallet: walletData } = await unlockActiveVault(password, id);
 
-      session.activeId = id;
-      await setSession(SESSION_KEY, JSON.stringify(session));
-      await setActiveId(id);
-
-      setWallet(walletData);
-      setActiveWalletId(id);
-      setBalance("0");
-      setTokens([]);
-      setTokensByChain({});
-      setChainBalances([]);
-      setNonEvmWallet(null);
-      setNonEvmChains([]);
-    } catch {}
-  }, []);
-
-  const addWalletToSession = useCallback(async (walletData: WalletData, id: string, meta: VaultMeta) => {
-    const raw = await getSession(SESSION_KEY);
-    let session: WalletSession = { activeId: id, wallets: {} };
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw);
-        if (parsed && parsed.activeId && typeof parsed.wallets === "object") {
-          session = parsed;
-        }
-      } catch {}
-    }
-    if (!session.wallets || typeof session.wallets !== "object") session.wallets = {};
-    session.wallets[id] = walletData;
-    session.activeId = id;
+    const session: WalletSession = { activeId: id, wallets: { [id]: walletData } };
     await setSession(SESSION_KEY, JSON.stringify(session));
     await setActiveId(id);
+    await touchActivity();
+
+    setWallet(walletData);
+    setActiveWalletId(id);
+    setBalance("0");
+    setTokens([]);
+    setTokensByChain({});
+    setChainBalances([]);
+    setNonEvmWallet(null);
+    setNonEvmChains([]);
+  }, [activeWalletId]);
+
+  // Adding a freshly created/imported wallet makes it active. We already hold
+  // its plaintext, so no decrypt is needed; the session is replaced to hold
+  // ONLY the new active wallet (decrypt-only-active).
+  const addWalletToSession = useCallback(async (walletData: WalletData, id: string, meta: VaultMeta) => {
+    const session: WalletSession = { activeId: id, wallets: { [id]: walletData } };
+    await setSession(SESSION_KEY, JSON.stringify(session));
+    await setActiveId(id);
+    await touchActivity();
 
     setWallet(walletData);
     setActiveWalletId(id);
@@ -557,16 +550,6 @@ export function useWallet(): WalletState {
     walletMetas, activeWalletId, switchActiveWallet, addWalletToSession, removeWalletMeta,
     setWalletAvatar, customChains,
   };
-}
-
-export async function cacheAllWalletSessions(
-  wallets: Array<{ id: string; wallet: WalletData }>,
-  activeId: string
-): Promise<void> {
-  const session: WalletSession = { activeId, wallets: {} };
-  for (const { id, wallet } of wallets) session.wallets[id] = wallet;
-  await setSession(SESSION_KEY, JSON.stringify(session));
-  await touchActivity();
 }
 
 export async function cacheWalletSession(wallet: WalletData, id: string): Promise<void> {

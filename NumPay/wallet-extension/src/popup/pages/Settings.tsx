@@ -2,15 +2,16 @@ import { useState } from "react";
 import {
   lockWallet, deleteWallet, deleteOneWallet,
   addEncryptedWallet, createWallet, importFromMnemonic, importFromPrivateKey,
-  getActiveId, decryptVault, type VaultMeta,
+  decryptVault, type VaultMeta,
 } from "@/lib/wallet";
 import { CURRENCIES } from "@/lib/currency";
 import { useWallet } from "../hooks/useWallet";
 import { useCurrency } from "../hooks/useCurrency";
 import { useTheme } from "../hooks/useTheme";
-import { removeItem, getSession, setSession, removeSession } from "@/lib/storage";
+import { removeItem, removeSession } from "@/lib/storage";
 import { SESSION_KEY } from "@/lib/wallet";
 import Layout from "../components/Layout";
+import PasswordPrompt from "../components/PasswordPrompt";
 import { LockIcon, CopyIcon, CheckIcon, ShieldIcon, SearchIcon, ChevronDownIcon, SunIcon, MoonIcon } from "../components/Icons";
 
 interface Props {
@@ -29,6 +30,7 @@ export default function Settings({ onLock, onReset }: Props) {
   const [revealPw, setRevealPw] = useState("");
   const [revealErr, setRevealErr] = useState("");
   const [revealLoading, setRevealLoading] = useState(false);
+  const [pendingSwitchId, setPendingSwitchId] = useState<string | null>(null);
 
   const AUTO_HIDE_MS = 30_000;
 
@@ -119,7 +121,8 @@ export default function Settings({ onLock, onReset }: Props) {
   }
 
   async function handleRemoveWallet(id: string) {
-    const remaining = await deleteOneWallet(id);
+    const wasActive = id === activeWalletId;
+    const remaining = await deleteOneWallet(id); // also re-points activeId in storage if needed
 
     if (remaining === 0) {
       await removeSession(SESSION_KEY);
@@ -128,27 +131,17 @@ export default function Settings({ onLock, onReset }: Props) {
       return;
     }
 
-    // Remove from session
-    const raw = await getSession(SESSION_KEY);
-    if (raw) {
-      try {
-        const session = JSON.parse(raw);
-        delete session.wallets[id];
-        if (session.activeId === id) {
-          const newId = await getActiveId();
-          session.activeId = newId ?? Object.keys(session.wallets)[0];
-        }
-        await setSession(SESSION_KEY, JSON.stringify(session));
-      } catch {}
-    }
-
     removeWalletMeta(id);
     setConfirmRemoveId(null);
 
-    if (id === activeWalletId) {
-      const newId = await getActiveId();
-      if (newId) await switchActiveWallet(newId);
+    if (wasActive) {
+      // The removed wallet was the active one, so its keys were the only ones in
+      // session (decrypt-only-active). Lock and reload so the newly active wallet
+      // is unlocked fresh with the password rather than left without key material.
+      await lockWallet();
+      window.location.reload();
     }
+    // Removing a non-active wallet leaves the session (active wallet) untouched.
   }
 
   async function copyText(text: string, label: string) {
@@ -304,7 +297,7 @@ export default function Settings({ onLock, onReset }: Props) {
                     <span className="text-[10px] text-brand-400 font-medium">Active</span>
                   ) : (
                     <button
-                      onClick={() => switchActiveWallet(meta.id)}
+                      onClick={() => setPendingSwitchId(meta.id)}
                       className="text-[11px] text-brand-400 hover:text-brand-300 font-medium px-2 py-1 rounded-lg hover:bg-brand-500/10 transition-colors"
                     >
                       Switch
@@ -529,6 +522,20 @@ export default function Settings({ onLock, onReset }: Props) {
         <p className="text-center text-[10px] text-muted/40 mt-6">NumPay v0.1.0</p>
       </div>
       </div>
+
+      {/* Switching wallets re-prompts for the password (decrypt-only-active) */}
+      {pendingSwitchId && (
+        <PasswordPrompt
+          title="Switch wallet"
+          subtitle="Enter your password to unlock this wallet."
+          actionLabel="Switch"
+          onCancel={() => setPendingSwitchId(null)}
+          onSubmit={async (password) => {
+            await switchActiveWallet(pendingSwitchId, password);
+            setPendingSwitchId(null);
+          }}
+        />
+      )}
     </Layout>
   );
 }

@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { decryptAllVaults, getActiveId } from "@/lib/wallet";
-import { cacheAllWalletSessions } from "../hooks/useWallet";
+import { unlockActiveVault } from "@/lib/wallet";
+import { cacheWalletSession } from "../hooks/useWallet";
 
 interface Props {
   onUnlock: () => void;
@@ -16,13 +16,13 @@ export default function Unlock({ onUnlock }: Props) {
     setLoading(true);
     setError("");
     try {
-      const all = await decryptAllVaults(password);
-      const savedId = await getActiveId();
-      const activeId = all.find((w) => w.id === savedId)?.id ?? all[0].id;
-      await cacheAllWalletSessions(all, activeId);
+      // Decrypt only the active wallet so just one wallet's keys live in
+      // session at a time; other wallets are decrypted on demand when switched.
+      const { id, wallet } = await unlockActiveVault(password);
+      await cacheWalletSession(wallet, id);
       onUnlock();
     } catch {
-      setError("Incorrect password — try again");
+      setError("Incorrect password, try again");
     } finally {
       setLoading(false);
     }

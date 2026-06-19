@@ -75,6 +75,7 @@ function nativeSymbolFor(
 import { useWallet } from "../hooks/useWallet";
 import { useCurrency } from "../hooks/useCurrency";
 import Layout from "../components/Layout";
+import PasswordPrompt from "../components/PasswordPrompt";
 import {
   LockIcon, CopyIcon, ReceiveIcon, RefreshIcon,
   ChevronDownIcon, ChevronRightIcon, ArrowUpRightIcon, ChainIcon, CheckIcon, TokenIcon,
@@ -148,6 +149,7 @@ export default function Dashboard({ onLock }: Props) {
   const activeChainName = activeEvmNetwork ? activeEvmNetwork.name : (activeNonEvmChain?.name ?? "Unknown");
   const activeChainLogo = activeEvmNetwork ? activeEvmNetwork.logo : (activeNonEvmChain?.logo ?? "");
   const [showWallets, setShowWallets] = useState(false);
+  const [pendingSwitchId, setPendingSwitchId] = useState<string | null>(null);
   const [copied, setCopied] = useState("");
   const [bpan, setBpan] = useState<string | null>(null);
   const [showDust, setShowDust] = useState(false);
@@ -460,9 +462,13 @@ export default function Dashboard({ onLock }: Props) {
                   </span>
                 </button>
 
-                {/* Wallet name + address — click to switch */}
+                {/* Wallet name + address — click to switch (prompts for password) */}
                 <button
-                  onClick={() => { switchActiveWallet(meta.id); setShowWallets(false); }}
+                  onClick={() => {
+                    if (meta.id === activeWalletId) { setShowWallets(false); return; }
+                    setPendingSwitchId(meta.id);
+                    setShowWallets(false);
+                  }}
                   className={`flex-1 flex items-center gap-2 px-2 py-2.5 text-[13px] hover:bg-surface-3 transition-colors ${
                     meta.id === activeWalletId ? "text-brand-400" : "text-text-primary"
                   }`}
@@ -491,6 +497,20 @@ export default function Dashboard({ onLock }: Props) {
               </button>
             </div>
           </div>
+        )}
+
+        {/* Switching wallets re-prompts for the password (decrypt-only-active) */}
+        {pendingSwitchId && (
+          <PasswordPrompt
+            title="Switch wallet"
+            subtitle="Enter your password to unlock this wallet."
+            actionLabel="Switch"
+            onCancel={() => setPendingSwitchId(null)}
+            onSubmit={async (password) => {
+              await switchActiveWallet(pendingSwitchId, password);
+              setPendingSwitchId(null);
+            }}
+          />
         )}
 
         {/* Emoji picker (replaces wallet list when open) */}

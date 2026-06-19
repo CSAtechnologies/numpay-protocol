@@ -231,7 +231,48 @@ export async function decryptVault(password: string, id?: string): Promise<Walle
   return JSON.parse(plain);
 }
 
-// Decrypt every wallet at once (used during unlock). Back-fills missing addresses.
+// Decrypt ONLY the active wallet (or `id` if given) and return it. This is the
+// unlock/switch path: it keeps the blast radius to a single wallet's keys in
+// session at a time, instead of decrypting every vault on unlock. Performs the
+// transparent Argon2id KDF upgrade for the one vault it touches, lazily so
+// legacy PBKDF2 vaults are upgraded when they next become active.
+export async function unlockActiveVault(
+  password: string,
+  id?: string
+): Promise<{ id: string; name: string; wallet: WalletData }> {
+  const list = await loadVaultList();
+  if (list.wallets.length === 0) throw new Error("No wallet found");
+
+  const targetId = id ?? (await getActiveId());
+  const entry = list.wallets.find((w) => w.id === targetId) ?? list.wallets[0];
+
+  let plain: string;
+  try {
+    plain = await decryptData(entry, password);
+  } catch {
+    throw new Error("Incorrect password");
+  }
+  const wallet = JSON.parse(plain) as WalletData;
+  if (!entry.address) entry.address = wallet.address;
+
+  // Transparent KDF upgrade for this vault now that we hold plaintext + password.
+  if (entry.kdf !== KDF_ARGON2ID) {
+    const reEnc = await encryptData(plain, password);
+    entry.salt = reEnc.salt;
+    entry.iv = reEnc.iv;
+    entry.data = reEnc.data;
+    entry.kdf = reEnc.kdf;
+    entry.argon = reEnc.argon;
+    delete entry.iter;
+  }
+
+  await saveVaultList(list);
+  return { id: entry.id, name: entry.name, wallet };
+}
+
+// Decrypt every wallet at once. Back-fills missing addresses. Retained for
+// callers that genuinely need all vaults; the unlock/switch path uses
+// unlockActiveVault to keep only one wallet's keys in session at a time.
 // The active vault MUST decrypt or an error is thrown. Other vaults that fail
 // (e.g. added with a different password by mistake) are silently skipped.
 export async function decryptAllVaults(
