@@ -11,6 +11,21 @@ export const BPAN_MAINNET_CONTRACT = "0xdB5206e06a7509b9181F0594752CD42cbD7eD371
 export const BPAN_SEPOLIA_CONTRACT  = "0xF2C65Bc0e54b5694c13d7c5E5Accf6DD93d7267a"; // V2
 export const BPAN_MAINNET_RPC      = `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
 
+// Independent Ethereum-mainnet read endpoints used to cross-check a BPAN
+// resolution before it becomes a payment destination (TRUST-1). A single
+// compromised or malicious RPC must not be able to silently redirect funds, so
+// a funds-determining mapping is only trusted at "high" confidence when at
+// least two of these independent providers return the same address. The primary
+// is the configured Alchemy endpoint; the others are public full nodes verified
+// to serve the `finalized` block tag from an extension origin (eth.drpc.org is
+// covered by the existing *.drpc.org host permission; rpc.flashbots.net is
+// added explicitly to the manifest).
+export const BPAN_MAINNET_READ_RPCS: string[] = [
+  BPAN_MAINNET_RPC,
+  "https://eth.drpc.org",
+  "https://rpc.flashbots.net",
+];
+
 export interface Network {
   id: string;
   name: string;

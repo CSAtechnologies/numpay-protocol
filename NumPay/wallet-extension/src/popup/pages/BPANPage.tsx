@@ -6,6 +6,7 @@ import {
   getBPANContract, isValidBPAN, formatBPAN,
   getAllBPANMappings, isBPANRegistered, getBPANOwner,
   registerBPAN, setWalletMapping, findOwnedBPANs, getOwnedBPANCount,
+  type BPANReadTarget,
 } from "@/lib/bpan";
 import {
   BPAN_MAINNET_CONTRACT, BPAN_SEPOLIA_CONTRACT,
@@ -53,11 +54,31 @@ async function copyText(text: string) {
   }
 }
 
+// BPAN is a mainnet product. Sepolia is exposed only in dev builds so the team
+// can exercise register/map flows against the testnet deployment; production
+// users only ever operate on mainnet (CONTRACT-8). This keeps the read path and
+// the write path on the SAME contract instead of writing to Sepolia while every
+// read (and the live Send funds path) hits mainnet.
+const BPAN_TESTNET_ENABLED = import.meta.env.DEV;
+
+function canWriteBPAN(networkId: string): boolean {
+  return networkId === "ethereum" || (networkId === "sepolia" && BPAN_TESTNET_ENABLED);
+}
+
+// Read the same deployment the page is writing to. Mainnet by default; the
+// Sepolia contract only in dev builds, so production reads are always mainnet.
+function getReadTarget(networkId: string): BPANReadTarget | undefined {
+  if (networkId === "sepolia" && BPAN_TESTNET_ENABLED) {
+    return { contract: BPAN_SEPOLIA_CONTRACT, rpc: NETWORKS.sepolia.rpcUrl };
+  }
+  return undefined;
+}
+
 function getContractAddress(networkId: string): string {
-  return networkId === "sepolia" ? BPAN_SEPOLIA_CONTRACT : BPAN_MAINNET_CONTRACT;
+  return networkId === "sepolia" && BPAN_TESTNET_ENABLED ? BPAN_SEPOLIA_CONTRACT : BPAN_MAINNET_CONTRACT;
 }
 function getContractRPC(networkId: string): string {
-  return networkId === "sepolia" ? NETWORKS.sepolia.rpcUrl : BPAN_MAINNET_RPC;
+  return networkId === "sepolia" && BPAN_TESTNET_ENABLED ? NETWORKS.sepolia.rpcUrl : BPAN_MAINNET_RPC;
 }
 
 // ── Main page ──────────────────────────────────────────────────────────────────
@@ -70,9 +91,11 @@ export default function BPANPage() {
   const [ownershipLoading, setOwnershipLoading] = useState(false);
   const [ownershipScanned, setOwnershipScanned] = useState(false);
 
-  const isOnEthereum = network.id === "ethereum" || network.id === "sepolia";
+  const isOnEthereum = canWriteBPAN(network.id);
+  const isTestnet = network.id === "sepolia" && BPAN_TESTNET_ENABLED;
   const contractAddr = getContractAddress(network.id);
   const contractRPC  = getContractRPC(network.id);
+  const readTarget = getReadTarget(network.id);
 
   // Reset and reload from address-specific cache when active wallet changes.
   // Delete the old address-less "bpan_numbers" key if it still exists — we
@@ -91,13 +114,13 @@ export default function BPANPage() {
 
     (async () => {
       // Fast check first: does this wallet own any BPANs at all?
-      const count = await getOwnedBPANCount(wallet.address);
+      const count = await getOwnedBPANCount(wallet.address, readTarget);
       if (count === 0) return;
 
       // Count > 0 → do the full scan to get token IDs
       setOwnershipLoading(true);
       try {
-        const found = await findOwnedBPANs(wallet.address);
+        const found = await findOwnedBPANs(wallet.address, readTarget);
         if (found.length > 0) {
           const saved = getSavedBPANs(wallet.address);
           const merged = Array.from(new Set([...found, ...saved]));
@@ -143,6 +166,11 @@ export default function BPANPage() {
                 LIVE
               </span>
             )}
+            {isTestnet && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber/10 font-semibold border border-amber/20" style={{ color: "var(--amber)" }}>
+                TESTNET
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1.5 mb-4">
             <GlobeIcon size={11} className="text-muted" />
@@ -156,7 +184,7 @@ export default function BPANPage() {
             <div className="mb-4 px-3 py-2.5 rounded-xl bg-amber/5 border border-amber/20 flex items-start gap-2 animate-fade-in">
               <AlertIcon size={13} className="text-amber mt-0.5 flex-shrink-0" style={{ color: "var(--amber)" }} />
               <p className="text-[11px] leading-relaxed" style={{ color: "var(--amber)" }}>
-                Switch to <strong>Ethereum</strong> or <strong>Sepolia</strong> to register or set mappings. Lookups work on any network.
+                Switch to <strong>Ethereum mainnet</strong>{BPAN_TESTNET_ENABLED ? " or Sepolia" : ""} to register or set mappings. Lookups work on any network.
               </p>
             </div>
           )}
@@ -184,6 +212,7 @@ export default function BPANPage() {
                 wallet={wallet}
                 ownedBPANs={ownedBPANs}
                 loading={ownershipLoading}
+                readTarget={readTarget}
                 onRemove={handleRemoved}
                 onGoRegister={() => setTab("register")}
                 onGoMapping={() => setTab("mapping")}
@@ -196,6 +225,7 @@ export default function BPANPage() {
                 contractAddr={contractAddr}
                 contractRPC={contractRPC}
                 ownedBPANs={ownedBPANs}
+                readTarget={readTarget}
                 onRegistered={handleRegistered}
                 onGoMapping={() => setTab("mapping")}
               />
@@ -208,9 +238,10 @@ export default function BPANPage() {
                 contractRPC={contractRPC}
                 ownedBPANs={ownedBPANs}
                 nonEvmWallet={nonEvmWallet}
+                readTarget={readTarget}
               />
             )}
-            {tab === "lookup" && <LookupSection />}
+            {tab === "lookup" && <LookupSection readTarget={readTarget} />}
           </div>
         </div>
       </div>
@@ -220,11 +251,12 @@ export default function BPANPage() {
 
 // ── My BPAN ───────────────────────────────────────────────────────────────────
 function MyBPANSection({
-  wallet, ownedBPANs, loading, onRemove, onGoRegister, onGoMapping,
+  wallet, ownedBPANs, loading, readTarget, onRemove, onGoRegister, onGoMapping,
 }: {
   wallet: any;
   ownedBPANs: string[];
   loading: boolean;
+  readTarget?: BPANReadTarget;
   onRemove: (n: string) => void;
   onGoRegister: () => void;
   onGoMapping: () => void;
@@ -266,6 +298,7 @@ function MyBPANSection({
           key={num}
           number={num}
           walletAddress={wallet?.address}
+          readTarget={readTarget}
           onRemove={() => onRemove(num)}
           onGoMapping={onGoMapping}
         />
@@ -275,10 +308,11 @@ function MyBPANSection({
 }
 
 function BPANCard({
-  number, walletAddress, onRemove, onGoMapping,
+  number, walletAddress, readTarget, onRemove, onGoMapping,
 }: {
   number: string;
   walletAddress?: string;
+  readTarget?: BPANReadTarget;
   onRemove: () => void;
   onGoMapping: () => void;
 }) {
@@ -296,8 +330,8 @@ function BPANCard({
     setLoadingDetail(true);
     try {
       const [m, o] = await Promise.all([
-        getAllBPANMappings(number),
-        getBPANOwner(number),
+        getAllBPANMappings(number, readTarget),
+        getBPANOwner(number, readTarget),
       ]);
       setMappings(m);
       setOwner(o);
@@ -383,13 +417,14 @@ function BPANCard({
 
 // ── Register ──────────────────────────────────────────────────────────────────
 function RegisterSection({
-  wallet, network, contractAddr, contractRPC, ownedBPANs, onRegistered, onGoMapping,
+  wallet, network, contractAddr, contractRPC, ownedBPANs, readTarget, onRegistered, onGoMapping,
 }: {
   wallet: any;
   network: any;
   contractAddr: string;
   contractRPC: string;
   ownedBPANs: string[];
+  readTarget?: BPANReadTarget;
   onRegistered: (n: string) => void;
   onGoMapping: () => void;
 }) {
@@ -401,7 +436,7 @@ function RegisterSection({
   const [error, setError] = useState("");
   const [fee, setFee] = useState<string | null>(null);
 
-  const isOnEthereum = network.id === "ethereum" || network.id === "sepolia";
+  const isOnEthereum = canWriteBPAN(network.id);
   const alreadyOwns = ownedBPANs.length > 0;
 
   useEffect(() => {
@@ -468,7 +503,7 @@ function RegisterSection({
     if (!isValidBPAN(number)) { setError("Enter a valid 11-digit number"); return; }
     setError(""); setAvailable(null); setChecking(true);
     try {
-      const registered = await isBPANRegistered(number);
+      const registered = await isBPANRegistered(number, readTarget);
       setAvailable(!registered);
     } catch {
       setError("Check failed. Verify your connection.");
@@ -575,7 +610,7 @@ function autoNonEvmAddress(chainId: string, nonEvmWallet: NonEvmWallet | null): 
 }
 
 function MappingSection({
-  wallet, network, contractAddr, contractRPC, ownedBPANs, nonEvmWallet,
+  wallet, network, contractAddr, contractRPC, ownedBPANs, nonEvmWallet, readTarget,
 }: {
   wallet: any;
   network: any;
@@ -583,6 +618,7 @@ function MappingSection({
   contractRPC: string;
   ownedBPANs: string[];
   nonEvmWallet: NonEvmWallet | null;
+  readTarget?: BPANReadTarget;
 }) {
   const defaultBPAN = ownedBPANs[0] || "";
   const [number, setNumber] = useState(defaultBPAN);
@@ -624,7 +660,7 @@ function MappingSection({
     if (ownedBPANs.length > 0 && !number) setNumber(ownedBPANs[0]);
   }, [ownedBPANs]);
 
-  const isOnEthereum = network.id === "ethereum" || network.id === "sepolia";
+  const isOnEthereum = canWriteBPAN(network.id);
 
   const filteredChains = BPAN_CHAINS.filter((c) => {
     const q = chainSearch.toLowerCase();
@@ -906,7 +942,7 @@ function MappingSection({
 }
 
 // ── Lookup ────────────────────────────────────────────────────────────────────
-function LookupSection() {
+function LookupSection({ readTarget }: { readTarget?: BPANReadTarget }) {
   const [number, setNumber] = useState("");
   const [result, setResult] = useState<{ chains: string[]; wallets: string[] } | null>(null);
   const [owner, setOwner] = useState("");
@@ -918,9 +954,9 @@ function LookupSection() {
     if (!isValidBPAN(clean)) { setError("Enter a valid 11-digit BPAN number"); return; }
     setError(""); setLoading(true); setResult(null); setOwner("");
     try {
-      const registered = await isBPANRegistered(clean);
+      const registered = await isBPANRegistered(clean, readTarget);
       if (!registered) { setError("This number is not registered"); setLoading(false); return; }
-      const [m, o] = await Promise.all([getAllBPANMappings(clean), getBPANOwner(clean)]);
+      const [m, o] = await Promise.all([getAllBPANMappings(clean, readTarget), getBPANOwner(clean, readTarget)]);
       setResult(m);
       setOwner(o);
     } catch (e: any) {

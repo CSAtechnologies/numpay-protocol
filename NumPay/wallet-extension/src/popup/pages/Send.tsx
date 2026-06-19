@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { ethers } from "ethers";
 import { useLocation } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
-import { isBPANInput, isValidBPAN, resolveBPAN, formatBPAN } from "@/lib/bpan";
+import { isBPANInput, isValidBPAN, resolveBPANChecked, BPANConsensusError, formatBPAN } from "@/lib/bpan";
 import { BPAN_CHAINS, DEFAULT_NETWORK, NETWORKS, type BPANChainId, type Network } from "@/lib/networks";
 import { getSigner, isLocked } from "@/lib/wallet";
 import { sendToken, type Token } from "@/lib/tokens";
@@ -69,6 +69,9 @@ export default function Send() {
   const [resolvedAddr, setResolvedAddr] = useState("");
   const [resolvedBPAN, setResolvedBPAN] = useState("");
   const [resolving, setResolving] = useState(false);
+  // TRUST-1: non-blocking caution about how the BPAN mapping was verified
+  // (single-source read, or the mapping changed since last seen).
+  const [bpanTrust, setBpanTrust] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [txHash, setTxHash] = useState("");
   const [error, setError] = useState("");
@@ -120,7 +123,7 @@ export default function Send() {
   function handleChainChange(id: BPANChainId) {
     setSelectedChainId(id);
     switchChain(id);
-    setTo(""); setResolvedAddr(""); setResolvedBPAN("");
+    setTo(""); setResolvedAddr(""); setResolvedBPAN(""); setBpanTrust(null);
     setError(""); setAmount(""); setSelectedToken(null); setTxHash("");
     chainSynced.current = true;
   }
@@ -136,14 +139,17 @@ export default function Send() {
 
   async function handleToChange(value: string) {
     setTo(value);
-    setResolvedAddr(""); setResolvedBPAN(""); setError("");
+    setResolvedAddr(""); setResolvedBPAN(""); setError(""); setBpanTrust(null);
 
     const clean = value.trim().replace(/\D/g, "");
     if (isBPANInput(value) && isValidBPAN(clean)) {
       const seq = ++resolveSeq.current;
       setResolving(true);
       try {
-        const addr = await resolveBPAN(clean, selectedChainId);
+        // Cross-checks the mapping across independent mainnet providers and a
+        // trust-on-first-use pin (TRUST-1) before it can become a send target.
+        const res = await resolveBPANChecked(clean, selectedChainId);
+        const addr = res.address;
         if (seq !== resolveSeq.current) return; // a newer lookup superseded this one
         if (addr) {
           // Registry mappings are free-form strings set by the BPAN owner.
@@ -161,14 +167,35 @@ export default function Send() {
           }
           setResolvedAddr(addr.trim());
           setResolvedBPAN(clean);
+          if (res.changed) {
+            setBpanTrust(
+              `This BPAN's ${chainInfo.name} address has changed since you last used it. ` +
+              `Confirm with the recipient before sending.`
+            );
+          } else if (res.confidence === "low") {
+            setBpanTrust(
+              `Only one network provider confirmed this mapping (others were unreachable). ` +
+              `Double-check the address before sending a large amount.`
+            );
+          }
         } else {
           setError(
             `No ${chainInfo.name} address mapped to BPAN ${formatBPAN(clean)}. ` +
             `The owner needs to add a "${selectedChainId}" mapping in their profile.`
           );
         }
-      } catch {
-        if (seq === resolveSeq.current) setError("BPAN lookup failed. Check your connection and try again.");
+      } catch (e) {
+        if (seq !== resolveSeq.current) return;
+        if (e instanceof BPANConsensusError) {
+          // Independent providers disagreed on the address — refuse to offer a
+          // send target rather than risk a redirect.
+          setError(
+            `Could not safely verify BPAN ${formatBPAN(clean)}: network providers returned ` +
+            `conflicting addresses. Do not send. Try again later or contact the recipient.`
+          );
+        } else {
+          setError("BPAN lookup failed. Check your connection and try again.");
+        }
       } finally {
         if (seq === resolveSeq.current) setResolving(false);
       }
@@ -321,6 +348,13 @@ export default function Send() {
                 </p>
               </div>
               <p className="text-xs text-text-primary font-mono break-all">{resolvedAddr}</p>
+            </div>
+          )}
+
+          {bpanTrust && (
+            <div className="mb-3 px-3 py-2.5 rounded-xl bg-amber/5 border border-amber/20 flex items-start gap-2 animate-fade-in">
+              <AlertIcon size={13} className="mt-0.5 flex-shrink-0" style={{ color: "var(--amber)" }} />
+              <p className="text-[11px] leading-relaxed" style={{ color: "var(--amber)" }}>{bpanTrust}</p>
             </div>
           )}
 

@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
-import { BPAN_MAINNET_CONTRACT, BPAN_MAINNET_RPC } from "./networks";
+import { BPAN_MAINNET_CONTRACT, BPAN_MAINNET_RPC, BPAN_MAINNET_READ_RPCS } from "./networks";
+import { getItem, setItem } from "./storage";
 
 const BPAN_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
@@ -47,6 +48,27 @@ export function getMainnetBPANContract(): ethers.Contract {
   return getBPANContract(BPAN_MAINNET_CONTRACT, getMainnetProvider());
 }
 
+// A specific registry deployment to read from. Used by the BPAN management page
+// so that, when operating on a testnet (Sepolia), reads and writes hit the SAME
+// contract instead of writing to Sepolia while reading mainnet (CONTRACT-8).
+// The funds path (resolveBPAN*) never takes a target and always reads mainnet.
+export interface BPANReadTarget { contract: string; rpc: string; }
+
+function isMainnetTarget(target?: BPANReadTarget): boolean {
+  return !target || (target.contract.toLowerCase() === BPAN_MAINNET_CONTRACT.toLowerCase());
+}
+
+// Read-only contract for an explicit target, or mainnet when none is given.
+function readContractFor(target?: BPANReadTarget): ethers.Contract {
+  if (!target) return getMainnetBPANContract();
+  let p = _readProviders.get(target.rpc);
+  if (!p) {
+    p = new ethers.JsonRpcProvider(target.rpc, undefined, { staticNetwork: true });
+    _readProviders.set(target.rpc, p);
+  }
+  return getBPANContract(target.contract, p);
+}
+
 // ── Validation ────────────────────────────────────────────────────────────────
 
 export function isValidBPAN(value: string): boolean {
@@ -65,31 +87,163 @@ export function formatBPAN(raw: string): string {
 
 // ── Resolution (always queries Ethereum mainnet) ──────────────────────────────
 
+// Independent mainnet read providers, reused across calls. The first entry is
+// the primary (Alchemy); the rest are independent public full nodes used only
+// to cross-check a funds-determining resolution (TRUST-1).
+const _readProviders = new Map<string, ethers.JsonRpcProvider>();
+function getReadContracts(): ethers.Contract[] {
+  return BPAN_MAINNET_READ_RPCS.map((url) => {
+    let p = _readProviders.get(url);
+    if (!p) {
+      // staticNetwork avoids an eth_chainId round-trip per call on these
+      // throwaway cross-check providers.
+      p = new ethers.JsonRpcProvider(url, undefined, { staticNetwork: true });
+      _readProviders.set(url, p);
+    }
+    return getBPANContract(BPAN_MAINNET_CONTRACT, p);
+  });
+}
+
+// Raised when independent providers return DIFFERENT non-empty addresses for the
+// same (number, chain). That can only mean a forked/stale node or a
+// compromised/malicious RPC trying to redirect funds, so callers must treat it
+// as a hard failure and never silently pick one.
+export class BPANConsensusError extends Error {
+  constructor(public readonly values: string[]) {
+    super("BPAN resolution disagreement: independent providers returned different addresses");
+    this.name = "BPANConsensusError";
+  }
+}
+
+export interface BPANResolution {
+  /** Agreed address, or null when the BPAN has no mapping for the chain. */
+  address: string | null;
+  /** "high" = >=2 independent providers agreed; "low" = only one responded. */
+  confidence: "high" | "low";
+  /** True when the agreed address differs from the last one seen (TOFU). */
+  changed: boolean;
+  /** Previously pinned address for this (number, chain), if any. */
+  pinnedBefore: string | null;
+  sourcesAgreed: number;
+  sourcesQueried: number;
+}
+
+function pinKey(number: string, chain: string): string {
+  return `bpan_pin_${number}_${chain.toLowerCase()}`;
+}
+
+// Case-insensitive compare for hex addresses; exact for everything else so a
+// case-sensitive chain (e.g. base58/bech32) is never wrongly treated as equal.
+function sameAddress(a: string, b: string): boolean {
+  const ax = a.trim();
+  const bx = b.trim();
+  if (/^0x[0-9a-fA-F]{40}$/.test(ax) && /^0x[0-9a-fA-F]{40}$/.test(bx)) {
+    return ax.toLowerCase() === bx.toLowerCase();
+  }
+  return ax === bx;
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error("rpc timeout")), ms)),
+  ]);
+}
+
 /**
- * Resolve a BPAN number to the wallet address registered for `chain`.
- * ALWAYS queries Ethereum mainnet regardless of the caller's current network.
+ * Resolve a BPAN number to the wallet address registered for `chain`, with
+ * independent-provider agreement and a trust-on-first-use pin (TRUST-1).
  *
- * @param number  11-digit BPAN string
- * @param chain   Chain name as stored in registry (e.g. "ethereum", "solana", "polygon")
+ * The mapping is queried from every endpoint in BPAN_MAINNET_READ_RPCS at the
+ * "finalized" block tag. The result is only trusted when the responders agree:
+ *  - two or more agree  → confidence "high"
+ *  - only one responded → confidence "low" (surfaced to the user)
+ *  - responders return different non-empty addresses → BPANConsensusError
+ *
+ * ALWAYS queries Ethereum mainnet regardless of the caller's current network.
+ */
+export async function resolveBPANChecked(
+  number: string,
+  chain: string,
+): Promise<BPANResolution> {
+  const contracts = getReadContracts();
+  const settled = await Promise.allSettled(
+    contracts.map((c) =>
+      withTimeout<string>(c.getWalletMapping(BigInt(number), chain, { blockTag: READ_BLOCK_TAG }), 8000)
+    )
+  );
+
+  const responses: string[] = [];
+  for (const r of settled) {
+    if (r.status === "fulfilled") responses.push((r.value ?? "").trim());
+  }
+  const sourcesQueried = responses.length;
+
+  if (sourcesQueried === 0) throw new Error("BPAN lookup failed on every provider");
+
+  // Two distinct NON-EMPTY addresses across providers = a redirect attempt or a
+  // forked node. Refuse rather than guess.
+  const nonEmpty = responses.filter((a) => a.length > 0);
+  for (const a of nonEmpty) {
+    for (const b of nonEmpty) {
+      if (!sameAddress(a, b)) throw new BPANConsensusError([a, b]);
+    }
+  }
+
+  // Group identical answers (empty "" is the "no mapping" answer and is grouped
+  // the same way) and take the largest group.
+  let chosen = "";
+  let agreed = 0;
+  for (const a of responses) {
+    const votes = responses.filter((b) => sameAddress(a, b)).length;
+    if (votes > agreed) { agreed = votes; chosen = a; }
+  }
+
+  const address = chosen.length > 0 ? chosen : null;
+  const confidence: "high" | "low" = agreed >= 2 ? "high" : "low";
+
+  // Trust-on-first-use pin. Compare the agreed address to the last one we saw
+  // for this (number, chain); flag a change so the UI can warn that a mapping
+  // moved (legitimate re-mapping OR an attacker). Only advance the pin on a
+  // high-confidence, non-empty result so a degraded single-source read can never
+  // overwrite a trusted pin.
+  let pinnedBefore: string | null = null;
+  let changed = false;
+  try {
+    pinnedBefore = await getItem(pinKey(number, chain));
+    if (address) {
+      if (pinnedBefore && !sameAddress(pinnedBefore, address)) changed = true;
+      if (confidence === "high" && (!pinnedBefore || changed)) {
+        await setItem(pinKey(number, chain), address);
+      }
+    }
+  } catch { /* storage unavailable — pin is best-effort, not a hard dependency */ }
+
+  return { address, confidence, changed, pinnedBefore, sourcesAgreed: agreed, sourcesQueried };
+}
+
+/**
+ * Back-compat thin wrapper: returns the agreed address (or null) and throws on a
+ * resolution disagreement. Existing callers automatically gain multi-provider
+ * agreement; callers that want confidence/changed signals use
+ * resolveBPANChecked directly.
  */
 export async function resolveBPAN(
   number: string,
   chain: string,
 ): Promise<string | null> {
-  const contract = getMainnetBPANContract();
-  const wallet: string = await contract.getWalletMapping(BigInt(number), chain, {
-    blockTag: READ_BLOCK_TAG,
-  });
-  return wallet || null;
+  return (await resolveBPANChecked(number, chain)).address;
 }
 
 /**
- * Get all wallet mappings for a BPAN number from Ethereum mainnet.
+ * Get all wallet mappings for a BPAN number. Defaults to Ethereum mainnet;
+ * pass a target to read the same testnet contract being written to (CONTRACT-8).
  */
 export async function getAllBPANMappings(
   number: string,
+  target?: BPANReadTarget,
 ): Promise<{ chains: string[]; wallets: string[] }> {
-  const contract = getMainnetBPANContract();
+  const contract = readContractFor(target);
   const [chains, wallets] = await contract.getAllMappings(BigInt(number), {
     blockTag: READ_BLOCK_TAG,
   });
@@ -97,18 +251,18 @@ export async function getAllBPANMappings(
 }
 
 /**
- * Check if a BPAN number is registered on Ethereum mainnet.
+ * Check if a BPAN number is registered. Defaults to Ethereum mainnet.
  */
-export async function isBPANRegistered(number: string): Promise<boolean> {
-  const contract = getMainnetBPANContract();
+export async function isBPANRegistered(number: string, target?: BPANReadTarget): Promise<boolean> {
+  const contract = readContractFor(target);
   return contract.isRegistered(BigInt(number), { blockTag: READ_BLOCK_TAG });
 }
 
 /**
- * Get the owner of a BPAN number from Ethereum mainnet.
+ * Get the owner of a BPAN number. Defaults to Ethereum mainnet.
  */
-export async function getBPANOwner(number: string): Promise<string> {
-  const contract = getMainnetBPANContract();
+export async function getBPANOwner(number: string, target?: BPANReadTarget): Promise<string> {
+  const contract = readContractFor(target);
   return contract.ownerOf(BigInt(number), { blockTag: READ_BLOCK_TAG });
 }
 
@@ -129,8 +283,9 @@ function getAlchemyApiKey(): string | null {
  * Note: BANPRegistry does NOT inherit ERC721Enumerable, so tokenOfOwnerByIndex
  * is intentionally absent — calling it would always revert (CONTRACT-4).
  */
-export async function findOwnedBPANs(ownerAddress: string): Promise<string[]> {
-  const contract = getMainnetBPANContract();
+export async function findOwnedBPANs(ownerAddress: string, target?: BPANReadTarget): Promise<string[]> {
+  const contract = readContractFor(target);
+  const onMainnet = isMainnetTarget(target);
 
   // ── Step 1: quick balance check ───────────────────────────────────────────
   let balance = 0n;
@@ -142,7 +297,9 @@ export async function findOwnedBPANs(ownerAddress: string): Promise<string[]> {
   if (balance === 0n) return [];
 
   // ── Step 2: Alchemy NFT API (avoids eth_getLogs entirely) ────────────────
-  const apiKey = getAlchemyApiKey();
+  // Mainnet-only: the NFT API endpoint and key are mainnet-scoped, so a testnet
+  // target falls straight through to the event scan below.
+  const apiKey = onMainnet ? getAlchemyApiKey() : null;
   if (apiKey) {
     try {
       const url =
@@ -178,7 +335,7 @@ export async function findOwnedBPANs(ownerAddress: string): Promise<string[]> {
   }
 
   if (!fullScanSucceeded) {
-    const provider = getMainnetProvider();
+    const provider = (contract.runner?.provider ?? getMainnetProvider()) as ethers.Provider;
     const currentBlock = await provider.getBlockNumber();
     const CHUNK = 10_000;
     for (let from = 0; from <= currentBlock; from += CHUNK) {
@@ -210,9 +367,9 @@ export async function findOwnedBPANs(ownerAddress: string): Promise<string[]> {
  * Fast check: how many BPANs does an address own? Uses balanceOf() — one call.
  * Returns 0 if the wallet has no BPANs, or if the call fails.
  */
-export async function getOwnedBPANCount(ownerAddress: string): Promise<number> {
+export async function getOwnedBPANCount(ownerAddress: string, target?: BPANReadTarget): Promise<number> {
   try {
-    const contract = getMainnetBPANContract();
+    const contract = readContractFor(target);
     const bal: bigint = await contract.balanceOf(ownerAddress);
     return Number(bal);
   } catch {
