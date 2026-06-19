@@ -7,6 +7,8 @@
 // and idle: when it fires we drop the decrypted session from in-memory
 // session storage so no plaintext key material survives the timeout.
 
+import { initDappRouter, broadcastDappLock } from "./dappRouter";
+
 const AUTO_LOCK_MINUTES = 15;
 const SESSION_KEY  = "numpay_session";
 const ACTIVITY_KEY = "numpay_lastActivity";
@@ -14,7 +16,12 @@ const ALARM_NAME   = "numpay-autolock";
 
 async function lockNow() {
   await chrome.storage.session.remove([SESSION_KEY, ACTIVITY_KEY]);
+  // Tell connected dApps the account is gone while locked.
+  broadcastDappLock();
 }
+
+// Route dApp (window.ethereum) traffic from content bridges.
+initDappRouter();
 
 // Use chrome.alarms, not setTimeout. MV3 suspends the idle service worker
 // (~30s) and destroys any pending setTimeout, so the old timer never fired while

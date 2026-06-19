@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   lockWallet, deleteWallet, deleteOneWallet,
   addEncryptedWallet, createWallet, importFromMnemonic, importFromPrivateKey,
@@ -10,6 +10,8 @@ import { useCurrency } from "../hooks/useCurrency";
 import { useTheme } from "../hooks/useTheme";
 import { removeItem, removeSession } from "@/lib/storage";
 import { SESSION_KEY } from "@/lib/wallet";
+import { listOrigins, revoke as revokeOrigin } from "@/lib/dapp/permissions";
+import { notifyDappState } from "@/lib/dapp/notify";
 import Layout from "../components/Layout";
 import PasswordPrompt from "../components/PasswordPrompt";
 import { LockIcon, CopyIcon, CheckIcon, ShieldIcon, SearchIcon, ChevronDownIcon, SunIcon, MoonIcon } from "../components/Icons";
@@ -31,6 +33,17 @@ export default function Settings({ onLock, onReset }: Props) {
   const [revealErr, setRevealErr] = useState("");
   const [revealLoading, setRevealLoading] = useState(false);
   const [pendingSwitchId, setPendingSwitchId] = useState<string | null>(null);
+  const [connectedSites, setConnectedSites] = useState<string[]>([]);
+
+  useEffect(() => {
+    listOrigins().then((rows) => setConnectedSites(rows.map((r) => r.origin))).catch(() => {});
+  }, []);
+
+  async function handleDisconnectSite(origin: string) {
+    await revokeOrigin(origin);
+    setConnectedSites((prev) => prev.filter((o) => o !== origin));
+    notifyDappState(); // connected pages get accountsChanged []
+  }
 
   const AUTO_HIDE_MS = 30_000;
 
@@ -326,6 +339,26 @@ export default function Settings({ onLock, onReset }: Props) {
             </div>
           ))}
         </div>
+
+        {/* Connected sites (dApps) */}
+        {connectedSites.length > 0 && (
+          <div className="mb-5">
+            <p className="section-label mb-2">Connected sites</p>
+            <div className="premium-card divide-y divide-border/50">
+              {connectedSites.map((origin) => (
+                <div key={origin} className="flex items-center gap-2 px-3.5 py-2.5">
+                  <span className="text-[12px] text-text-secondary font-mono truncate flex-1">{origin}</span>
+                  <button
+                    onClick={() => handleDisconnectSite(origin)}
+                    className="text-[11px] text-muted hover:text-accent-red font-medium px-2 py-1 rounded-lg hover:bg-accent-red/5 transition-colors flex-shrink-0"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Add wallet */}
         {!showAddWallet ? (

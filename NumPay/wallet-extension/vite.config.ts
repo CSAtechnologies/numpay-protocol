@@ -22,6 +22,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         popup: resolve(__dirname, "index.html"),
+        approval: resolve(__dirname, "approval.html"),
         background: resolve(__dirname, "src/background/index.ts"),
       },
       output: {

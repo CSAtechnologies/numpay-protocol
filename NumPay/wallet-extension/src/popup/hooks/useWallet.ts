@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { ethers } from "ethers";
 import { type WalletData, type VaultMeta, listVaultMeta, getActiveId, setActiveId, updateWalletAvatar, touchActivity, unlockActiveVault, SESSION_KEY } from "@/lib/wallet";
+import { notifyDappState } from "@/lib/dapp/notify";
 import { getItem, setItem, getSession, setSession } from "@/lib/storage";
 import { NETWORKS, DEFAULT_NETWORK, type Network } from "@/lib/networks";
 import { DEFAULT_TOKENS, getTokenBalance, type Token } from "@/lib/tokens";
@@ -470,6 +471,7 @@ export function useWallet(): WalletState {
     // Always update networkId; network memo resolves built-in + custom chains
     setNetworkId(id);
     setItem(NETWORK_KEY, id);
+    notifyDappState(); // emit chainChanged to connected dApps
   }
 
   function setAssetFilter(id: string | null) {
@@ -511,6 +513,7 @@ export function useWallet(): WalletState {
     setChainBalances([]);
     setNonEvmWallet(null);
     setNonEvmChains([]);
+    notifyDappState(); // emit accountsChanged to connected dApps
   }, [activeWalletId]);
 
   // Adding a freshly created/imported wallet makes it active. We already hold
@@ -531,6 +534,7 @@ export function useWallet(): WalletState {
     setChainBalances([]);
     setNonEvmWallet(null);
     setNonEvmChains([]);
+    notifyDappState(); // new active wallet => accountsChanged
   }, []);
 
   const removeWalletMeta = useCallback((id: string) => {
@@ -556,4 +560,5 @@ export async function cacheWalletSession(wallet: WalletData, id: string): Promis
   const session: WalletSession = { activeId: id, wallets: { [id]: wallet } };
   await setSession(SESSION_KEY, JSON.stringify(session));
   await touchActivity();
+  notifyDappState(); // unlock/create/import changes the exposed account
 }
