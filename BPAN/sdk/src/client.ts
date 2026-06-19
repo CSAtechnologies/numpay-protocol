@@ -233,6 +233,25 @@ export class BANPClient {
     this.contract.on("WalletMappingRemoved", callback);
   }
 
+  /**
+   * Fired when a BPAN transfer wipes the previous owner's mappings. Consumers
+   * that build an event cache MUST invalidate the number's cached mappings here,
+   * otherwise they keep resolving a transferred BPAN to the old owner
+   * (CONTRACT-3).
+   */
+  onMappingsCleared(
+    callback: (number: bigint, previousOwner: string, newOwner: string) => void
+  ): void {
+    this.contract.on("AllMappingsCleared", callback);
+  }
+
+  /** Fired on every NFT (BPAN) transfer, including mint (from = zero address). */
+  onTransfer(
+    callback: (from: string, to: string, tokenId: bigint) => void
+  ): void {
+    this.contract.on("Transfer", callback);
+  }
+
   removeAllListeners(): void {
     this.contract.removeAllListeners();
   }

@@ -108,10 +108,35 @@ export async function sendTronTransfer(
   if (BigInt(value?.amount ?? -1) !== amountSun) throw new Error("Amount mismatch in built transaction");
 
   // The bytes we sign are raw_data_hex, not the JSON. Confirm the intended
-  // recipient is literally encoded in those bytes before trusting them.
+  // recipient AND amount are literally encoded in those bytes before trusting
+  // them (SWAP-6). The JSON value.amount check above is not enough: a hostile
+  // node could echo the expected amount in JSON while encoding a different one
+  // in raw_data_hex, whose hash (txID) we actually sign.
   const toHex = tronAddressToHex(toAddress);
-  if (!String(tx.raw_data_hex).toLowerCase().includes(toHex.toLowerCase())) {
+  const rawHex = String(tx.raw_data_hex).toLowerCase();
+  if (!rawHex.includes(toHex.toLowerCase())) {
     throw new Error("Built transaction does not encode the intended recipient");
+  }
+  // TransferContract protobuf: owner_address (field 1), to_address (field 2,
+  // tag 0x12 + len 0x15 + 21 bytes), amount (field 3, tag 0x18 + varint). Locate
+  // the to_address field and decode the amount varint that follows it.
+  const marker = "1215" + toHex.toLowerCase() + "18";
+  const at = rawHex.indexOf(marker);
+  if (at < 0) {
+    throw new Error("Built transaction does not encode the intended recipient/amount");
+  }
+  let p = at + marker.length;
+  let encodedAmount = 0n;
+  let shift = 0n;
+  for (;;) {
+    const byte = parseInt(rawHex.substr(p, 2), 16);
+    p += 2;
+    encodedAmount |= BigInt(byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) break;
+    shift += 7n;
+  }
+  if (encodedAmount !== amountSun) {
+    throw new Error("Amount mismatch in signed bytes — refusing to sign");
   }
 
   // 3. txID = SHA256(raw_data_hex); recompute and cross-check the node's txID.

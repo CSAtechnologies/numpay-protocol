@@ -6,7 +6,7 @@ import { useLocation } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
 import { isBPANInput, isValidBPAN, resolveBPAN, formatBPAN } from "@/lib/bpan";
 import { BPAN_CHAINS, DEFAULT_NETWORK, NETWORKS, type BPANChainId, type Network } from "@/lib/networks";
-import { getSigner } from "@/lib/wallet";
+import { getSigner, isLocked } from "@/lib/wallet";
 import { sendToken, type Token } from "@/lib/tokens";
 import { sendSolanaTransfer, sendTronTransfer, sendSuiTransfer } from "@/lib/chains";
 import { isValidNonEvmAddress } from "@/lib/addressValidation";
@@ -186,6 +186,7 @@ export default function Send() {
     if (!destinationAddress) { setError("Enter a valid address or 11-digit BPAN"); return; }
     if (!amount || parseFloat(amount) <= 0) { setError("Enter an amount greater than zero"); return; }
     if (parseFloat(amount) > sendBalance) { setError("Insufficient balance"); return; }
+    if (await isLocked()) { setError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
     setSending(true); setError(""); setTxHash("");
     try {
       const signer = getSigner(wallet.privateKey, sendNetwork.rpcUrl);
@@ -221,6 +222,7 @@ export default function Send() {
     if (!destinationAddress) { setError("Enter a valid address or 11-digit BPAN"); return; }
     if (!amount || parseFloat(amount) <= 0) { setError("Enter an amount greater than zero"); return; }
     if (parseFloat(amount) > sendBalance) { setError("Insufficient balance"); return; }
+    if (await isLocked()) { setError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
     setSending(true); setError(""); setTxHash("");
     try {
       if (selectedChainId === "solana") {

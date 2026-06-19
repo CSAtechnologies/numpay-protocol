@@ -1,12 +1,32 @@
 import { ethers } from "hardhat";
+import * as fs from "fs";
+import * as path from "path";
+
+// Resolve the live (V2) registry address. Prefer an explicit override, then the
+// address written by deploy.ts. The old hardcoded "0x5633..." was the V1 mainnet
+// contract; withdrawing against it would not drain V2 fees (CONTRACT-1).
+function registryAddress(): string {
+  if (process.env.REGISTRY_ADDRESS) return process.env.REGISTRY_ADDRESS;
+  const deployedPath = path.join(__dirname, "..", "deploy", "deployed-v2.json");
+  if (!fs.existsSync(deployedPath)) {
+    throw new Error(
+      "deployed-v2.json not found and REGISTRY_ADDRESS not set. " +
+      "Set REGISTRY_ADDRESS or run deploy.ts first."
+    );
+  }
+  return JSON.parse(fs.readFileSync(deployedPath, "utf8")).address;
+}
 
 async function main() {
   const [owner] = await ethers.getSigners();
   console.log("Owner:", owner.address);
 
+  const contractAddress = registryAddress();
+  console.log("Registry (V2):", contractAddress);
+
   const contract = await ethers.getContractAt(
     "BANPRegistry",
-    "0x563356958fe3522b7be869666432594fa194a711",
+    contractAddress,
     owner
   );
 

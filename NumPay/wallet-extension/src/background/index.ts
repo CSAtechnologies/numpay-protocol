@@ -10,22 +10,30 @@
 const AUTO_LOCK_MINUTES = 15;
 const SESSION_KEY  = "numpay_session";
 const ACTIVITY_KEY = "numpay_lastActivity";
-
-let lockTimer: ReturnType<typeof setTimeout> | null = null;
+const ALARM_NAME   = "numpay-autolock";
 
 async function lockNow() {
   await chrome.storage.session.remove([SESSION_KEY, ACTIVITY_KEY]);
 }
 
+// Use chrome.alarms, not setTimeout. MV3 suspends the idle service worker
+// (~30s) and destroys any pending setTimeout, so the old timer never fired while
+// the popup was closed, leaving the decrypted session in place past the timeout
+// (CUSTODY-1). An alarm is persisted by the browser and wakes the worker to
+// lock even after suspension. Re-creating the alarm with the same name resets
+// the countdown on each activity ping.
 function resetLockTimer() {
-  if (lockTimer) clearTimeout(lockTimer);
-  lockTimer = setTimeout(lockNow, AUTO_LOCK_MINUTES * 60 * 1000);
+  chrome.alarms.create(ALARM_NAME, { delayInMinutes: AUTO_LOCK_MINUTES });
 }
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === ALARM_NAME) void lockNow();
+});
 
 // Popup opens a long-lived port on mount; treat that as activity.
 chrome.runtime.onConnect.addListener((port) => {
   resetLockTimer();
-  port.onDisconnect.addListener(() => { /* popup closed; timer keeps running */ });
+  port.onDisconnect.addListener(() => { /* popup closed; alarm keeps running */ });
 });
 
 // Explicit activity pings from the popup.

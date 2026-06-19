@@ -3,7 +3,6 @@ import { BPAN_MAINNET_CONTRACT, BPAN_MAINNET_RPC } from "./networks";
 
 const BPAN_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
-  "function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)",
   "function registerNumber(uint256 number) payable",
   "function setWalletMapping(uint256 number, string chain, string wallet)",
   "function removeWalletMapping(uint256 number, string chain)",
@@ -15,6 +14,14 @@ const BPAN_ABI = [
   "function totalRegistered() view returns (uint256)",
   "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
 ];
+
+// Funds-determining and ownership reads use the "finalized" block tag instead
+// of the provider default "latest". "latest" can return a mapping from a block
+// that is still inside the reorg window; a transient/forked state could resolve
+// a BPAN to a recipient that the canonical chain never confirms. "finalized"
+// only returns state that is past the point of reorg, at the cost of a small
+// (~2 epoch) staleness that is acceptable for a payment-destination read.
+const READ_BLOCK_TAG = "finalized";
 
 // Lazy mainnet provider – reused across calls to avoid creating a new
 // WebSocket/HTTP connection for every resolution.
@@ -70,7 +77,9 @@ export async function resolveBPAN(
   chain: string,
 ): Promise<string | null> {
   const contract = getMainnetBPANContract();
-  const wallet: string = await contract.getWalletMapping(BigInt(number), chain);
+  const wallet: string = await contract.getWalletMapping(BigInt(number), chain, {
+    blockTag: READ_BLOCK_TAG,
+  });
   return wallet || null;
 }
 
@@ -81,7 +90,9 @@ export async function getAllBPANMappings(
   number: string,
 ): Promise<{ chains: string[]; wallets: string[] }> {
   const contract = getMainnetBPANContract();
-  const [chains, wallets] = await contract.getAllMappings(BigInt(number));
+  const [chains, wallets] = await contract.getAllMappings(BigInt(number), {
+    blockTag: READ_BLOCK_TAG,
+  });
   return { chains: [...chains], wallets: [...wallets] };
 }
 
@@ -90,7 +101,7 @@ export async function getAllBPANMappings(
  */
 export async function isBPANRegistered(number: string): Promise<boolean> {
   const contract = getMainnetBPANContract();
-  return contract.isRegistered(BigInt(number));
+  return contract.isRegistered(BigInt(number), { blockTag: READ_BLOCK_TAG });
 }
 
 /**
@@ -98,7 +109,7 @@ export async function isBPANRegistered(number: string): Promise<boolean> {
  */
 export async function getBPANOwner(number: string): Promise<string> {
   const contract = getMainnetBPANContract();
-  return contract.ownerOf(BigInt(number));
+  return contract.ownerOf(BigInt(number), { blockTag: READ_BLOCK_TAG });
 }
 
 // Extracts the Alchemy API key from the configured RPC URL.
@@ -112,9 +123,11 @@ function getAlchemyApiKey(): string | null {
  *
  * Strategy (fastest first):
  *  1. balanceOf()           — O(1), skip if wallet has no BPANs
- *  2. tokenOfOwnerByIndex() — O(balance), if contract is ERC-721 Enumerable
- *  3. Alchemy NFT API       — getNFTsForOwner, no eth_getLogs needed (works on free tier)
- *  4. Transfer event scan   — full history then chunked, last resort
+ *  2. Alchemy NFT API       — getNFTsForOwner, no eth_getLogs needed (works on free tier)
+ *  3. Transfer event scan   — full history then chunked, last resort
+ *
+ * Note: BANPRegistry does NOT inherit ERC721Enumerable, so tokenOfOwnerByIndex
+ * is intentionally absent — calling it would always revert (CONTRACT-4).
  */
 export async function findOwnedBPANs(ownerAddress: string): Promise<string[]> {
   const contract = getMainnetBPANContract();
@@ -128,19 +141,7 @@ export async function findOwnedBPANs(ownerAddress: string): Promise<string[]> {
   }
   if (balance === 0n) return [];
 
-  // ── Step 2: ERC-721 Enumerable (tokenOfOwnerByIndex) ─────────────────────
-  try {
-    const ids: string[] = [];
-    for (let i = 0n; i < balance; i++) {
-      const tokenId: bigint = await contract.tokenOfOwnerByIndex(ownerAddress, i);
-      ids.push(tokenId.toString());
-    }
-    if (ids.length > 0) return ids;
-  } catch {
-    // Contract is not ERC-721 Enumerable — continue to next strategy.
-  }
-
-  // ── Step 3: Alchemy NFT API (avoids eth_getLogs entirely) ────────────────
+  // ── Step 2: Alchemy NFT API (avoids eth_getLogs entirely) ────────────────
   const apiKey = getAlchemyApiKey();
   if (apiKey) {
     try {
@@ -160,7 +161,7 @@ export async function findOwnedBPANs(ownerAddress: string): Promise<string[]> {
     }
   }
 
-  // ── Step 4: Transfer event scan (full history first, chunked fallback) ───
+  // ── Step 3: Transfer event scan (full history first, chunked fallback) ───
   const filter = contract.filters.Transfer(null, ownerAddress);
   const candidates = new Set<string>();
 

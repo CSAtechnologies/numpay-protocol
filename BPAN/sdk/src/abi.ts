@@ -40,6 +40,10 @@ export const BANPRegistryABI = [
   "event NumberRegistered(uint256 indexed number, address indexed owner)",
   "event WalletMappingSet(uint256 indexed number, string chain, string walletAddress)",
   "event WalletMappingRemoved(uint256 indexed number, string chain)",
+  // Emitted when an NFT transfer wipes the previous owner's mappings. Event-cache
+  // consumers MUST handle this or they will keep resolving a transferred BPAN to
+  // the old owner (CONTRACT-3).
+  "event AllMappingsCleared(uint256 indexed number, address indexed previousOwner, address indexed newOwner)",
   "event RegistrationFeeUpdated(uint256 oldFee, uint256 newFee)",
   "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
 ] as const;

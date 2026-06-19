@@ -69,11 +69,22 @@ async function deriveChild(
  */
 function parsePath(path: string): number[] {
   return path
-    .replace("m/", "")
+    .replace(/^m\//, "")
     .split("/")
     .map((s) => {
-      const cleaned = s.replace("'", "");
-      return parseInt(cleaned, 10);
+      // deriveChild force-hardens every index, and SLIP-0010 Ed25519 only allows
+      // hardened derivation. Assert the segment is explicitly hardened and a
+      // valid non-negative integer, so a malformed/non-hardened path fails loudly
+      // instead of silently deriving a different key (DERIVATION-2).
+      const hardened = s.endsWith("'") || s.endsWith("h");
+      if (!hardened) {
+        throw new Error(`SLIP-0010 supports hardened paths only; segment "${s}" is not hardened.`);
+      }
+      const n = parseInt(s.slice(0, -1), 10);
+      if (!Number.isInteger(n) || n < 0 || String(n) !== s.slice(0, -1)) {
+        throw new Error(`Invalid derivation path segment "${s}".`);
+      }
+      return n;
     });
 }
 

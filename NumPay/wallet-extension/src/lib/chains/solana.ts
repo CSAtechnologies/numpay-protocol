@@ -87,6 +87,12 @@ export async function sendSolanaTransfer(
   // In tweetnacl, secretKey = [32-byte seed | 32-byte pubkey]
   const fromPubkey = secretKey.slice(32);
   const toPubkey   = bs58.decode(toAddress);
+  // A Solana account key is exactly 32 bytes. The recipient is spliced into the
+  // message at a fixed 32-byte offset, so a non-32-byte decode would silently
+  // corrupt the serialized message (DERIVATION-3). Reject before signing.
+  if (toPubkey.length !== 32) {
+    throw new Error("Invalid Solana recipient address (must decode to 32 bytes).");
+  }
   const sysProgram = new Uint8Array(32); // 11111…1 = all zeros
 
   const blockhashBytes = bs58.decode(bhData.result.value.blockhash);
@@ -237,6 +243,84 @@ function decodeCompactU16(bytes: Uint8Array, offset: number): { value: number; l
   return { value, length: i - offset };
 }
 
+// Well-known Solana program IDs that a legitimate Jupiter swap routes through.
+// Used to label the preview; an id outside this set is shown as "unknown".
+const KNOWN_SOLANA_PROGRAMS: Record<string, string> = {
+  "11111111111111111111111111111111": "System",
+  "ComputeBudget111111111111111111111111111111": "Compute Budget",
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA": "SPL Token",
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": "Token-2022",
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL": "Associated Token",
+  "AddressLookupTab1e1111111111111111111111111": "Address Lookup Table",
+  "MemoSq4gq7tT4WcYr2DLRUFf6N8e6m8e6m8e6m8e6m8": "Memo",
+  "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4": "Jupiter Aggregator v6",
+  "JUP4Fb2cqiRUcaaoMpEbVUorfNwd4mZyaeUw8r3o4nA": "Jupiter Aggregator v4",
+};
+
+/**
+ * Decode a (legacy or v0) Solana transaction message enough to bind it to user
+ * intent and build a human-readable preview. Returns the fee payer (first
+ * account key), the set of program IDs invoked from the static account list,
+ * and whether the message uses address lookup tables (whose entries cannot be
+ * resolved offline).
+ */
+function decodeSolanaMessage(message: Uint8Array): {
+  feePayer: string;
+  programs: Array<{ id: string; name: string | null }>;
+  usesLookupTables: boolean;
+  instructionCount: number;
+} {
+  let off = 0;
+  // v0 messages are prefixed with 0x80 | version; legacy messages start with
+  // the (small) numRequiredSignatures byte and have no prefix.
+  if (message[0] & 0x80) off += 1;
+
+  off += 3; // header: numRequiredSignatures, numReadonlySigned, numReadonlyUnsigned
+
+  const keyCount = decodeCompactU16(message, off);
+  off += keyCount.length;
+  const keys: Uint8Array[] = [];
+  for (let i = 0; i < keyCount.value; i++) {
+    keys.push(message.slice(off, off + 32));
+    off += 32;
+  }
+
+  off += 32; // recent blockhash
+
+  const ixCount = decodeCompactU16(message, off);
+  off += ixCount.length;
+  const programIdxs = new Set<number>();
+  for (let i = 0; i < ixCount.value; i++) {
+    const programIdIndex = message[off];
+    off += 1;
+    programIdxs.add(programIdIndex);
+    const accs = decodeCompactU16(message, off);
+    off += accs.length + accs.value;
+    const dataLen = decodeCompactU16(message, off);
+    off += dataLen.length + dataLen.value;
+  }
+
+  let usesLookupTables = false;
+  if (off < message.length) {
+    const lutCount = decodeCompactU16(message, off);
+    usesLookupTables = lutCount.value > 0;
+  }
+
+  const programs = Array.from(programIdxs)
+    .filter((idx) => idx < keys.length) // ALT-resolved program ids can't be decoded offline
+    .map((idx) => {
+      const id = bs58.encode(keys[idx]);
+      return { id, name: KNOWN_SOLANA_PROGRAMS[id] ?? null };
+    });
+
+  return {
+    feePayer: keys.length ? bs58.encode(keys[0]) : "",
+    programs,
+    usesLookupTables,
+    instructionCount: ixCount.value,
+  };
+}
+
 /**
  * Build, sign and submit a Jupiter swap. Jupiter returns a fully-built v0
  * VersionedTransaction with the user as the sole required signer. We sign the
@@ -276,6 +360,20 @@ export async function executeJupiterSwap(
   }
   const sigStart = lenBytes;
   const message = txBytes.slice(sigStart + numSigs * 64);
+
+  // Bind the node-built message to the user before signing (SWAP-2). The fee
+  // payer (first account key) is the account whose signature we are about to
+  // produce; it MUST be the user. If a tampered Jupiter response put another
+  // account first, we would otherwise blind-sign a message whose instructions
+  // we never inspected. (Address-lookup-table entries can't be resolved
+  // offline, so deeper instruction binding is left to the local simulation and
+  // the fresh-quote slippage guard upstream.)
+  const decoded = decodeSolanaMessage(message);
+  if (decoded.feePayer !== userPublicKey) {
+    throw new Error(
+      "Blocked for safety: the swap transaction's fee payer is not your wallet. Aborted before signing.",
+    );
+  }
 
   const sig = nacl.sign.detached(message, secretKey);
   txBytes.set(sig, sigStart); // user is the fee payer / first signer

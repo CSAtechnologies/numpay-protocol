@@ -1,6 +1,10 @@
 import { ethers } from "hardhat";
 
-const CONTRACT_ADDRESS = "0xB57A18C0ebfF1fa9610C2D06985cbB9761685C83";
+// V2 Sepolia registry (matches the extension's networks.ts). The old
+// "0xB57A18C0…" was the V1 Sepolia contract (CONTRACT-2). Override with
+// REGISTRY_ADDRESS to point at a different deployment.
+const CONTRACT_ADDRESS =
+  process.env.REGISTRY_ADDRESS ?? "0xF2C65Bc0e54b5694c13d7c5E5Accf6DD93d7267a";
 
 async function main() {
   const [deployer] = await ethers.getSigners();

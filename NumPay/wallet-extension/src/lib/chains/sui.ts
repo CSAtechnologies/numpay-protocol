@@ -147,6 +147,20 @@ export async function sendSuiTransfer(
   }
   if (!txBytesB64) throw buildErr ?? new Error("Could not reach a Sui node");
 
+  // ── Phase 1.5: dry-run and bind the node-built bytes to user intent ───────
+  // The node builds `txBytes`; we must not intent-sign it blind (SWAP-3). A
+  // hostile/compromised RPC could redirect the recipient, enlarge the amount,
+  // or select different owned coins — all within the signer's own authority, so
+  // the signature would be valid. Dry-run returns the exact balance changes the
+  // transaction would cause; assert they match what the user asked for before
+  // signing. Sui protocol already prevents spending objects we don't own.
+  const dry = await suiRpc(rpc, "sui_dryRunTransactionBlock", [txBytesB64]);
+  const dryStatus = dry?.effects?.status?.status;
+  if (dryStatus !== "success") {
+    throw new Error(dry?.effects?.status?.error || "Sui dry-run failed; transaction was not signed.");
+  }
+  assertSuiBalanceChanges(dry?.balanceChanges ?? [], fromAddress, toAddress, amountMist);
+
   // ── Phase 2: intent-sign (once) ──────────────────────────────────────────
   const txBytes = Uint8Array.from(atob(txBytesB64), (c) => c.charCodeAt(0));
   const intentMessage = new Uint8Array(3 + txBytes.length);
@@ -168,12 +182,57 @@ export async function sendSuiTransfer(
   const exec = await suiRpc(rpc, "sui_executeTransactionBlock", [
     txBytesB64, [sigB64], { showEffects: true }, "WaitForLocalExecution",
   ]);
+  // Require an explicit success status. The old check skipped on a falsy/absent
+  // status, so a response with a digest but no effects.status would be treated
+  // as success (SWAP-M1, fail-open) — a merchant could read an unpaid transfer
+  // as paid and the sender could retry into a duplicate. Treat missing
+  // effects/status as unconfirmed, not success.
   const status = exec?.effects?.status?.status;
-  if (status && status !== "success") {
-    throw new Error(exec?.effects?.status?.error || "Transaction failed on-chain");
+  if (status !== "success") {
+    throw new Error(exec?.effects?.status?.error || "Transaction not confirmed on-chain.");
   }
   if (!exec?.digest) throw new Error("No transaction digest returned");
   return exec.digest as string;
+}
+
+/**
+ * Assert the dry-run balance changes match a native SUI transfer of exactly
+ * `amountMist` to `toAddress` and nothing else. Throws on any mismatch:
+ *  - a non-SUI asset moving (native paySui only touches SUI),
+ *  - any unexpected third party gaining funds,
+ *  - the recipient's gain differing from the intended amount.
+ */
+function assertSuiBalanceChanges(
+  changes: any[],
+  fromAddress: string,
+  toAddress: string,
+  amountMist: bigint,
+): void {
+  const norm = (a: string) => a.toLowerCase();
+  const to = norm(toAddress);
+  const from = norm(fromAddress);
+  let recipientGain = 0n;
+
+  for (const ch of changes) {
+    const owner: string | undefined = ch?.owner?.AddressOwner;
+    if (!owner) continue; // shared/object owner, not an address balance
+    if (ch.coinType !== "0x2::sui::SUI") {
+      throw new Error("Blocked for safety: Sui transaction moves a non-SUI asset.");
+    }
+    const amount = BigInt(ch.amount);
+    const o = norm(owner);
+    if (o === to && o !== from) {
+      recipientGain += amount;
+    } else if (o !== from && amount > 0n) {
+      throw new Error("Blocked for safety: Sui transaction sends funds to an unexpected address.");
+    }
+  }
+
+  if (recipientGain !== amountMist) {
+    throw new Error(
+      `Blocked for safety: the node-built Sui transfer would move ${recipientGain} MIST to the recipient, not the ${amountMist} MIST you entered.`,
+    );
+  }
 }
 
 /**

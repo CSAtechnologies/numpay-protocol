@@ -1,0 +1,72 @@
+{
+  "_comment": "Reference address vectors for src/lib/addressValidation.ts. Each `valid` entry is a well-known or programmatically-constructed checksum-correct address; each `invalid` entry is a checksum/length/charset failure that MUST be rejected. Verify with: node test/verify-address-vectors.mjs. Sources: BIP173/BIP350 (BTC), XRPL special accounts ACCOUNT_ZERO/ONE, SPL program ids (Solana), TRC-20 USDT contract (Tron), and constructed Base58Check/Bech32 fixtures.",
+  "solana": {
+    "valid": [
+      "11111111111111111111111111111111",
+      "So11111111111111111111111111111111111111112",
+      "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+    ],
+    "invalid": [
+      "",
+      "0OIl1111111111111111111111111111",
+      "1111111111111111111111111111111",
+      "111111111111111111111111111111111"
+    ]
+  },
+  "bitcoin": {
+    "valid": [
+      "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy",
+      "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+      "147Us9aEq2PvBC5wobBJw1yEpQEbPKzssA"
+    ],
+    "invalid": [
+      "1A1zP1eP5QGefi2DMPTfTL5SLmv7Divfna",
+      "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5",
+      "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
+    ]
+  },
+  "litecoin": {
+    "valid": [
+      "ltc1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpq4933p"
+    ],
+    "invalid": [
+      "ltc1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpq4933q",
+      "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+    ]
+  },
+  "tron": {
+    "valid": [
+      "TBXSw8fM4jpQkGc6zZjsVABFpVN7UvXPdV",
+      "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    ],
+    "invalid": [
+      "TBXSw8fM4jpQkGc6zZjsVABFpVN7UvXPdW",
+      "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6",
+      ""
+    ]
+  },
+  "xrp": {
+    "valid": [
+      "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+      "rrrrrrrrrrrrrrrrrrrrBZbvji",
+      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+    ],
+    "invalid": [
+      "rrrrrrrrrrrrrrrrrrrrrhoLvTq",
+      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTi",
+      ""
+    ]
+  },
+  "sui": {
+    "valid": [
+      "0x0000000000000000000000000000000000000000000000000000000000000002",
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "invalid": [
+      "0x2",
+      "0xZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+      "0x000000000000000000000000000000000000000000000000000000000000002"
+    ]
+  }
+}

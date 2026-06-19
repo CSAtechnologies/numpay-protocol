@@ -8,7 +8,7 @@ import { NETWORKS } from "@/lib/networks";
 import { DEFAULT_TOKENS } from "@/lib/tokens";
 import { type NonEvmChain } from "@/lib/chains";
 import { fetchJupiterQuote, executeJupiterSwap, resolveSolanaToken, hasTokenAccount, WSOL_MINT, SOLANA_SWAP_TOKENS } from "@/lib/chains/solana";
-import { getSigner } from "@/lib/wallet";
+import { getSigner, isLocked } from "@/lib/wallet";
 import { getItem, setItem } from "@/lib/storage";
 import {
   assertTrustedSpender, assertTrustedRouter, assertChainId,
@@ -131,6 +131,28 @@ function sanitizeSlippagePct(raw: string): number {
   const n = parseFloat(raw);
   if (!Number.isFinite(n) || n <= 0) return 0.5;
   return Math.min(n, 5);
+}
+
+// Approve `spender` for exactly `amount` of an ERC-20, resetting to zero first
+// when an allowance is already set (SWAP-5). Reset-to-zero tokens (e.g. USDT)
+// revert if a non-zero allowance is changed directly; the prior code always
+// called approve(amount) which would break re-approval for those tokens. Exact
+// amount (never unlimited) keeps any residual allowance bounded to this swap.
+async function approveErc20Exact(
+  signer: ethers.Signer, token: string, owner: string, spender: string, amount: string,
+): Promise<void> {
+  const erc20 = new ethers.Contract(token, [
+    "function approve(address,uint256) returns (bool)",
+    "function allowance(address,address) view returns (uint256)",
+  ], signer);
+  const needed = BigInt(amount);
+  let current = 0n;
+  try { current = BigInt(await erc20.allowance(owner, spender)); } catch { /* treat as 0 */ }
+  if (current === needed) return; // already exactly approved
+  if (current > 0n) {
+    await (await erc20.approve(spender, 0n)).wait();
+  }
+  await (await erc20.approve(spender, needed)).wait();
 }
 
 function buildAllSwapTokens(
@@ -478,6 +500,9 @@ export default function Swap() {
   const [txHash,        setTxHash]        = useState("");
   const [swapError,     setSwapError]     = useState("");
 
+  // Pre-sign preview confirmation (readable summary before anything is signed)
+  const [showConfirm,   setShowConfirm]   = useState(false);
+
   // Bridge routes
   const [bridgeRoutes,  setBridgeRoutes]  = useState<BridgeRoute[]>([]);
   const [selBridge,     setSelBridge]     = useState(0);
@@ -757,6 +782,7 @@ export default function Swap() {
   async function executeSwap() {
     const route = routeOptions[selectedRoute];
     if (!wallet || !route || !fromAmount) return;
+    if (await isLocked()) { setSwapError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
 
     // ── Solana swap via Jupiter ─────────────────────────────────────────────
     if (route.provider === "jupiter") {
@@ -847,15 +873,25 @@ export default function Swap() {
         const txData = await txRes.json();
 
         const value = txData.value ? BigInt(txData.value) : 0n;
-        // Augustus varies per chain, so validate by contract-code + value + sim.
+        // Augustus varies per chain, so bind the send target to the swapper the
+        // signed quote (priceRoute) declared, rather than trusting whatever the
+        // /transactions response returns (SWAP-1). A tampered build that points
+        // `to` at an attacker contract no longer passes the bare contract-code
+        // check. Fall back to contract-code + value + sim where the quote did
+        // not declare a contractAddress.
+        const augustus: string | undefined = route.priceRoute?.contractAddress;
+        if (augustus) {
+          if (txData.to?.toLowerCase() !== augustus.toLowerCase()) {
+            throw new Error(`Blocked for safety: swap target ${txData.to} does not match the quoted ParaSwap contract ${augustus}.`);
+          }
+        }
         await assertIsContract(signer.provider!, txData.to);
         assertNativeValue(isNativeSwap, value, srcAmountBn);
 
         if (fromToken.address && route.priceRoute?.tokenTransferProxy) {
           // Approval spender is chain-constant — gate it hard. Exact amount only.
           assertTrustedSpender("paraswap", route.priceRoute.tokenTransferProxy);
-          const erc20 = new ethers.Contract(fromToken.address, ["function approve(address,uint256) returns (bool)"], signer);
-          await (await erc20.approve(route.priceRoute.tokenTransferProxy, srcAmount)).wait();
+          await approveErc20Exact(signer, fromToken.address, wallet.address, route.priceRoute.tokenTransferProxy, srcAmount);
         }
         await simulateOrThrow(signer, { to: txData.to, data: txData.data, value });
         const tx = await signer.sendTransaction({
@@ -885,8 +921,7 @@ export default function Swap() {
 
         if (fromToken.address) {
           assertTrustedSpender("kyberswap", routerAddress);
-          const erc20 = new ethers.Contract(fromToken.address, ["function approve(address,uint256) returns (bool)"], signer);
-          await (await erc20.approve(routerAddress, srcAmount)).wait();
+          await approveErc20Exact(signer, fromToken.address, wallet.address, routerAddress, srcAmount);
         }
         await simulateOrThrow(signer, { to: routerAddress, data, value });
         const tx = await signer.sendTransaction({ to: routerAddress, data, value });
@@ -900,6 +935,7 @@ export default function Swap() {
 
   async function executeBridge() {
     if (!wallet || !bridgeRoutes[selBridge] || !fromAmount) return;
+    if (await isLocked()) { setBridgeError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
     const fromNet = NETWORKS[fromToken.chainId];
     if (!fromNet) { setBridgeError("Bridge execution only supported from EVM chains"); return; }
     setBridging(true); setBridgeError(""); setBridgeTxHash("");
@@ -931,13 +967,18 @@ export default function Swap() {
       // The LI.FI diamond (router + approval target) is chain-constant — gate it.
       assertTrustedRouter("lifi", txReq.to);
       const value = txReq.value ? BigInt(txReq.value) : 0n;
+      // Bound the native value the same way swaps are (SWAP-1): a native-token
+      // bridge must attach exactly the bridged amount, an ERC-20 bridge zero.
+      // Previously executeBridge omitted this, leaving the LI.FI native value
+      // unbounded.
+      const isNativeBridge = !fromToken.address;
+      assertNativeValue(isNativeBridge, value, BigInt(fromAmtRaw));
 
       // Approve the bridge contract if spending an ERC-20 (exact amount only).
       const approvalAddr = qData?.estimate?.approvalAddress;
       if (fromToken.address && approvalAddr) {
         assertTrustedSpender("lifi", approvalAddr);
-        const erc20 = new ethers.Contract(fromToken.address, ["function approve(address,uint256) returns (bool)"], signer);
-        await (await erc20.approve(approvalAddr, fromAmtRaw)).wait();
+        await approveErc20Exact(signer, fromToken.address, wallet.address, approvalAddr, fromAmtRaw);
       }
       await simulateOrThrow(signer, { to: txReq.to, data: txReq.data, value });
       const tx = await signer.sendTransaction({
@@ -1403,9 +1444,9 @@ export default function Swap() {
             </div>
           )}
 
-          {/* CTA */}
-          <button onClick={isBridge ? executeBridge : executeSwap}
-            disabled={!hasRoutes || !fromAmount || parseFloat(fromAmount || "0") <= 0 || isExecuting || isLoading}
+          {/* CTA — opens a readable preview before anything is signed */}
+          <button onClick={() => setShowConfirm(true)}
+            disabled={!hasRoutes || !fromAmount || parseFloat(fromAmount || "0") <= 0 || isExecuting || isLoading || !!activeTxHash}
             className="btn-primary-premium text-[13px]">
             {isExecuting ? (
               <span className="flex items-center justify-center gap-2">
@@ -1425,6 +1466,66 @@ export default function Swap() {
                   ? `Bridge ${fromToken.symbol} → ${toNet?.name || toToken.chainId}`
                   : `Swap ${fromToken.symbol} for ${toToken.symbol}`}
           </button>
+
+          {/* Readable pre-sign preview. Shown before any signature so the user
+              confirms exactly what the wallet is about to authorize. The values
+              here are the same ones the execute path binds and simulates against
+              before signing. */}
+          {showConfirm && (() => {
+            const providerLabel = isBridge
+              ? (bridgeRoutes[selBridge]?.steps?.[0]?.toolDetails?.name
+                 || bridgeRoutes[selBridge]?.steps?.[0]?.tool || "Bridge")
+              : (routeOptions[selectedRoute]?.label || "—");
+            const fromNetName = NETWORKS[fromToken.chainId]?.name || fromToken.chainId;
+            const toNetName   = NETWORKS[toToken.chainId]?.name   || toToken.chainId;
+            const isSolanaSide = isBridge
+              ? toToken.chainId === "solana"
+              : routeOptions[selectedRoute]?.provider === "jupiter";
+            const recipient = (isSolanaSide ? nonEvmWallet?.solana?.address : wallet?.address) || "";
+            const slipPct = parseFloat(slippage) || 0;
+            const minReceived = !isBridge && receiveAmt
+              ? (parseFloat(receiveAmt) * (1 - slipPct / 100)).toFixed(Math.min(toToken.decimals, 6))
+              : "";
+            const confirmAndRun = () => { setShowConfirm(false); isBridge ? executeBridge() : executeSwap(); };
+            const row = (label: string, value: React.ReactNode) => (
+              <div className="flex items-start justify-between gap-3 py-1.5">
+                <span className="text-[11px] text-muted flex-shrink-0">{label}</span>
+                <span className="text-[12px] font-semibold text-text-primary text-right break-all">{value}</span>
+              </div>
+            );
+            return (
+              <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3"
+                   onClick={() => setShowConfirm(false)}>
+                <div className="w-full premium-card p-4" onClick={(e) => e.stopPropagation()}>
+                  <p className="text-[14px] font-bold text-text-primary mb-3">
+                    {isBridge ? "Confirm bridge" : "Confirm swap"}
+                  </p>
+                  <div className="divide-y divide-border">
+                    {row("You pay", `${fromAmount} ${fromToken.symbol} · ${fromNetName}`)}
+                    {row(isBridge ? "You receive (est.)" : "You receive (est.)",
+                         `≈ ${receiveAmt || "—"} ${toToken.symbol} · ${toNetName}`)}
+                    {minReceived && row("Minimum received", `${minReceived} ${toToken.symbol} (slippage ${slipPct}%)`)}
+                    {row("Route", providerLabel)}
+                    {row("Recipient", recipient ? `Your wallet · ${recipient.slice(0, 6)}…${recipient.slice(-4)}` : "Your wallet")}
+                  </div>
+                  <p className="text-[10px] text-muted mt-3 leading-relaxed">
+                    The transaction is checked against this quote and simulated before it is signed.
+                    Funds are sent to your own wallet.
+                  </p>
+                  <div className="flex gap-2 mt-4">
+                    <button onClick={() => setShowConfirm(false)}
+                      className="flex-1 py-2.5 rounded-xl bg-surface-1 text-text-primary text-[13px] font-semibold">
+                      Cancel
+                    </button>
+                    <button onClick={confirmAndRun}
+                      className="btn-primary-premium text-[13px] flex-1">
+                      {isBridge ? "Confirm & bridge" : "Confirm & swap"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
         </div>
       </div>
