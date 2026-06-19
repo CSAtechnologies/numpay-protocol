@@ -1,6 +1,91 @@
-# NUMPAY Threat Model v1
+# NUMPAY Threat Model
 
-Status: ACTIVE. PoC scope.
+Status: ACTIVE. The "Shipped reality" section below is authoritative and
+SUPERSEDES the original v1 PoC model, which is retained verbatim as Appendix A
+for history. Re-baselined 2026-06-19 (TRUST-2 / TRUST-3).
+
+---
+
+## Shipped reality (2026-06-19) — authoritative
+
+The v1 PoC model (Appendix A) described a design that does not match what
+shipped. This section re-baselines the threat model to the product as actually
+built, so the documented model and the code agree (TRUST-2), and replaces the
+unbuilt integrity architecture with the one that ships (TRUST-3).
+
+### What actually shipped
+
+- **Extension-only, non-custodial.** A self-contained Manifest V3 wallet popup.
+  There is **no dApp provider injection and no content scripts** in the shipped
+  manifest, so the EIP-1193 / page-context / content-script threat surface in
+  Appendix A sections 4.4 and 4.5 does not currently apply. (If a connect/inject
+  flow is added later, re-instate those sections.)
+- **There is NO backend.** Alias (BPAN) to address bindings are NOT stored in a
+  server database. They live **only in the on-chain BPAN registry** (ERC-721)
+  on **Ethereum mainnet** (`0xdB52...D371`, V2). This is option C
+  ("blockchain-anchored bindings") from Appendix A 4.2, which the PoC deferred.
+  As a result the entire backend-centric integrity design in Appendix A 4.2 (the
+  server, the per-alias ed25519 owner key, the server-signed payment intent, and
+  the hash-chained `binding_audit_log`) is **not implemented and not needed**:
+  the smart-contract NFT owner is the binding's root of trust, and changes are
+  recorded as on-chain events, not a server audit log.
+- **Mainnet, multi-chain, and swaps are LIVE.** Contrary to Appendix A section 6
+  ("out of scope for v1"): the wallet runs on Ethereum mainnet plus 20+ EVM
+  chains and 6 non-EVM chains (Bitcoin, Solana, Sui, Tron, XRP, Litecoin), and it
+  includes swaps/bridges (ParaSwap, KyberSwap, LI.FI, Jupiter). These are in
+  scope for this threat model.
+
+### Shipped integrity model for alias -> address resolution (replaces 4.2)
+
+The funds-redirect threat is real, but the anchor is the chain, not a backend:
+
+1. **On-chain registry is the source of truth.** A BPAN's per-chain mapping is
+   set only by the NFT owner via `setWalletMapping`; reads come from the registry
+   contract. A compromised server cannot exist because there is no server in the
+   path.
+2. **Independent-provider agreement (TRUST-1, implemented).** A funds-determining
+   resolution is cross-checked across independent Ethereum mainnet RPCs (Alchemy
+   + eth.drpc.org + rpc.flashbots.net) at the `finalized` block tag. Two or more
+   must agree ("high" confidence); a single responder is "low" and surfaced;
+   conflicting non-empty answers raise `BPANConsensusError` and the Send page
+   refuses to offer a target. This is the concrete form of Appendix A 4.8's
+   "do they agree" RPC sanity check, applied to the binding read itself.
+3. **Trust-on-first-use pin (TRUST-1, implemented).** The resolved address for a
+   `(number, chain)` is pinned locally; a later change is flagged to the user
+   before sending (legitimate re-mapping or attack).
+4. **Per-chain address-format validation.** A resolved mapping is validated
+   against the destination chain's real address format (Base58Check / Bech32(m) /
+   chain-specific) before it can become a send target, so a malformed or
+   wrong-chain mapping cannot be paid.
+5. **Network-aware reads (CONTRACT-8).** BPAN management reads the same contract
+   it writes to; the live Send funds path is always mainnet-pinned.
+
+### Shipped custody model (refines 4.1 / 4.3)
+
+- Vault: AES-256-GCM with an **Argon2id** KEK over the password; legacy PBKDF2
+  vaults upgrade transparently on unlock.
+- Decrypted key material lives only in `chrome.storage.session` (memory-only,
+  cleared on browser restart), and only the **active** wallet is decrypted at a
+  time (decrypt-only-active); switching wallets re-prompts for the password.
+  15-minute inactivity auto-lock via `chrome.alarms`.
+- **Known residual (tracked):** because MV3 service workers are ephemeral and
+  `chrome.storage.session` is shared by all trusted extension contexts, popup
+  pages still hold the active wallet's raw key during a signing operation. Moving
+  all signing into a background-only module is a tracked follow-up; Appendix A
+  3.3 / 4.1 describe that target design, which is not yet the shipped reality.
+
+### Still accurate from Appendix A
+
+Sections 4.6 (supply chain), 4.7 (crypto primitive choices, though the shipped
+stack uses ethers + @noble + tweetnacl rather than viem), and the malware /
+device-compromise residuals remain valid. Treat Appendix A as the design-intent
+reference; treat this section as the description of record.
+
+---
+
+# Appendix A: original v1 PoC threat model (historical)
+
+Status: SUPERSEDED by the section above. Retained for history.
 Date: 2026-05-22.
 Mode: CRITICAL_CODE.
 Scope: Phase 1 PoC. Extension-first non-custodial wallet on Sepolia (ETH testnet) and Solana devnet.
