@@ -11,6 +11,9 @@ import {
   ERR,
   DEFERRED_METHODS,
   type ProviderEventName,
+  type PendingConnect,
+  type PendingSign,
+  type DappPending,
 } from "../lib/dapp/types";
 import { getPermission, grant, updateAllConnected } from "../lib/dapp/permissions";
 import { proxyRead, isReadMethod, evmChainIdHex, evmChainIdNumber } from "../lib/dapp/rpcProxy";
@@ -108,18 +111,19 @@ function emitToOrigin(origin: string, name: ProviderEventName, data: unknown): v
   });
 }
 
-// ── Connect approval handshake ─────────────────────────────────────────────────
+// ── Address helpers ─────────────────────────────────────────────────────────────
 
-interface PendingConnect {
-  requestId: string;
-  origin: string;
-  id: string;
-  channel: string;
-  account: string;
-  chainId: number;
+function isHexAddress(s: unknown): s is string {
+  return typeof s === "string" && /^0x[0-9a-fA-F]{40}$/.test(s);
 }
 
-async function openConnectApproval(p: PendingConnect): Promise<void> {
+function eqAddr(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+// ── Approval handshake (connect + sign) ─────────────────────────────────────────
+
+async function openApproval(p: DappPending): Promise<void> {
   await chrome.storage.session.set({ [PENDING_PFX + p.requestId]: p });
   const url = chrome.runtime.getURL(`approval.html?requestId=${encodeURIComponent(p.requestId)}`);
   try {
@@ -131,10 +135,20 @@ async function openConnectApproval(p: PendingConnect): Promise<void> {
   }
 }
 
-// Called when the approval window posts its decision.
-async function handleDecision(requestId: string, approved: boolean): Promise<void> {
+function newRequestId(): string {
+  return (crypto as Crypto).randomUUID?.() ?? Math.random().toString(36).slice(2);
+}
+
+// Called when the approval window posts its decision. For "sign" requests the
+// window itself produces the signature (the router never touches a key), so it
+// passes it back here purely to relay to the origin.
+async function handleDecision(
+  requestId: string,
+  approved: boolean,
+  signature?: string
+): Promise<void> {
   const key = PENDING_PFX + requestId;
-  const p = (await chrome.storage.session.get(key))[key] as PendingConnect | undefined;
+  const p = (await chrome.storage.session.get(key))[key] as DappPending | undefined;
   if (!p) return;
   await chrome.storage.session.remove(key);
 
@@ -143,8 +157,18 @@ async function handleDecision(requestId: string, approved: boolean): Promise<voi
     return;
   }
 
-  // Re-read live account/chain at approval time (TOCTOU): the user may have
-  // switched wallet/network while the approval window was open.
+  if (p.type === "sign") {
+    if (typeof signature === "string" && signature.startsWith("0x")) {
+      respondToOrigin(p.origin, { id: p.id, channel: p.channel, result: signature });
+    } else {
+      // Approved but the window failed to sign (e.g. active wallet changed).
+      respondToOrigin(p.origin, { id: p.id, channel: p.channel, error: ERR.internal });
+    }
+    return;
+  }
+
+  // connect: re-read live account/chain at approval time (TOCTOU): the user may
+  // have switched wallet/network while the approval window was open.
   const account = (await getActiveAccount()) ?? p.account;
   const chainId = evmChainIdNumber(await getActiveChainId());
   await grant(p.origin, account, chainId);
@@ -175,15 +199,16 @@ async function handleRequest(
           reply(undefined, { code: ERR.internal.code, message: "No wallet set up" });
           return;
         }
-        await openConnectApproval({
-          requestId:
-            (crypto as Crypto).randomUUID?.() ?? Math.random().toString(36).slice(2),
+        const connectPending: PendingConnect = {
+          type: "connect",
+          requestId: newRequestId(),
           origin,
           id,
           channel,
           account,
           chainId: evmChainIdNumber(await getActiveChainId()),
-        });
+        };
+        await openApproval(connectPending);
         return; // resolved later by handleDecision
       }
 
@@ -200,6 +225,73 @@ async function handleRequest(
       case "net_version": {
         reply(String(evmChainIdNumber(await getActiveChainId())));
         return;
+      }
+
+      case "personal_sign":
+      case "eth_signTypedData_v4": {
+        // Signing requires an existing connection. We never expose a key to an
+        // origin that has not been through the connect approval.
+        const perm = await getPermission(origin);
+        if (!perm) {
+          reply(undefined, { code: ERR.unauthorized.code, message: "Connect the wallet first" });
+          return;
+        }
+
+        // Extract + validate the target address and the payload, and bind the
+        // signature to the connected account. Under decrypt-only-active we can
+        // only sign for the active wallet anyway, so a request for any other
+        // address is rejected rather than silently signed by the wrong key.
+        let address: string | undefined;
+        let payload: string | undefined;
+
+        if (method === "personal_sign") {
+          // Spec order is [message, address]; some libs reverse it. Detect the
+          // address param and take the other as the message.
+          let message: unknown;
+          if (isHexAddress(params[1])) { message = params[0]; address = params[1]; }
+          else if (isHexAddress(params[0])) { address = params[0]; message = params[1]; }
+          else { message = params[0]; }
+          if (typeof message !== "string") {
+            reply(undefined, ERR.invalidParams);
+            return;
+          }
+          payload = message;
+        } else {
+          // eth_signTypedData_v4: [address, typedData]
+          if (isHexAddress(params[0])) address = params[0];
+          const data = params[1];
+          payload = typeof data === "string" ? data : data ? JSON.stringify(data) : undefined;
+          if (payload === undefined) {
+            reply(undefined, ERR.invalidParams);
+            return;
+          }
+        }
+
+        if (!address) {
+          reply(undefined, { code: ERR.invalidParams.code, message: "Missing signing address" });
+          return;
+        }
+        if (!eqAddr(address, perm.account)) {
+          reply(undefined, {
+            code: ERR.unauthorized.code,
+            message: "Requested address is not the connected account",
+          });
+          return;
+        }
+
+        const signPending: PendingSign = {
+          type: "sign",
+          method,
+          requestId: newRequestId(),
+          origin,
+          id,
+          channel,
+          account: perm.account,
+          chainId: evmChainIdNumber(await getActiveChainId()),
+          payload,
+        };
+        await openApproval(signPending);
+        return; // resolved later by handleDecision (window signs)
       }
 
       default: {
@@ -276,7 +368,11 @@ export function initDappRouter(): void {
 
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg?.type === MSG_DAPP_DECISION && typeof msg.requestId === "string") {
-      void handleDecision(msg.requestId, !!msg.approved);
+      void handleDecision(
+        msg.requestId,
+        !!msg.approved,
+        typeof msg.signature === "string" ? msg.signature : undefined
+      );
     } else if (msg?.type === MSG_DAPP_STATE_CHANGED) {
       void broadcastDappState();
     }

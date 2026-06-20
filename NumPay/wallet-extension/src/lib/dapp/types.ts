@@ -86,14 +86,22 @@ export const READ_METHODS = new Set<string>([
   "eth_chainId", // also handled locally; harmless as a read fallback
 ]);
 
-// Signing / state-changing methods that arrive in later phases. Listed so the
-// router can return a clear "not yet" instead of a generic failure (P2/P3).
-export const DEFERRED_METHODS = new Set<string>([
+// Signing methods supported from P2 on. The router routes these to a dedicated
+// approval window; the window (not the router) holds the key and signs.
+// Deliberately excludes eth_sign (blind raw-hash signing, a known drainer
+// footgun) and the legacy v1/v3 typed-data variants.
+export const SIGN_METHODS = new Set<string>([
   "personal_sign",
+  "eth_signTypedData_v4",
+]);
+
+// Signing / state-changing methods that arrive in later phases, or that we
+// intentionally do not support. Listed so the router can return a clear
+// "not yet / not supported" instead of a generic failure (P3+).
+export const DEFERRED_METHODS = new Set<string>([
   "eth_sign",
   "eth_signTypedData",
   "eth_signTypedData_v3",
-  "eth_signTypedData_v4",
   "eth_sendTransaction",
   "eth_sendRawTransaction",
   "wallet_switchEthereumChain",
@@ -102,3 +110,29 @@ export const DEFERRED_METHODS = new Set<string>([
   "wallet_requestPermissions",
   "wallet_getPermissions",
 ]);
+
+// ── Approval-window pending records (stored in chrome.storage.session) ──────────
+// Discriminated union so one approval window can serve both connect and sign.
+
+export interface PendingBase {
+  requestId: string;
+  origin: string;
+  id: string; // dApp-side request id, echoed back on the port
+  channel: string; // inpage<->content channel id
+}
+
+export interface PendingConnect extends PendingBase {
+  type: "connect";
+  account: string;
+  chainId: number;
+}
+
+export interface PendingSign extends PendingBase {
+  type: "sign";
+  method: "personal_sign" | "eth_signTypedData_v4";
+  account: string; // the address the signature is bound to (= connected account)
+  chainId: number; // active EVM chain at request time
+  payload: string; // personal_sign: message hex; typed data: the JSON string
+}
+
+export type DappPending = PendingConnect | PendingSign;
