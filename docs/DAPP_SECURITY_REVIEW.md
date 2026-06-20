@@ -1,9 +1,11 @@
 # dApp Connectivity: Security Review
 
-Scope: the EVM `window.ethereum` / EIP-6963 connectivity feature added on branch
-`feat/dapp-connect` (phases P1 to P4). This reviews the trust model, the threats
-the design defends against, the hardening added in P4, and the residual risks
-that are accepted for now. It complements `THREAT_MODEL.md` (wallet custody) and
+Scope: the dApp connectivity feature added on branch `feat/dapp-connect`. Two
+surfaces over one shared transport: the EVM `window.ethereum` / EIP-6963
+provider (phases P1 to P4), and the Solana `window.solana` / Wallet Standard
+provider (phases P1 to P4). This reviews the trust model, the threats the design
+defends against, the hardening added in P4, and the residual risks that are
+accepted for now. It complements `THREAT_MODEL.md` (wallet custody) and
 `SECURITY_REQUIREMENTS.md`.
 
 Last updated: 2026-06-20.
@@ -29,6 +31,16 @@ Four layers, smallest trust at the top:
    and uses a key. It unlocks the active vault, decodes the request for human
    review, signs or broadcasts, and returns the result (signature or tx hash)
    for the router to relay.
+
+The Solana surface (`src/inpage/solana.ts`, `src/lib/dapp/solPermissions.ts`,
+the `sol_*` routes in the router, the `SolConnect`/`SolSign`/`SolSignTx` views)
+mirrors this exactly. One difference matters for the trust model: the active
+wallet's Solana address is **not** in cleartext vault metadata (only the EVM
+address is); it is derived from the mnemonic at runtime. So the key-free router
+cannot produce a Solana address on its own. It is derived only where a key is
+already present: the approval window (for connect and for binding a signature),
+and the popup (for the accountChanged-on-switch notification, where only the
+derived public address — never the key — is passed to the router).
 
 ### Invariants
 
@@ -63,6 +75,18 @@ Four layers, smallest trust at the top:
 | T12 | Slow / hostile RPC hangs a dApp promise | `proxyRead` and the add-chain `eth_chainId` probe use `AbortController` timeouts. |
 | T13 | Worker suspends mid-approval, response stranded | Undeliverable responses are buffered in `storage.session` and flushed when a port re-registers; the bridge reconnects while a request is in flight so the buffer can drain. |
 | T14 | Page drives arbitrary node methods through the wallet | Only an allowlist of read methods is proxied; everything else is handled explicitly or rejected. Reads go to NumPay's own configured RPC, never a page-supplied endpoint. |
+| T15 | Content script spoofs an approval decision or a wallet-state change | The background trusts `MSG_DAPP_DECISION` / `MSG_DAPP_STATE_CHANGED` / `ACTIVITY` only from our own extension pages: `sender.id === chrome.runtime.id && !sender.tab` (an extension page has no tab; a content script in a web page does). There is no `externally_connectable`, so a web page cannot message the background at all. |
+
+### Solana surface
+
+| # | Threat | Mitigation |
+|---|--------|------------|
+| S1 | Blind-signing an arbitrary transaction (drainer) | `signTransaction` / `signAndSendTransaction` decode the serialized message and **bind the fee payer to the connected account before any key is used** (`signSolanaTransaction`); a mismatch is refused, not signed. `signAndSend` additionally requires the user to be the sole signer (numSigs == 1) and runs a `simulateTransaction` (sigVerify) guard before broadcasting. The approval shows the programs invoked, instruction count, and a warning when the message uses address lookup tables (whose accounts cannot be resolved offline). |
+| S2 | signMessage phishing / unreadable bytes | The message is carried as base64 and decoded for display: valid UTF-8 is shown as text (control-character soup rejected), otherwise the raw base64 is shown so the user sees exactly what they sign. |
+| S3 | Signing for the wrong account after a mid-flow wallet switch | The approval re-derives the Solana address from the session mnemonic and binds `address === pending.account` at sign time; a switch refuses rather than signing with a different key. |
+| S4 | Stale Solana account exposed after a wallet switch (P1 gap) | A wallet switch now threads Solana `accountChanged`: the popup derives the new public address and the router re-points every connected Solana origin and emits the event. A new wallet with no Solana account (or a lock) drops the connection instead of leaving a stale account. Auto-lock emits Solana `disconnect`. |
+| S5 | Malformed transaction bytes crash or OOM the approval render | `inspectSolanaTransaction` / `decodeSolanaMessage` are throw-safe and **bound their account-key and instruction loops by the remaining buffer** — a hostile compact-u16 count (up to ~2M) can no longer drive millions of allocations and white-screen the approval. Covered by the adversarial + byte-fuzz suite. |
+| S6 | Oversized transaction payload | The serialized-transaction base64 is subject to the same 128 KB `MAX_PAYLOAD_BYTES` cap (`-32602`). |
 
 ## 3. Residual risks (accepted for now)
 
@@ -84,15 +108,23 @@ Four layers, smallest trust at the top:
 ## 4. Test coverage
 
 - `test/dapp-adversarial.mjs` (`npm run test:dapp`): hostile and malformed input
-  for `signDecode`, `txDecode`, `chainOps`, plus a 2000-iteration fuzz asserting
-  the decoders never throw. 53 assertions.
+  for `signDecode`, `txDecode`, `chainOps`, `solDecode`, and
+  `inspectSolanaTransaction`, plus two 2000-iteration fuzz loops (random hex for
+  the decoders, random byte arrays for the Solana transaction inspector)
+  asserting nothing throws. 71 assertions.
 - `test/verify-address-vectors.mjs` (`npm run test:vectors`): 33 address vectors
   (unchanged by this feature).
-- Offline signing round-trips (`personal_sign`, EIP-712 Mail, Permit2) confirm
-  the signature recovers to the signer.
+- Offline signing round-trips confirm signatures recover/verify to the signer:
+  EVM `personal_sign`, EIP-712 Mail and Permit2; Solana ed25519 signMessage.
 
 ## 5. Follow-ups
 
-- Browser smoke-test of P2 / P3 flows (only P1 has been click-tested live).
+- Browser smoke-test of the EVM P2 / P3 flows and the full Solana surface
+  (connect, signMessage, signTransaction / signAllTransactions /
+  signAndSendTransaction, and accountChanged-on-switch) — these have been
+  built and unit/fuzz-tested but not yet click-tested live.
 - Account-picker fast-follow (currently single active account by design).
 - Consider rate-limiting read proxying per origin if abuse is observed.
+- Solana lacks a per-transaction risk decoder equivalent to the EVM calldata
+  checks (unlimited-approval etc.); previews rely on program identification +
+  simulation. A deeper SPL-instruction decoder is a candidate follow-up.

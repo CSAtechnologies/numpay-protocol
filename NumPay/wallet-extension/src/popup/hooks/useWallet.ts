@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { ethers } from "ethers";
 import { type WalletData, type VaultMeta, listVaultMeta, getActiveId, setActiveId, updateWalletAvatar, touchActivity, unlockActiveVault, SESSION_KEY } from "@/lib/wallet";
 import { notifyDappState } from "@/lib/dapp/notify";
+import { deriveSolanaAddress } from "@/lib/chains/solana";
 import { getItem, setItem, getSession, setSession } from "@/lib/storage";
 import { NETWORKS, DEFAULT_NETWORK, type Network } from "@/lib/networks";
 import { DEFAULT_TOKENS, getTokenBalance, type Token } from "@/lib/tokens";
@@ -513,7 +514,8 @@ export function useWallet(): WalletState {
     setChainBalances([]);
     setNonEvmWallet(null);
     setNonEvmChains([]);
-    notifyDappState(); // emit accountsChanged to connected dApps
+    // emit accountsChanged (EVM) + accountChanged (Solana) to connected dApps
+    notifyDappState(await solAddressForNotify(walletData));
   }, [activeWalletId]);
 
   // Adding a freshly created/imported wallet makes it active. We already hold
@@ -534,7 +536,8 @@ export function useWallet(): WalletState {
     setChainBalances([]);
     setNonEvmWallet(null);
     setNonEvmChains([]);
-    notifyDappState(); // new active wallet => accountsChanged
+    // new active wallet => accountsChanged (EVM) + accountChanged (Solana)
+    notifyDappState(await solAddressForNotify(walletData));
   }, []);
 
   const removeWalletMeta = useCallback((id: string) => {
@@ -556,9 +559,23 @@ export function useWallet(): WalletState {
   };
 }
 
+// Derive the new active wallet's Solana address for a wallet-change dApp
+// notification, so the router can emit Solana accountChanged. Returns "" when
+// the wallet has no mnemonic (no derivable Solana account), which tells the
+// router to drop any stale Solana connections rather than expose them.
+async function solAddressForNotify(wallet: WalletData): Promise<string> {
+  try {
+    if (wallet.mnemonic) return (await deriveSolanaAddress(wallet.mnemonic)).address;
+  } catch {
+    /* fall through to "" */
+  }
+  return "";
+}
+
 export async function cacheWalletSession(wallet: WalletData, id: string): Promise<void> {
   const session: WalletSession = { activeId: id, wallets: { [id]: wallet } };
   await setSession(SESSION_KEY, JSON.stringify(session));
   await touchActivity();
-  notifyDappState(); // unlock/create/import changes the exposed account
+  // unlock/create/import changes the exposed account (EVM + Solana)
+  notifyDappState(await solAddressForNotify(wallet));
 }

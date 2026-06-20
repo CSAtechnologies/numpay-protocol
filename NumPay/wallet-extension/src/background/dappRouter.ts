@@ -28,7 +28,13 @@ import {
   type RpcError,
 } from "../lib/dapp/types";
 import { getPermission, grant, updateAllConnected } from "../lib/dapp/permissions";
-import { getSolPermission, grantSol, revokeSol } from "../lib/dapp/solPermissions";
+import {
+  getSolPermission,
+  grantSol,
+  revokeSol,
+  updateAllConnectedSol,
+  listSolOrigins,
+} from "../lib/dapp/solPermissions";
 import { proxyRead, isReadMethod, evmChainIdHex, evmChainIdNumber } from "../lib/dapp/rpcProxy";
 import {
   parseChainId,
@@ -679,7 +685,11 @@ async function handleRequest(
 
 // ── State-change broadcast (wallet/network switch, lock/unlock) ─────────────────
 
-export async function broadcastDappState(): Promise<void> {
+// `solAddress` carries the wallet-change signal for the Solana surface (the
+// router is key-free and cannot derive it). undefined = EVM-chain-only change,
+// leave Solana untouched; non-empty = the new wallet's base58 address; "" =
+// wallet changed but has no Solana account, so drop the Solana connections.
+export async function broadcastDappState(solAddress?: string): Promise<void> {
   const account = await getActiveAccount();
   const unlocked = await isUnlocked();
   const chainId = evmChainIdNumber(await getActiveChainId());
@@ -688,6 +698,24 @@ export async function broadcastDappState(): Promise<void> {
   for (const origin of portsByOrigin.keys()) {
     emitToOrigin(origin, "accountsChanged", accounts);
     emitToOrigin(origin, "chainChanged", "0x" + chainId.toString(16));
+  }
+
+  if (solAddress === undefined) return; // chain-only change: Solana unaffected
+
+  if (solAddress && unlocked) {
+    // Re-point every connected Solana origin at the new account and emit the
+    // matching accountChanged (this closes the P1 stale-account gap on switch).
+    const origins = await updateAllConnectedSol(solAddress);
+    for (const origin of origins) {
+      emitToOrigin(origin, SOL_EVENTS.accountChanged, { publicKey: solAddress });
+    }
+  } else {
+    // New active wallet has no Solana account (or the wallet is locked): revoke
+    // and disconnect rather than leave a stale Solana account exposed.
+    for (const { origin } of await listSolOrigins()) {
+      await revokeSol(origin);
+      emitToOrigin(origin, SOL_EVENTS.disconnect, null);
+    }
   }
 }
 
@@ -729,7 +757,14 @@ export function initDappRouter(): void {
     port.onDisconnect.addListener(() => unregisterPort(port));
   });
 
-  chrome.runtime.onMessage.addListener((msg) => {
+  chrome.runtime.onMessage.addListener((msg, sender) => {
+    // Defense in depth: approval decisions and wallet-state changes are only
+    // ever sent by our own extension pages (the popup and the approval window).
+    // An extension page has no `sender.tab`; a content script in a web page
+    // does. Reject anything that is not our extension's own page so a content
+    // script cannot spoof a decision or inject a Solana address.
+    if (sender.id !== chrome.runtime.id || sender.tab) return false;
+
     if (msg?.type === MSG_DAPP_DECISION && typeof msg.requestId === "string") {
       void handleDecision(
         msg.requestId,
@@ -737,7 +772,7 @@ export function initDappRouter(): void {
         typeof msg.result === "string" ? msg.result : undefined
       );
     } else if (msg?.type === MSG_DAPP_STATE_CHANGED) {
-      void broadcastDappState();
+      void broadcastDappState(typeof msg.solAddress === "string" ? msg.solAddress : undefined);
     }
     return false;
   });

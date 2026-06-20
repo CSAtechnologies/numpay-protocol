@@ -43,8 +43,11 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onDisconnect.addListener(() => { /* popup closed; alarm keeps running */ });
 });
 
-// Explicit activity pings from the popup.
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+// Explicit activity pings from the popup. Only our own extension pages send
+// these (a content script in a web page has a `sender.tab`); ignore anything
+// else so a page cannot keep the wallet awake or reset the auto-lock timer.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id || sender.tab) return false;
   if (msg?.type === "ACTIVITY") {
     resetLockTimer();
     sendResponse({ ok: true });
