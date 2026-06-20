@@ -22,9 +22,16 @@ import {
   type PendingAddChain,
   type PendingSolConnect,
   type PendingSolSign,
+  type PendingSolSignTx,
 } from "@/lib/dapp/types";
-import { deriveSolanaAddress } from "@/lib/chains/solana";
-import { decodeSolSignMessage, bytesToBase64 } from "@/lib/dapp/solDecode";
+import {
+  deriveSolanaAddress,
+  inspectSolanaTransaction,
+  signSolanaTransaction,
+  simulateSolanaTx,
+  type SolTxInspection,
+} from "@/lib/chains/solana";
+import { decodeSolSignMessage, bytesToBase64, base64ToBytes } from "@/lib/dapp/solDecode";
 import nacl from "tweetnacl";
 import {
   decodePersonalSignMessage,
@@ -136,8 +143,10 @@ function App() {
       <PasswordPrompt
         title="Unlock NumPay"
         subtitle={
-          pending.type === "sign"
+          pending.type === "sign" || pending.type === "solSign"
             ? "Unlock your wallet to review this signature request."
+            : pending.type === "sendTx" || pending.type === "solSignTx"
+            ? "Unlock your wallet to review this transaction request."
             : "Unlock your wallet to review this connection request."
         }
         actionLabel="Unlock"
@@ -152,6 +161,7 @@ function App() {
   if (pending.type === "addChain") return <AddChainView pending={pending} onDecide={decide} />;
   if (pending.type === "solConnect") return <SolConnectView pending={pending} onDecide={decide} />;
   if (pending.type === "solSign") return <SolSignView pending={pending} onDecide={decide} />;
+  if (pending.type === "solSignTx") return <SolSignTxView pending={pending} onDecide={decide} />;
   if (pending.type === "sign") return <SignView pending={pending} onDecide={decide} />;
   return <ConnectView pending={pending} onDecide={decide} />;
 }
@@ -391,6 +401,164 @@ function SolSignView({
         </button>
         <button onClick={approve} disabled={busy} className="flex-1 btn-primary-premium text-[13px] disabled:opacity-50">
           {busy ? "Signing..." : "Sign"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Solana sign / send transaction ─────────────────────────────────────────────────
+
+type SolSimState =
+  | { status: "loading" }
+  | { status: "ok" }
+  | { status: "revert"; message: string };
+
+function SolSignTxView({
+  pending,
+  onDecide,
+}: {
+  pending: PendingSolSignTx;
+  onDecide: (approved: boolean, result?: string) => void;
+}) {
+  const [info, setInfo] = useState<SolTxInspection | null>(null);
+  const [sim, setSim] = useState<SolSimState>({ status: "loading" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Decode the transaction bytes once; base64ToBytes never throws.
+  const txBytes = base64ToBytes(pending.transaction);
+
+  // The fee payer must be the connected account, or signing would bind the user
+  // to a transaction they don't pay for / didn't intend. inspectSolanaTransaction
+  // never throws; an empty fee payer means the bytes did not parse.
+  const feePayerMismatch = info !== null && info.feePayer !== pending.account;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const i = inspectSolanaTransaction(txBytes);
+      if (!cancelled) setInfo(i);
+      // Preview simulation against current state. The tx may not be signed yet,
+      // so sigVerify is off; this is informational, not a hard block.
+      const s = await simulateSolanaTx(pending.transaction, false);
+      if (!cancelled) {
+        setSim(s.ok ? { status: "ok" } : { status: "revert", message: s.err ?? "Transaction is expected to fail" });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  async function approve() {
+    setError(null);
+    setBusy(true);
+    try {
+      const wd = await getActiveSessionWallet();
+      if (!wd?.mnemonic) {
+        setError("Wallet is locked. Close and retry.");
+        setBusy(false);
+        return;
+      }
+      const { address, secretKey } = await deriveSolanaAddress(wd.mnemonic);
+      // Re-bind to the connected account at sign time (the user may have switched
+      // the active wallet while this window was open).
+      if (address !== pending.account) {
+        setError("Active wallet changed. Reject and retry from the site.");
+        setBusy(false);
+        return;
+      }
+      // signSolanaTransaction re-checks the fee-payer bind before using the key.
+      const res = await signSolanaTransaction(secretKey, address, txBytes, pending.send);
+      await touchActivity();
+      onDecide(true, pending.send ? res.signature! : res.signedB64);
+    } catch (e: any) {
+      setError(e?.message || "Could not sign this transaction.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="app-bg min-h-full flex flex-col">
+      <div className="px-5 pt-6 pb-4 flex-1 overflow-y-auto">
+        <div className="flex flex-col items-center text-center mb-5">
+          <img src="/logo.png" alt="NumPay" className="w-12 h-12 mb-3" />
+          <h1 className="text-[17px] font-bold text-text-primary">
+            {pending.send ? "Transaction request" : "Sign transaction"}
+          </h1>
+          <p className="text-[12px] text-muted mt-1 break-all">{pending.origin}</p>
+        </div>
+
+        {feePayerMismatch && (
+          <div className="mb-3 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3.5 py-2.5">
+            <p className="text-[12px] text-rose-300 leading-snug">
+              ⚠ The fee payer of this transaction is not your connected account. NumPay will not sign it. Reject it.
+            </p>
+          </div>
+        )}
+
+        {info?.usesLookupTables && (
+          <div className="mb-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3.5 py-2.5">
+            <p className="text-[12px] text-amber-300 leading-snug">
+              ⚠ This transaction uses address lookup tables, so some accounts it touches cannot be shown here. Only approve it if you trust this site.
+            </p>
+          </div>
+        )}
+
+        {sim.status === "revert" && !feePayerMismatch && (
+          <div className="mb-3 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3.5 py-2.5">
+            <p className="text-[12px] text-rose-300 leading-snug">
+              ⚠ This transaction is likely to fail: {sim.message}
+            </p>
+          </div>
+        )}
+
+        <div className="premium-card p-3.5 mb-3">
+          <p className="text-[11px] text-muted uppercase tracking-wider font-medium mb-1">
+            {pending.send ? "Sending from" : "Signing account"}
+          </p>
+          <p className="text-[12px] font-mono text-text-primary break-all">{pending.account}</p>
+          <p className="text-[11px] text-muted mt-2">Network: <span className="text-brand-400 font-medium">Solana Mainnet</span></p>
+        </div>
+
+        <div className="premium-card p-3.5 mb-3">
+          <p className="text-[11px] text-muted uppercase tracking-wider font-medium mb-1">Programs called</p>
+          {info && info.programs.length > 0 ? (
+            <ul className="text-[12px] text-text-primary space-y-1">
+              {info.programs.map((p, i) => (
+                <li key={i} className="break-all">
+                  {p.name ? <span className="text-text-primary">{p.name}</span> : <span className="font-mono text-text-secondary">{p.id}</span>}
+                  {p.name && <span className="text-muted font-mono text-[10px]"> · {p.id.slice(0, 8)}…</span>}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-[12px] text-muted">{info ? "None decoded" : "Decoding…"}</p>
+          )}
+          {info && (
+            <p className="text-[11px] text-muted mt-2">
+              {info.instructionCount} instruction{info.instructionCount === 1 ? "" : "s"}
+              {sim.status === "ok" && <span className="text-emerald-400"> · simulation passed</span>}
+            </p>
+          )}
+        </div>
+
+        {error && <p className="text-[12px] text-rose-300 mt-1 mb-1">{error}</p>}
+      </div>
+
+      <div className="px-5 pb-6 flex gap-2">
+        <button
+          onClick={() => onDecide(false)}
+          disabled={busy}
+          className="flex-1 py-2.5 rounded-xl bg-surface-2 text-text-secondary text-[13px] font-medium border border-border hover:bg-surface-3 transition-colors disabled:opacity-50"
+        >
+          Reject
+        </button>
+        <button
+          onClick={approve}
+          disabled={busy || feePayerMismatch}
+          className="flex-1 btn-primary-premium text-[13px] disabled:opacity-50"
+        >
+          {busy ? (pending.send ? "Sending..." : "Signing...") : pending.send ? "Confirm" : "Sign"}
         </button>
       </div>
     </div>

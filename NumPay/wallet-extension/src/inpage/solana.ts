@@ -84,7 +84,7 @@ function makeAccount(base58: string): WalletAccount {
     address: base58,
     publicKey: makePublicKey(base58).toBytes(),
     chains: [SOL_CLUSTER],
-    features: ["solana:signMessage"], // P2
+    features: ["solana:signMessage", "solana:signTransaction", "solana:signAndSendTransaction"],
     label: "NumPay",
   };
 }
@@ -95,6 +95,48 @@ async function doSignMessage(message: Uint8Array, display?: string): Promise<Uin
   const sig = res?.signature as string | undefined;
   if (!sig) throw { code: 4001, message: "User rejected the request" };
   return base64ToBytes(sig);
+}
+
+// ── Transaction signing (P3) ──────────────────────────────────────────────────────
+// We hold no SDK. To stay SDK-free we serialize/deserialize THROUGH the dApp's own
+// transaction object: every @solana/web3.js Transaction / VersionedTransaction
+// exposes serialize() and a static deserialize()/from(). We extract the bytes,
+// the background derives + signs, and we rebuild the dApp's object from the
+// signed bytes so the dApp gets back exactly the type it passed in.
+
+// Serialize a dApp transaction object (legacy or versioned) to raw bytes,
+// tolerating the missing signatures a not-yet-signed transaction has.
+function serializeTx(tx: any): Uint8Array {
+  if (tx instanceof Uint8Array) return tx;
+  if (tx && typeof tx.serialize === "function") {
+    // VersionedTransaction.serialize() takes no args and zero-fills empty sigs.
+    if (tx.message && tx.version !== undefined) return new Uint8Array(tx.serialize());
+    // Legacy Transaction needs the relaxed flags or it throws on missing sigs.
+    return new Uint8Array(tx.serialize({ requireAllSignatures: false, verifySignatures: false }));
+  }
+  throw { code: -32602, message: "Unsupported transaction type" };
+}
+
+// Rebuild the dApp's transaction type from signed bytes, using its own class.
+function deserializeTx(tx: any, bytes: Uint8Array): any {
+  const Ctor = tx?.constructor;
+  if (Ctor && typeof Ctor.deserialize === "function") return Ctor.deserialize(bytes); // versioned
+  if (Ctor && typeof Ctor.from === "function") return Ctor.from(bytes); // legacy
+  return bytes; // dApp passed raw bytes; hand raw bytes back
+}
+
+async function doSignTransaction(tx: any): Promise<any> {
+  const res = await request(SOL_METHODS.signTransaction, [{ transaction: bytesToBase64(serializeTx(tx)) }]);
+  const signedB64 = res?.signedTransaction as string | undefined;
+  if (!signedB64) throw { code: 4001, message: "User rejected the request" };
+  return deserializeTx(tx, base64ToBytes(signedB64));
+}
+
+async function doSignAndSend(tx: any): Promise<{ signature: string }> {
+  const res = await request(SOL_METHODS.signAndSendTransaction, [{ transaction: bytesToBase64(serializeTx(tx)) }]);
+  const signature = res?.signature as string | undefined;
+  if (!signature) throw { code: 4001, message: "User rejected the request" };
+  return { signature };
 }
 
 // ── Shared connection state ──────────────────────────────────────────────────────
@@ -166,6 +208,9 @@ interface SolanaProvider {
   connect(opts?: { onlyIfTrusted?: boolean }): Promise<{ publicKey: PublicKeyLike }>;
   disconnect(): Promise<void>;
   signMessage(message: Uint8Array, display?: string): Promise<{ signature: Uint8Array; publicKey: PublicKeyLike }>;
+  signTransaction<T = any>(tx: T): Promise<T>;
+  signAllTransactions<T = any>(txs: T[]): Promise<T[]>;
+  signAndSendTransaction(tx: any, options?: unknown): Promise<{ signature: string }>;
   on(event: string, cb: Listener): SolanaProvider;
   off(event: string, cb: Listener): SolanaProvider;
   removeListener(event: string, cb: Listener): SolanaProvider;
@@ -201,6 +246,19 @@ const solana: SolanaProvider = {
     const signature = await doSignMessage(message, display);
     return { signature, publicKey: solana.publicKey ?? makePublicKey(currentBase58 ?? "") };
   },
+
+  signTransaction: async <T = any>(tx: T): Promise<T> => doSignTransaction(tx),
+
+  // Each transaction goes through its own approval (full preview per tx).
+  // Awaiting sequentially keeps within the per-origin single-approval limit.
+  signAllTransactions: async <T = any>(txs: T[]): Promise<T[]> => {
+    const out: T[] = [];
+    for (const tx of txs) out.push(await doSignTransaction(tx));
+    return out;
+  },
+
+  signAndSendTransaction: async (tx: any, _options?: unknown): Promise<{ signature: string }> =>
+    doSignAndSend(tx),
 
   on: (event: string, cb: Listener): SolanaProvider => {
     if (!legacyListeners.has(event)) legacyListeners.set(event, new Set());
@@ -270,6 +328,41 @@ async function standardSignMessage(
   return outputs;
 }
 
+interface SolanaSignTransactionInput { account: WalletAccount; transaction: Uint8Array; chain?: string }
+interface SolanaSignTransactionOutput { signedTransaction: Uint8Array }
+interface SolanaSignAndSendTransactionOutput { signature: Uint8Array }
+
+// Wallet Standard solana:signTransaction. Byte-based (no SDK): the input carries
+// the serialized transaction; we return the serialized signed transaction. One
+// approval per input, awaited sequentially (per-origin single-approval limit).
+async function standardSignTransaction(
+  ...inputs: SolanaSignTransactionInput[]
+): Promise<SolanaSignTransactionOutput[]> {
+  const outputs: SolanaSignTransactionOutput[] = [];
+  for (const input of inputs) {
+    const res = await request(SOL_METHODS.signTransaction, [{ transaction: bytesToBase64(input.transaction) }]);
+    const signedB64 = res?.signedTransaction as string | undefined;
+    if (!signedB64) throw { code: 4001, message: "User rejected the request" };
+    outputs.push({ signedTransaction: base64ToBytes(signedB64) });
+  }
+  return outputs;
+}
+
+// Wallet Standard solana:signAndSendTransaction. The feature returns the raw
+// transaction signature bytes, so we decode our base58 signature to bytes.
+async function standardSignAndSendTransaction(
+  ...inputs: SolanaSignTransactionInput[]
+): Promise<SolanaSignAndSendTransactionOutput[]> {
+  const outputs: SolanaSignAndSendTransactionOutput[] = [];
+  for (const input of inputs) {
+    const res = await request(SOL_METHODS.signAndSendTransaction, [{ transaction: bytesToBase64(input.transaction) }]);
+    const signature = res?.signature as string | undefined;
+    if (!signature) throw { code: 4001, message: "User rejected the request" };
+    outputs.push({ signature: bs58.decode(signature) });
+  }
+  return outputs;
+}
+
 const wallet = {
   version: "1.0.0",
   name: "NumPay",
@@ -280,6 +373,16 @@ const wallet = {
     "standard:disconnect": { version: "1.0.0", disconnect: standardDisconnect },
     "standard:events": { version: "1.0.0", on: standardOn },
     "solana:signMessage": { version: "1.0.0", signMessage: standardSignMessage },
+    "solana:signTransaction": {
+      version: "1.0.0",
+      supportedTransactionVersions: ["legacy", 0],
+      signTransaction: standardSignTransaction,
+    },
+    "solana:signAndSendTransaction": {
+      version: "1.0.0",
+      supportedTransactionVersions: ["legacy", 0],
+      signAndSendTransaction: standardSignAndSendTransaction,
+    },
   } as Record<string, unknown>,
   accounts: [] as readonly WalletAccount[],
 };

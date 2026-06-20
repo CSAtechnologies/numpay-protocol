@@ -22,6 +22,7 @@ import {
   type PendingAddChain,
   type PendingSolConnect,
   type PendingSolSign,
+  type PendingSolSignTx,
   type DappTxRequest,
   type DappPending,
   type RpcError,
@@ -266,6 +267,22 @@ async function handleDecision(
         id: p.id,
         channel: p.channel,
         result: { signature: result, publicKey: p.account },
+      });
+    } else {
+      respondToOrigin(p.origin, { id: p.id, channel: p.channel, error: ERR.internal });
+    }
+    return;
+  }
+
+  if (p.type === "solSignTx") {
+    // signAndSend: the window returns the base58 transaction signature.
+    // signTransaction: it returns the base64 signed transaction. The shapes are
+    // distinguished by the request method on the dApp side via `send`.
+    if (typeof result === "string" && result.length > 0) {
+      respondToOrigin(p.origin, {
+        id: p.id,
+        channel: p.channel,
+        result: p.send ? { signature: result } : { signedTransaction: result },
       });
     } else {
       respondToOrigin(p.origin, { id: p.id, channel: p.channel, error: ERR.internal });
@@ -604,6 +621,37 @@ async function handleRequest(
           message,
         };
         await openApproval(solSignPending);
+        return;
+      }
+
+      case SOL_METHODS.signTransaction:
+      case SOL_METHODS.signAndSendTransaction: {
+        const perm = await getSolPermission(origin);
+        if (!perm) {
+          reply(undefined, { code: ERR.unauthorized.code, message: "Connect the wallet first" });
+          return;
+        }
+        const p0 = params[0] as { transaction?: unknown } | undefined;
+        const transaction = p0?.transaction;
+        if (typeof transaction !== "string" || !transaction) {
+          reply(undefined, ERR.invalidParams);
+          return;
+        }
+        if (transaction.length > MAX_PAYLOAD_BYTES) {
+          reply(undefined, { code: ERR.invalidParams.code, message: "Transaction too large" });
+          return;
+        }
+        const solTxPending: PendingSolSignTx = {
+          type: "solSignTx",
+          requestId: newRequestId(),
+          origin,
+          id,
+          channel,
+          account: perm.account,
+          transaction,
+          send: method === SOL_METHODS.signAndSendTransaction,
+        };
+        await openApproval(solTxPending);
         return;
       }
 

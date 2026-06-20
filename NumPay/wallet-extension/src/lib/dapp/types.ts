@@ -22,6 +22,8 @@ export const SOL_METHODS = {
   disconnect: "sol_disconnect",
   accounts: "sol_accounts", // silent: returns the permitted account or null
   signMessage: "sol_signMessage", // ed25519 sign of arbitrary bytes (P2)
+  signTransaction: "sol_signTransaction", // sign a serialized tx, return it (P3)
+  signAndSendTransaction: "sol_signAndSendTransaction", // sign + broadcast (P3)
 } as const;
 
 // Solana provider event names. Distinct from the EVM event names so each
@@ -208,6 +210,16 @@ export interface PendingSolSign extends PendingBase {
   message: string; // base64-encoded message bytes (binary-safe over storage/wire)
 }
 
+// Solana sign-transaction approval. The approval window decodes the serialized
+// transaction, binds its fee payer to the connected account, signs the user's
+// slot, and (when `send`) broadcasts it. The router only relays the result.
+export interface PendingSolSignTx extends PendingBase {
+  type: "solSignTx";
+  account: string; // base58 connected account; must equal the tx fee payer
+  transaction: string; // base64-encoded serialized transaction (legacy or v0)
+  send: boolean; // true = signAndSendTransaction; false = signTransaction
+}
+
 export type DappPending =
   | PendingConnect
   | PendingSign
@@ -215,4 +227,5 @@ export type DappPending =
   | PendingSwitchChain
   | PendingAddChain
   | PendingSolConnect
-  | PendingSolSign;
+  | PendingSolSign
+  | PendingSolSignTx;

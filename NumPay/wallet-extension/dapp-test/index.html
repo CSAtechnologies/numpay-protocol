@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>NumPay dApp connect test (P1)</title>
+  <title>NumPay dApp connect test</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 680px; margin: 40px auto; padding: 0 16px; }
     button { padding: 8px 12px; margin: 4px 4px 4px 0; cursor: pointer; }
@@ -13,7 +13,7 @@
   </style>
 </head>
 <body>
-  <h1>NumPay dApp connect test (P1)</h1>
+  <h1>NumPay dApp connect test</h1>
   <p><small>Must be served over http/https (content scripts do not inject on file://).
   Try: <code>npx serve dapp-test</code> then open the shown localhost URL.</small></p>
 
@@ -57,6 +57,19 @@
   <div class="row">
     <button onclick="solSignMessage()">window.solana.signMessage (text)</button>
     <button onclick="solStandardSignMessage()">Wallet Standard signMessage</button>
+  </div>
+  <div class="row">
+    <small>Transactions below are real 0-lamport self-transfers (spend only the network fee). Review on the NumPay approval, then sign/send or reject.</small>
+  </div>
+  <div class="row">
+    <button onclick="solSignTransaction(false)">window.solana.signTransaction (legacy)</button>
+    <button onclick="solSignTransaction(true)">window.solana.signTransaction (v0)</button>
+    <button onclick="solSignAndSend(true)">window.solana.signAndSendTransaction (v0) 💸</button>
+    <button onclick="solSignAll()">window.solana.signAllTransactions (x2)</button>
+  </div>
+  <div class="row">
+    <button onclick="solStdSignTransaction(true)">Wallet Standard signTransaction (v0)</button>
+    <button onclick="solStdSignAndSend(true)">Wallet Standard signAndSendTransaction (v0) 💸</button>
   </div>
 
   <pre id="out">Ready.</pre>
@@ -276,6 +289,87 @@
         "f".repeat(64); // MAX_UINT256
       run("eth_sendTransaction", [{ from: selected, to: USDC, value: "0x0", data }]);
     }
+
+    // ── Solana transaction helpers (loaded as a module, exposed on window) ───────
+    // @solana/web3.js from a CDN, exactly as a real dApp would build a tx. The
+    // test page is served standalone (not under the extension CSP), so this is OK.
+    import("https://esm.sh/@solana/web3.js@1.95.3").then((web3) => {
+      const { Connection, PublicKey, SystemProgram, Transaction, TransactionMessage, VersionedTransaction } = web3;
+      const conn = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
+
+      function connectedPubkey() {
+        if (window.solana && window.solana.publicKey) return new PublicKey(window.solana.publicKey.toString());
+        const w = numpayStandardWallet();
+        const acct = w && w.accounts && w.accounts[0];
+        if (acct) return new PublicKey(acct.address);
+        return null;
+      }
+
+      // 0-lamport self-transfer: a real, broadcastable tx that spends only the fee.
+      async function buildTx(versioned) {
+        const pk = connectedPubkey();
+        if (!pk) throw new Error("Connect Solana first.");
+        const { blockhash } = await conn.getLatestBlockhash("finalized");
+        const ix = SystemProgram.transfer({ fromPubkey: pk, toPubkey: pk, lamports: 0 });
+        if (versioned) {
+          const msg = new TransactionMessage({ payerKey: pk, recentBlockhash: blockhash, instructions: [ix] }).compileToV0Message();
+          return new VersionedTransaction(msg);
+        }
+        const tx = new Transaction({ feePayer: pk, recentBlockhash: blockhash });
+        tx.add(ix);
+        return tx;
+      }
+
+      window.solSignTransaction = async (versioned) => {
+        try {
+          const tx = await buildTx(versioned);
+          const signed = await window.solana.signTransaction(tx);
+          const raw = signed.serialize({ requireAllSignatures: false });
+          log("solana.signTransaction -> signed " + raw.length + " bytes");
+        } catch (e) { log("solana.signTransaction ERROR -> " + JSON.stringify({ code: e.code, message: e.message })); }
+      };
+
+      window.solSignAndSend = async (versioned) => {
+        try {
+          const tx = await buildTx(versioned);
+          const res = await window.solana.signAndSendTransaction(tx);
+          log("solana.signAndSendTransaction -> https://solscan.io/tx/" + res.signature);
+        } catch (e) { log("solana.signAndSendTransaction ERROR -> " + JSON.stringify({ code: e.code, message: e.message })); }
+      };
+
+      window.solSignAll = async () => {
+        try {
+          const txs = [await buildTx(true), await buildTx(true)];
+          const signed = await window.solana.signAllTransactions(txs);
+          log("solana.signAllTransactions -> signed " + signed.length + " transactions");
+        } catch (e) { log("solana.signAllTransactions ERROR -> " + JSON.stringify({ code: e.code, message: e.message })); }
+      };
+
+      window.solStdSignTransaction = async (versioned) => {
+        const w = numpayStandardWallet();
+        const acct = w && w.accounts && w.accounts[0];
+        if (!acct) return log("Connect via Wallet Standard first.");
+        try {
+          const tx = await buildTx(versioned);
+          const feat = w.features["solana:signTransaction"];
+          const out = await feat.signTransaction({ account: acct, transaction: tx.serialize(), chain: "solana:mainnet" });
+          log("WalletStandard signTransaction -> signed " + (out[0] && out[0].signedTransaction.length) + " bytes");
+        } catch (e) { log("WalletStandard signTransaction ERROR -> " + JSON.stringify({ code: e.code, message: e.message })); }
+      };
+
+      window.solStdSignAndSend = async (versioned) => {
+        const w = numpayStandardWallet();
+        const acct = w && w.accounts && w.accounts[0];
+        if (!acct) return log("Connect via Wallet Standard first.");
+        try {
+          const tx = await buildTx(versioned);
+          const feat = w.features["solana:signAndSendTransaction"];
+          const out = await feat.signAndSendTransaction({ account: acct, transaction: tx.serialize(), chain: "solana:mainnet" });
+          const sigBytes = out[0] && out[0].signature;
+          log("WalletStandard signAndSendTransaction -> signature " + (sigBytes ? sigBytes.length + " bytes" : "none"));
+        } catch (e) { log("WalletStandard signAndSendTransaction ERROR -> " + JSON.stringify({ code: e.code, message: e.message })); }
+      };
+    }).catch((e) => log("Could not load @solana/web3.js for tx tests: " + e.message));
 
     function permit2Typed(addr) {
       return {

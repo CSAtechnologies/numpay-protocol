@@ -63,6 +63,12 @@ function u64le(n: bigint): Uint8Array {
   return buf;
 }
 
+function bytesToB64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
 /**
  * Send SOL (native transfer) using raw JSON-RPC, no SDK required.
  * Returns the transaction signature (base58).
@@ -264,7 +270,7 @@ const KNOWN_SOLANA_PROGRAMS: Record<string, string> = {
  * and whether the message uses address lookup tables (whose entries cannot be
  * resolved offline).
  */
-function decodeSolanaMessage(message: Uint8Array): {
+export function decodeSolanaMessage(message: Uint8Array): {
   feePayer: string;
   programs: Array<{ id: string; name: string | null }>;
   usesLookupTables: boolean;
@@ -280,7 +286,11 @@ function decodeSolanaMessage(message: Uint8Array): {
   const keyCount = decodeCompactU16(message, off);
   off += keyCount.length;
   const keys: Uint8Array[] = [];
-  for (let i = 0; i < keyCount.value; i++) {
+  // Bound the loop by the bytes actually present: a hostile/malformed message
+  // can encode an enormous key count (up to ~2M in 3 varint bytes), which would
+  // otherwise allocate millions of slices and OOM the approval window. Each key
+  // is exactly 32 bytes, so we can never read more than the buffer holds.
+  for (let i = 0; i < keyCount.value && off + 32 <= message.length; i++) {
     keys.push(message.slice(off, off + 32));
     off += 32;
   }
@@ -290,7 +300,12 @@ function decodeSolanaMessage(message: Uint8Array): {
   const ixCount = decodeCompactU16(message, off);
   off += ixCount.length;
   const programIdxs = new Set<number>();
-  for (let i = 0; i < ixCount.value; i++) {
+  // Likewise bound by remaining bytes; each instruction consumes at least one
+  // byte, so we stop as soon as we run off the end of the message. Count the
+  // instructions we actually parsed rather than the declared count, which a
+  // malformed message can inflate.
+  let parsedIxCount = 0;
+  for (let i = 0; i < ixCount.value && off < message.length; i++) {
     const programIdIndex = message[off];
     off += 1;
     programIdxs.add(programIdIndex);
@@ -298,6 +313,7 @@ function decodeSolanaMessage(message: Uint8Array): {
     off += accs.length + accs.value;
     const dataLen = decodeCompactU16(message, off);
     off += dataLen.length + dataLen.value;
+    parsedIxCount++;
   }
 
   let usesLookupTables = false;
@@ -317,8 +333,135 @@ function decodeSolanaMessage(message: Uint8Array): {
     feePayer: keys.length ? bs58.encode(keys[0]) : "",
     programs,
     usesLookupTables,
-    instructionCount: ixCount.value,
+    instructionCount: parsedIxCount,
   };
+}
+
+// ── dApp signTransaction / signAndSendTransaction (P3) ────────────────────────
+
+export interface SolTxInspection {
+  feePayer: string;
+  programs: Array<{ id: string; name: string | null }>;
+  usesLookupTables: boolean;
+  instructionCount: number;
+  numSigs: number; // required signers (sig slots) the serialized tx carries
+}
+
+/**
+ * Inspect a serialized Solana transaction (legacy or v0) for the approval
+ * preview. Runs entirely offline and must NOT throw on hostile bytes — a dApp
+ * controls this input and a throw would white-screen the approval window. On
+ * malformed input it returns a best-effort/empty inspection; the fee-payer bind
+ * in signSolanaTransaction is the real safety gate before any key is used.
+ */
+export function inspectSolanaTransaction(txBytes: Uint8Array): SolTxInspection {
+  try {
+    const { value: numSigs, length: lenBytes } = decodeCompactU16(txBytes, 0);
+    const message = txBytes.slice(lenBytes + numSigs * 64);
+    const decoded = decodeSolanaMessage(message);
+    return { ...decoded, numSigs };
+  } catch {
+    return { feePayer: "", programs: [], usesLookupTables: false, instructionCount: 0, numSigs: 0 };
+  }
+}
+
+/**
+ * Simulate a serialized (base64) transaction against current chain state. Used
+ * both for the approval preview (sigVerify off, the tx may be unsigned yet) and
+ * as the pre-broadcast guard in signSolanaTransaction (sigVerify on). Never
+ * throws: returns ok=false with a human-readable reason on any failure.
+ */
+export async function simulateSolanaTx(
+  signedB64: string,
+  sigVerify: boolean,
+): Promise<{ ok: boolean; err?: string; logs: string[] }> {
+  try {
+    const resp = await fetch(SOL_RPC, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "simulateTransaction",
+        params: [signedB64, { encoding: "base64", sigVerify, commitment: "confirmed" }],
+      }),
+    });
+    const data = await resp.json();
+    if (data.error) return { ok: false, err: data.error.message ?? "Simulation failed", logs: [] };
+    const v = data.result?.value;
+    if (v?.err) return { ok: false, err: decodeSimulationFailure(v.err, v.logs ?? []), logs: v.logs ?? [] };
+    return { ok: true, logs: v?.logs ?? [] };
+  } catch {
+    return { ok: false, err: "Could not reach the Solana network to simulate this transaction.", logs: [] };
+  }
+}
+
+/** Broadcast a signed (base64) transaction. Returns the base58 signature. */
+export async function broadcastSolanaTx(signedB64: string): Promise<string> {
+  const resp = await fetch(SOL_RPC, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "sendTransaction",
+      // We simulate locally before calling this, so node preflight can be skipped.
+      params: [signedB64, { encoding: "base64", skipPreflight: true, maxRetries: 3, preflightCommitment: "confirmed" }],
+    }),
+  });
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error.message ?? JSON.stringify(data.error));
+  return data.result as string;
+}
+
+/**
+ * Sign the user's slot of a serialized Solana transaction and, when `send`,
+ * simulate + broadcast it. Same SDK-free approach as the Jupiter swap path:
+ * the user is the fee payer (first account key = first signature slot), so we
+ * sign the message bytes and write the signature into slot 0.
+ *
+ * Binds the transaction to the user BEFORE signing (the fee payer must be the
+ * connected account); a tampered or unexpected payer is refused rather than
+ * blind-signed. Address-lookup-table entries can't be resolved offline, so
+ * deeper instruction binding is left to the local simulation.
+ *
+ * For signTransaction (send=false) a multi-signer transaction is signed only in
+ * the user's slot and returned for the dApp to complete (legitimate partial
+ * signing). For signAndSendTransaction (send=true) we must be the sole signer,
+ * since we cannot supply the others.
+ */
+export async function signSolanaTransaction(
+  secretKey: Uint8Array,
+  userPublicKey: string,
+  txBytes: Uint8Array,
+  send: boolean,
+): Promise<{ signedB64: string; signature?: string }> {
+  const { value: numSigs, length: lenBytes } = decodeCompactU16(txBytes, 0);
+  const sigStart = lenBytes;
+  const message = txBytes.slice(sigStart + numSigs * 64);
+
+  const decoded = decodeSolanaMessage(message);
+  if (!decoded.feePayer || decoded.feePayer !== userPublicKey) {
+    throw new Error(
+      "Blocked for safety: the transaction's fee payer is not your wallet. Aborted before signing.",
+    );
+  }
+  if (send && numSigs !== 1) {
+    throw new Error(
+      "This transaction needs additional signers, so NumPay cannot send it. The site must collect the other signatures.",
+    );
+  }
+
+  const sig = nacl.sign.detached(message, secretKey);
+  const signed = txBytes.slice(); // copy; never mutate the caller's bytes
+  signed.set(sig, sigStart);      // user = fee payer = first signature slot
+  const signedB64 = bytesToB64(signed);
+
+  if (!send) return { signedB64 };
+
+  // Pre-broadcast simulation guard (same as swaps): never send a transaction we
+  // have not checked against current state.
+  const sim = await simulateSolanaTx(signedB64, true);
+  if (!sim.ok) throw new Error(sim.err ?? "Transaction simulation failed");
+
+  const signature = await broadcastSolanaTx(signedB64);
+  return { signedB64, signature };
 }
 
 /**

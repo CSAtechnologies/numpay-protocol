@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import bs58 from "bs58";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
@@ -60,6 +61,7 @@ const sign = await bundle("src/lib/dapp/signDecode.ts", "signDecode");
 const tx = await bundle("src/lib/dapp/txDecode.ts", "txDecode");
 const chain = await bundle("src/lib/dapp/chainOps.ts", "chainOps");
 const sol = await bundle("src/lib/dapp/solDecode.ts", "solDecode");
+const solChain = await bundle("src/lib/chains/solana.ts", "solanaChain");
 
 // ── signDecode.decodePersonalSignMessage: never throw, correct utf8 detection ──
 {
@@ -180,6 +182,43 @@ const sol = await bundle("src/lib/dapp/solDecode.ts", "solDecode");
   ok(sol.base64ToBytes(sol.bytesToBase64(bytes)).join(",") === bytes.join(","), "sol byte round-trip");
 }
 
+// ── solana.inspectSolanaTransaction (dApp signTransaction preview) ──
+{
+  const inspect = solChain.inspectSolanaTransaction;
+  // Never throw on hostile / malformed transaction bytes (it renders the approval).
+  noThrow("sol tx inspect empty", () => inspect(new Uint8Array()));
+  noThrow("sol tx inspect short", () => inspect(new Uint8Array([1, 2, 3])));
+  noThrow("sol tx inspect all 0xff", () => inspect(new Uint8Array(64).fill(0xff)));
+  noThrow("sol tx inspect huge", () => inspect(new Uint8Array(5000).fill(0x80)));
+  // Empty / unparseable -> empty fee payer (the signing-time bind then refuses).
+  ok(inspect(new Uint8Array()).feePayer === "", "sol tx inspect empty -> no fee payer");
+
+  // Build a valid legacy SystemProgram.transfer and confirm the fee payer + the
+  // System program id decode correctly (the bind the approval relies on).
+  const cu16 = (n) => (n <= 0x7f ? [n] : [(n & 0x7f) | 0x80, n >> 7]);
+  const feePayer = new Uint8Array(32).fill(7);
+  const to = new Uint8Array(32).fill(9);
+  const sys = new Uint8Array(32); // System program = all zeros
+  const blockhash = new Uint8Array(32).fill(3);
+  const instrData = new Uint8Array([2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // transfer, 0 lamports
+  const message = [
+    1, 0, 1,                       // header
+    ...cu16(3), ...feePayer, ...to, ...sys,
+    ...blockhash,
+    ...cu16(1),                    // 1 instruction
+    2,                             // program id index = sys
+    ...cu16(2), 0, 1,              // accounts
+    ...cu16(instrData.length), ...instrData,
+  ];
+  const txBytes = new Uint8Array([...cu16(1), ...new Uint8Array(64), ...message]);
+  const got = inspect(txBytes);
+  ok(got.feePayer === bs58.encode(feePayer), "sol tx inspect decodes fee payer");
+  ok(got.numSigs === 1, "sol tx inspect numSigs = 1");
+  ok(got.instructionCount === 1, "sol tx inspect instructionCount = 1");
+  ok(got.usesLookupTables === false, "sol tx inspect legacy -> no lookup tables");
+  ok(got.programs.some((p) => p.name === "System"), "sol tx inspect labels System program");
+}
+
 // ── Fuzz: random inputs must never throw the decoders ──
 {
   const hexchars = "0123456789abcdefABCDEFxyzZ-_ ";
@@ -202,6 +241,20 @@ const sol = await bundle("src/lib/dapp/solDecode.ts", "solDecode");
     }
   }
   ok(threw === 0, "fuzz: 2000 random inputs, no throws (saw " + threw + ")");
+
+  // Random raw bytes through the Solana transaction inspector.
+  let threwTx = 0;
+  for (let i = 0; i < 2000; i++) {
+    const len = (Math.random() * 300) | 0;
+    const bytes = new Uint8Array(len);
+    for (let j = 0; j < len; j++) bytes[j] = (Math.random() * 256) | 0;
+    try {
+      solChain.inspectSolanaTransaction(bytes);
+    } catch {
+      threwTx++;
+    }
+  }
+  ok(threwTx === 0, "fuzz: 2000 random tx byte arrays, no throws (saw " + threwTx + ")");
 }
 
 rmSync(out, { recursive: true, force: true });
