@@ -59,6 +59,7 @@ function throws(label, fn) {
 const sign = await bundle("src/lib/dapp/signDecode.ts", "signDecode");
 const tx = await bundle("src/lib/dapp/txDecode.ts", "txDecode");
 const chain = await bundle("src/lib/dapp/chainOps.ts", "chainOps");
+const sol = await bundle("src/lib/dapp/solDecode.ts", "solDecode");
 
 // ── signDecode.decodePersonalSignMessage: never throw, correct utf8 detection ──
 {
@@ -158,6 +159,27 @@ const chain = await bundle("src/lib/dapp/chainOps.ts", "chainOps");
   ok(cand.chain.chainId === 84532 && cand.alreadyExists === false, "add new chain candidate");
 }
 
+// ── solDecode (Solana signMessage) ──
+{
+  const d = sol.decodeSolSignMessage;
+  noThrow("sol decode junk b64", () => d("!!!!not base64!!!!"));
+  noThrow("sol decode empty", () => d(""));
+  noThrow("sol decode huge", () => d("QQ".repeat(500000)));
+  // round-trip: utf8 text encodes + decodes as readable
+  const text = "Sign in to NumPay\nNonce: 9";
+  const b64 = sol.bytesToBase64(new TextEncoder().encode(text));
+  const dec = d(b64);
+  ok(dec.isUtf8 === true && dec.text === text, "sol decode utf8 round-trip");
+  // raw bytes -> not utf8
+  const rawB64 = sol.bytesToBase64(new Uint8Array([0xff, 0xfe, 0x00, 0x01]));
+  ok(d(rawB64).isUtf8 === false, "sol decode raw bytes -> base64");
+  // base64ToBytes is throw-safe
+  ok(sol.base64ToBytes("###").length === 0, "sol base64ToBytes junk -> empty");
+  // byte round-trip
+  const bytes = new Uint8Array([1, 2, 3, 250, 0, 128]);
+  ok(sol.base64ToBytes(sol.bytesToBase64(bytes)).join(",") === bytes.join(","), "sol byte round-trip");
+}
+
 // ── Fuzz: random inputs must never throw the decoders ──
 {
   const hexchars = "0123456789abcdefABCDEFxyzZ-_ ";
@@ -174,6 +196,7 @@ const chain = await bundle("src/lib/dapp/chainOps.ts", "chainOps");
       sign.decodePersonalSignMessage(data);
       tx.formatNativeValue(data, 18, "ETH");
       sign.parseTypedData(data);
+      sol.decodeSolSignMessage(data);
     } catch {
       threw++;
     }

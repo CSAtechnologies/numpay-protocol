@@ -21,6 +21,7 @@ import {
   type PendingSwitchChain,
   type PendingAddChain,
   type PendingSolConnect,
+  type PendingSolSign,
   type DappTxRequest,
   type DappPending,
   type RpcError,
@@ -251,6 +252,21 @@ async function handleDecision(
       await grantSol(p.origin, result, SOL_CLUSTER);
       respondToOrigin(p.origin, { id: p.id, channel: p.channel, result: { publicKey: result } });
       emitToOrigin(p.origin, SOL_EVENTS.connect, { publicKey: result });
+    } else {
+      respondToOrigin(p.origin, { id: p.id, channel: p.channel, error: ERR.internal });
+    }
+    return;
+  }
+
+  if (p.type === "solSign") {
+    // The window returns the base64 ed25519 signature as `result`. The public
+    // key is the bound connected account (the router knows it).
+    if (typeof result === "string" && result.length > 0) {
+      respondToOrigin(p.origin, {
+        id: p.id,
+        channel: p.channel,
+        result: { signature: result, publicKey: p.account },
+      });
     } else {
       respondToOrigin(p.origin, { id: p.id, channel: p.channel, error: ERR.internal });
     }
@@ -559,6 +575,35 @@ async function handleRequest(
       case SOL_METHODS.disconnect: {
         await revokeSol(origin);
         reply(null);
+        return;
+      }
+
+      case SOL_METHODS.signMessage: {
+        const perm = await getSolPermission(origin);
+        if (!perm) {
+          reply(undefined, { code: ERR.unauthorized.code, message: "Connect the wallet first" });
+          return;
+        }
+        const p0 = params[0] as { message?: unknown; display?: unknown } | undefined;
+        const message = p0?.message;
+        if (typeof message !== "string" || !message) {
+          reply(undefined, ERR.invalidParams);
+          return;
+        }
+        if (message.length > MAX_PAYLOAD_BYTES) {
+          reply(undefined, { code: ERR.invalidParams.code, message: "Message too large" });
+          return;
+        }
+        const solSignPending: PendingSolSign = {
+          type: "solSign",
+          requestId: newRequestId(),
+          origin,
+          id,
+          channel,
+          account: perm.account,
+          message,
+        };
+        await openApproval(solSignPending);
         return;
       }
 

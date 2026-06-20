@@ -54,6 +54,10 @@
     <button onclick="solDisconnect()">window.solana.disconnect</button>
     <button onclick="solStandardConnect()">Wallet Standard connect</button>
   </div>
+  <div class="row">
+    <button onclick="solSignMessage()">window.solana.signMessage (text)</button>
+    <button onclick="solStandardSignMessage()">Wallet Standard signMessage</button>
+  </div>
 
   <pre id="out">Ready.</pre>
 
@@ -144,6 +148,33 @@
         log("WalletStandard connect -> " + (acct ? acct.address : "no account"));
       } catch (e) {
         log("WalletStandard connect ERROR -> " + JSON.stringify({ code: e.code, message: e.message }));
+      }
+    }
+
+    function b58OrLen(u8) { return u8 ? u8.length + " bytes" : "none"; }
+    async function solSignMessage() {
+      if (!window.solana || !window.solana.signMessage) return log("Connect window.solana first.");
+      try {
+        const msg = new TextEncoder().encode("Sign in to NumPay Solana test\nNonce: " + Date.now());
+        const res = await window.solana.signMessage(msg, "utf8");
+        log("solana.signMessage -> signature " + b58OrLen(res && res.signature) +
+            ", pubkey " + (res && res.publicKey ? res.publicKey.toString().slice(0, 8) + "…" : "?"));
+      } catch (e) {
+        log("solana.signMessage ERROR -> " + JSON.stringify({ code: e.code, message: e.message }));
+      }
+    }
+    async function solStandardSignMessage() {
+      const w = numpayStandardWallet();
+      if (!w) return log("NumPay not registered via Wallet Standard.");
+      const acct = w.accounts && w.accounts[0];
+      if (!acct) return log("Connect via Wallet Standard first.");
+      try {
+        const feat = w.features["solana:signMessage"];
+        const msg = new TextEncoder().encode("WS sign-in nonce " + Date.now());
+        const out = await feat.signMessage({ account: acct, message: msg });
+        log("WalletStandard signMessage -> signature " + b58OrLen(out && out[0] && out[0].signature));
+      } catch (e) {
+        log("WalletStandard signMessage ERROR -> " + JSON.stringify({ code: e.code, message: e.message }));
       }
     }
 

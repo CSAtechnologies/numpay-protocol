@@ -21,6 +21,7 @@ export const SOL_METHODS = {
   connect: "sol_connect",
   disconnect: "sol_disconnect",
   accounts: "sol_accounts", // silent: returns the permitted account or null
+  signMessage: "sol_signMessage", // ed25519 sign of arbitrary bytes (P2)
 } as const;
 
 // Solana provider event names. Distinct from the EVM event names so each
@@ -201,10 +202,17 @@ export interface PendingSolConnect extends PendingBase {
   type: "solConnect";
 }
 
+export interface PendingSolSign extends PendingBase {
+  type: "solSign";
+  account: string; // base58 connected account the signature is bound to
+  message: string; // base64-encoded message bytes (binary-safe over storage/wire)
+}
+
 export type DappPending =
   | PendingConnect
   | PendingSign
   | PendingSendTx
   | PendingSwitchChain
   | PendingAddChain
-  | PendingSolConnect;
+  | PendingSolConnect
+  | PendingSolSign;

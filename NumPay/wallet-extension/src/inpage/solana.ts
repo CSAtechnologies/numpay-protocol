@@ -10,6 +10,7 @@
 
 import bs58 from "bs58";
 import { TO_CONTENT, TO_INPAGE, SOL_METHODS, SOL_EVENTS, SOL_CLUSTER } from "../lib/dapp/types";
+import { bytesToBase64, base64ToBytes } from "../lib/dapp/solDecode";
 
 type Listener = (...args: unknown[]) => void;
 
@@ -83,9 +84,17 @@ function makeAccount(base58: string): WalletAccount {
     address: base58,
     publicKey: makePublicKey(base58).toBytes(),
     chains: [SOL_CLUSTER],
-    features: [], // P1: no signing features yet
+    features: ["solana:signMessage"], // P2
     label: "NumPay",
   };
+}
+
+// Shared signMessage transport call: bytes -> base64 -> router -> base64 sig.
+async function doSignMessage(message: Uint8Array, display?: string): Promise<Uint8Array> {
+  const res = await request(SOL_METHODS.signMessage, [{ message: bytesToBase64(message), display }]);
+  const sig = res?.signature as string | undefined;
+  if (!sig) throw { code: 4001, message: "User rejected the request" };
+  return base64ToBytes(sig);
 }
 
 // ── Shared connection state ──────────────────────────────────────────────────────
@@ -156,6 +165,7 @@ interface SolanaProvider {
   publicKey: PublicKeyLike | null;
   connect(opts?: { onlyIfTrusted?: boolean }): Promise<{ publicKey: PublicKeyLike }>;
   disconnect(): Promise<void>;
+  signMessage(message: Uint8Array, display?: string): Promise<{ signature: Uint8Array; publicKey: PublicKeyLike }>;
   on(event: string, cb: Listener): SolanaProvider;
   off(event: string, cb: Listener): SolanaProvider;
   removeListener(event: string, cb: Listener): SolanaProvider;
@@ -182,6 +192,14 @@ const solana: SolanaProvider = {
     try { await request(SOL_METHODS.disconnect, []); } catch { /* settle regardless */ }
     setAccount(null);
     legacyEmit("disconnect");
+  },
+
+  signMessage: async (
+    message: Uint8Array,
+    display?: string
+  ): Promise<{ signature: Uint8Array; publicKey: PublicKeyLike }> => {
+    const signature = await doSignMessage(message, display);
+    return { signature, publicKey: solana.publicKey ?? makePublicKey(currentBase58 ?? "") };
   },
 
   on: (event: string, cb: Listener): SolanaProvider => {
@@ -235,6 +253,23 @@ function standardOn(event: string, listener: Listener): () => void {
   return () => standardListeners.get(event)?.delete(listener);
 }
 
+interface SolanaSignMessageInput { account: WalletAccount; message: Uint8Array }
+interface SolanaSignMessageOutput { signedMessage: Uint8Array; signature: Uint8Array }
+
+// Wallet Standard solana:signMessage. Inputs are signed one at a time (each goes
+// through its own approval); awaiting sequentially keeps within the per-origin
+// single-approval limit.
+async function standardSignMessage(
+  ...inputs: SolanaSignMessageInput[]
+): Promise<SolanaSignMessageOutput[]> {
+  const outputs: SolanaSignMessageOutput[] = [];
+  for (const input of inputs) {
+    const signature = await doSignMessage(input.message);
+    outputs.push({ signedMessage: input.message, signature });
+  }
+  return outputs;
+}
+
 const wallet = {
   version: "1.0.0",
   name: "NumPay",
@@ -244,6 +279,7 @@ const wallet = {
     "standard:connect": { version: "1.0.0", connect: standardConnect },
     "standard:disconnect": { version: "1.0.0", disconnect: standardDisconnect },
     "standard:events": { version: "1.0.0", on: standardOn },
+    "solana:signMessage": { version: "1.0.0", signMessage: standardSignMessage },
   } as Record<string, unknown>,
   accounts: [] as readonly WalletAccount[],
 };

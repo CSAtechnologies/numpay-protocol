@@ -21,8 +21,11 @@ import {
   type PendingSwitchChain,
   type PendingAddChain,
   type PendingSolConnect,
+  type PendingSolSign,
 } from "@/lib/dapp/types";
 import { deriveSolanaAddress } from "@/lib/chains/solana";
+import { decodeSolSignMessage, bytesToBase64 } from "@/lib/dapp/solDecode";
+import nacl from "tweetnacl";
 import {
   decodePersonalSignMessage,
   parseTypedData,
@@ -148,6 +151,7 @@ function App() {
   if (pending.type === "switchChain") return <SwitchChainView pending={pending} onDecide={decide} />;
   if (pending.type === "addChain") return <AddChainView pending={pending} onDecide={decide} />;
   if (pending.type === "solConnect") return <SolConnectView pending={pending} onDecide={decide} />;
+  if (pending.type === "solSign") return <SolSignView pending={pending} onDecide={decide} />;
   if (pending.type === "sign") return <SignView pending={pending} onDecide={decide} />;
   return <ConnectView pending={pending} onDecide={decide} />;
 }
@@ -301,6 +305,92 @@ function SolConnectView({
           className="flex-1 btn-primary-premium text-[13px] disabled:opacity-50"
         >
           Connect
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Solana sign message ────────────────────────────────────────────────────────────
+
+function SolSignView({
+  pending,
+  onDecide,
+}: {
+  pending: PendingSolSign;
+  onDecide: (approved: boolean, result?: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const decoded = decodeSolSignMessage(pending.message);
+
+  async function approve() {
+    setError(null);
+    setBusy(true);
+    try {
+      const wd = await getActiveSessionWallet();
+      if (!wd?.mnemonic) {
+        setError("Wallet is locked. Close and retry.");
+        setBusy(false);
+        return;
+      }
+      const { address, secretKey } = await deriveSolanaAddress(wd.mnemonic);
+      // Bind to the connected account. If the user switched the active wallet
+      // since connecting, refuse rather than sign with a different key.
+      if (address !== pending.account) {
+        setError("Active wallet changed. Reject and retry from the site.");
+        setBusy(false);
+        return;
+      }
+      const signature = nacl.sign.detached(decoded.bytes, secretKey);
+      await touchActivity();
+      onDecide(true, bytesToBase64(signature));
+    } catch {
+      setError("Could not sign this message.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="app-bg min-h-full flex flex-col">
+      <div className="px-5 pt-6 pb-4 flex-1 overflow-y-auto">
+        <div className="flex flex-col items-center text-center mb-5">
+          <img src="/logo.png" alt="NumPay" className="w-12 h-12 mb-3" />
+          <h1 className="text-[17px] font-bold text-text-primary">Signature request</h1>
+          <p className="text-[12px] text-muted mt-1 break-all">{pending.origin}</p>
+        </div>
+
+        <div className="premium-card p-3.5 mb-3">
+          <p className="text-[11px] text-muted uppercase tracking-wider font-medium mb-1">Signing account</p>
+          <p className="text-[12px] font-mono text-text-primary break-all">{pending.account}</p>
+          <p className="text-[11px] text-muted mt-2">Network: <span className="text-brand-400 font-medium">Solana Mainnet</span></p>
+        </div>
+
+        <div className="premium-card p-3.5 mb-3">
+          <p className="text-[11px] text-muted uppercase tracking-wider font-medium mb-1">Message</p>
+          {decoded.isUtf8 ? (
+            <pre className="text-[12px] text-text-primary whitespace-pre-wrap break-words font-sans">{decoded.text}</pre>
+          ) : (
+            <>
+              <p className="text-[11px] text-muted mb-1">Raw bytes (not readable text), base64:</p>
+              <pre className="text-[11px] text-text-secondary whitespace-pre-wrap break-all font-mono">{decoded.base64}</pre>
+            </>
+          )}
+        </div>
+
+        {error && <p className="text-[12px] text-rose-300 mt-1 mb-1">{error}</p>}
+      </div>
+
+      <div className="px-5 pb-6 flex gap-2">
+        <button
+          onClick={() => onDecide(false)}
+          disabled={busy}
+          className="flex-1 py-2.5 rounded-xl bg-surface-2 text-text-secondary text-[13px] font-medium border border-border hover:bg-surface-3 transition-colors disabled:opacity-50"
+        >
+          Reject
+        </button>
+        <button onClick={approve} disabled={busy} className="flex-1 btn-primary-premium text-[13px] disabled:opacity-50">
+          {busy ? "Signing..." : "Sign"}
         </button>
       </div>
     </div>
