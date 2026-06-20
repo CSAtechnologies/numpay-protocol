@@ -20,7 +20,9 @@ import {
   type PendingSendTx,
   type PendingSwitchChain,
   type PendingAddChain,
+  type PendingSolConnect,
 } from "@/lib/dapp/types";
+import { deriveSolanaAddress } from "@/lib/chains/solana";
 import {
   decodePersonalSignMessage,
   parseTypedData,
@@ -145,6 +147,7 @@ function App() {
   if (pending.type === "sendTx") return <SendTxView pending={pending} onDecide={decide} />;
   if (pending.type === "switchChain") return <SwitchChainView pending={pending} onDecide={decide} />;
   if (pending.type === "addChain") return <AddChainView pending={pending} onDecide={decide} />;
+  if (pending.type === "solConnect") return <SolConnectView pending={pending} onDecide={decide} />;
   if (pending.type === "sign") return <SignView pending={pending} onDecide={decide} />;
   return <ConnectView pending={pending} onDecide={decide} />;
 }
@@ -219,6 +222,84 @@ function ConnectView({
           Reject
         </button>
         <button onClick={() => onDecide(true)} className="flex-1 btn-primary-premium text-[13px]">
+          Connect
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Solana connect ────────────────────────────────────────────────────────────────
+
+function SolConnectView({
+  pending,
+  onDecide,
+}: {
+  pending: PendingSolConnect;
+  onDecide: (approved: boolean, result?: string) => void;
+}) {
+  const [address, setAddress] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Derive the active wallet's Solana address from the unlocked session
+  // mnemonic. The router never sees a key; the address is returned on approve.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const wd = await getActiveSessionWallet();
+      if (!wd?.mnemonic) {
+        if (!cancelled) setError("Wallet is locked. Close and retry.");
+        return;
+      }
+      try {
+        const { address: addr } = await deriveSolanaAddress(wd.mnemonic);
+        if (!cancelled) setAddress(addr);
+      } catch {
+        if (!cancelled) setError("Could not derive your Solana address.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  return (
+    <div className="app-bg min-h-full flex flex-col">
+      <div className="px-5 pt-6 pb-4 flex-1">
+        <div className="flex flex-col items-center text-center mb-6">
+          <img src="/logo.png" alt="NumPay" className="w-12 h-12 mb-3" />
+          <h1 className="text-[17px] font-bold text-text-primary">Connection request</h1>
+          <p className="text-[12px] text-muted mt-1 break-all">{pending.origin}</p>
+        </div>
+
+        <div className="premium-card p-3.5 mb-3">
+          <p className="text-[11px] text-muted uppercase tracking-wider font-medium mb-2">This site will be able to</p>
+          <ul className="text-[12px] text-text-secondary space-y-1.5 list-disc pl-4">
+            <li>See your Solana address and balance</li>
+            <li>Ask you to approve signatures and transactions</li>
+          </ul>
+          <p className="text-[11px] text-muted mt-2">It cannot move funds without your approval each time.</p>
+        </div>
+
+        <div className="premium-card p-3.5 mb-3">
+          <p className="text-[11px] text-muted uppercase tracking-wider font-medium mb-1">Solana account</p>
+          <p className="text-[12px] font-mono text-text-primary break-all">{address ?? "Deriving…"}</p>
+          <p className="text-[11px] text-muted mt-2">Network: <span className="text-brand-400 font-medium">Solana Mainnet</span></p>
+        </div>
+
+        {error && <p className="text-[12px] text-rose-300 mt-1">{error}</p>}
+      </div>
+
+      <div className="px-5 pb-6 flex gap-2">
+        <button
+          onClick={() => onDecide(false)}
+          className="flex-1 py-2.5 rounded-xl bg-surface-2 text-text-secondary text-[13px] font-medium border border-border hover:bg-surface-3 transition-colors"
+        >
+          Reject
+        </button>
+        <button
+          onClick={() => address && onDecide(true, address)}
+          disabled={!address}
+          className="flex-1 btn-primary-premium text-[13px] disabled:opacity-50"
+        >
           Connect
         </button>
       </div>

@@ -11,17 +11,22 @@ import {
   ERR,
   DEFERRED_METHODS,
   MAX_PAYLOAD_BYTES,
+  SOL_METHODS,
+  SOL_EVENTS,
+  SOL_CLUSTER,
   type ProviderEventName,
   type PendingConnect,
   type PendingSign,
   type PendingSendTx,
   type PendingSwitchChain,
   type PendingAddChain,
+  type PendingSolConnect,
   type DappTxRequest,
   type DappPending,
   type RpcError,
 } from "../lib/dapp/types";
 import { getPermission, grant, updateAllConnected } from "../lib/dapp/permissions";
+import { getSolPermission, grantSol, revokeSol } from "../lib/dapp/solPermissions";
 import { proxyRead, isReadMethod, evmChainIdHex, evmChainIdNumber } from "../lib/dapp/rpcProxy";
 import {
   parseChainId,
@@ -151,7 +156,9 @@ function respondToOrigin(origin: string, payload: OutboxItem): void {
   if (!delivered) void bufferResponse(origin, payload);
 }
 
-function emitToOrigin(origin: string, name: ProviderEventName, data: unknown): void {
+// `name` is widened to string so the Solana provider's distinct event names
+// (sol:connect, etc.) can flow over the same channel as the EVM events.
+function emitToOrigin(origin: string, name: ProviderEventName | string, data: unknown): void {
   portsByOrigin.get(origin)?.forEach((p) => {
     try {
       p.postMessage({ kind: "event", name, data });
@@ -235,6 +242,18 @@ async function handleDecision(
 
   if (!approved) {
     respondToOrigin(p.origin, { id: p.id, channel: p.channel, error: ERR.userRejected });
+    return;
+  }
+
+  if (p.type === "solConnect") {
+    // The window returns the derived base58 Solana public key as `result`.
+    if (typeof result === "string" && result.length > 0) {
+      await grantSol(p.origin, result, SOL_CLUSTER);
+      respondToOrigin(p.origin, { id: p.id, channel: p.channel, result: { publicKey: result } });
+      emitToOrigin(p.origin, SOL_EVENTS.connect, { publicKey: result });
+    } else {
+      respondToOrigin(p.origin, { id: p.id, channel: p.channel, error: ERR.internal });
+    }
     return;
   }
 
@@ -511,6 +530,38 @@ async function handleRequest(
         return;
       }
 
+      // ── Solana (window.solana + Wallet Standard) ──────────────────────────────
+      case SOL_METHODS.connect: {
+        const perm = await getSolPermission(origin);
+        if (perm && (await isUnlocked())) {
+          reply({ publicKey: perm.account }); // already connected: silent
+          return;
+        }
+        // The router cannot derive the Solana address (key-free); the approval
+        // window derives it from the unlocked mnemonic and returns it.
+        const solPending: PendingSolConnect = {
+          type: "solConnect",
+          requestId: newRequestId(),
+          origin,
+          id,
+          channel,
+        };
+        await openApproval(solPending);
+        return;
+      }
+
+      case SOL_METHODS.accounts: {
+        const perm = await getSolPermission(origin);
+        reply(perm && (await isUnlocked()) ? { publicKey: perm.account } : { publicKey: null });
+        return;
+      }
+
+      case SOL_METHODS.disconnect: {
+        await revokeSol(origin);
+        reply(null);
+        return;
+      }
+
       default: {
         if (isReadMethod(method)) {
           const result = await proxyRead(await getActiveChainId(), method, params);
@@ -547,10 +598,12 @@ export async function broadcastDappState(): Promise<void> {
   }
 }
 
-// Called from the auto-lock path: connected pages see accountsChanged [].
+// Called from the auto-lock path: connected pages see accountsChanged [] (EVM)
+// and a disconnect (Solana), since the keys are no longer available to sign.
 export function broadcastDappLock(): void {
   for (const origin of portsByOrigin.keys()) {
     emitToOrigin(origin, "accountsChanged", []);
+    emitToOrigin(origin, SOL_EVENTS.disconnect, null);
   }
 }
 

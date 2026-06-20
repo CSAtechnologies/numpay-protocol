@@ -9,7 +9,7 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: false,
     lib: {
-      entry: resolve(__dirname, "src/inpage/provider.ts"),
+      entry: resolve(__dirname, "src/inpage/index.ts"),
       formats: ["iife"],
       name: "NumPayInpage",
       fileName: () => "inpage.js",

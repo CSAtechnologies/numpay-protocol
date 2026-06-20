@@ -46,6 +46,15 @@
     <button onclick="addBuiltin()">addEthereumChain (chain 1, expect reject)</button>
   </div>
 
+  <h1 style="margin-top:28px">Solana (window.solana + Wallet Standard)</h1>
+  <div class="row" id="sol-discovery">Solana provider: detecting...</div>
+  <div class="row">
+    <button onclick="solConnect(false)">window.solana.connect</button>
+    <button onclick="solConnect(true)">connect (onlyIfTrusted)</button>
+    <button onclick="solDisconnect()">window.solana.disconnect</button>
+    <button onclick="solStandardConnect()">Wallet Standard connect</button>
+  </div>
+
   <pre id="out">Ready.</pre>
 
   <script>
@@ -88,6 +97,60 @@
     async function getBalance() {
       if (!selected) return log("Connect first to get a selected account.");
       run("eth_getBalance", [selected, "latest"]);
+    }
+
+    // ── Solana ──────────────────────────────────────────────────────────────────
+    const solWallets = [];
+    function registerSolWallet(w) {
+      if (!solWallets.includes(w)) { solWallets.push(w); updateSolDiscovery(); }
+    }
+    window.addEventListener("wallet-standard:register-wallet", (e) => {
+      try { e.detail({ register: registerSolWallet }); } catch (err) {}
+    });
+    window.dispatchEvent(new CustomEvent("wallet-standard:app-ready", { detail: { register: registerSolWallet } }));
+
+    function numpayStandardWallet() {
+      return solWallets.find((w) => w.name === "NumPay");
+    }
+    function updateSolDiscovery() {
+      const std = numpayStandardWallet();
+      const legacy = window.solana && window.solana.isNumPay ? "window.solana(NumPay)" : (window.solana ? "window.solana(other)" : "none");
+      document.getElementById("sol-discovery").textContent =
+        "Wallet Standard: " + (std ? "NumPay registered" : "not found") + " | legacy: " + legacy;
+    }
+    setTimeout(updateSolDiscovery, 300);
+
+    async function solConnect(onlyIfTrusted) {
+      if (!window.solana) return log("No window.solana provider.");
+      try {
+        const res = await window.solana.connect({ onlyIfTrusted });
+        log("solana.connect -> " + (res && res.publicKey ? res.publicKey.toString() : "null"));
+      } catch (e) {
+        log("solana.connect ERROR -> " + JSON.stringify({ code: e.code, message: e.message }));
+      }
+    }
+    async function solDisconnect() {
+      if (!window.solana) return log("No window.solana provider.");
+      try { await window.solana.disconnect(); log("solana.disconnect -> ok"); }
+      catch (e) { log("solana.disconnect ERROR -> " + (e.message || e)); }
+    }
+    async function solStandardConnect() {
+      const w = numpayStandardWallet();
+      if (!w) return log("NumPay not registered via Wallet Standard.");
+      try {
+        const feat = w.features["standard:connect"];
+        const res = await feat.connect();
+        const acct = res && res.accounts && res.accounts[0];
+        log("WalletStandard connect -> " + (acct ? acct.address : "no account"));
+      } catch (e) {
+        log("WalletStandard connect ERROR -> " + JSON.stringify({ code: e.code, message: e.message }));
+      }
+    }
+
+    if (window.solana && window.solana.on) {
+      window.solana.on("connect", (pk) => log("sol event connect: " + (pk ? pk.toString() : "")));
+      window.solana.on("disconnect", () => log("sol event disconnect"));
+      window.solana.on("accountChanged", (pk) => log("sol event accountChanged: " + (pk ? pk.toString() : "null")));
     }
 
     // personal_sign: a human-readable sign-in style message. params order is

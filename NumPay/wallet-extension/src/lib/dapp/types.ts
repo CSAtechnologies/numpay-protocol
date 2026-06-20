@@ -13,6 +13,29 @@ export const DAPP_PORT = "numpay-dapp";
 export const MSG_DAPP_DECISION = "DAPP_DECISION"; // approval window -> background
 export const MSG_DAPP_STATE_CHANGED = "DAPP_STATE_CHANGED"; // popup -> background
 
+// ── Solana dApp protocol ────────────────────────────────────────────────────────
+// Internal request method names for the Solana surface (window.solana + Wallet
+// Standard). Namespaced with "sol_" so the router can dispatch EVM and Solana
+// over the same transport. P1 is connect-only; signing methods arrive later.
+export const SOL_METHODS = {
+  connect: "sol_connect",
+  disconnect: "sol_disconnect",
+  accounts: "sol_accounts", // silent: returns the permitted account or null
+} as const;
+
+// Solana provider event names. Distinct from the EVM event names so each
+// page-world provider ignores the other's events on the shared message channel.
+export const SOL_EVENTS = {
+  connect: "sol:connect",
+  disconnect: "sol:disconnect",
+  accountChanged: "sol:accountChanged",
+} as const;
+
+export type SolEventName = (typeof SOL_EVENTS)[keyof typeof SOL_EVENTS];
+
+// The Solana cluster NumPay exposes to dApps. The wallet is mainnet-only today.
+export const SOL_CLUSTER = "solana:mainnet" as const;
+
 export interface RpcRequest {
   id: string;
   method: string;
@@ -170,9 +193,18 @@ export interface PendingAddChain extends PendingBase {
   chain: import("../customChains").CustomChain; // validated candidate to save
 }
 
+// Solana connect approval. Unlike EVM connect, the router does not know the
+// active wallet's Solana address (it is derived from the mnemonic, not stored in
+// cleartext vault metadata), so the approval window derives and returns it; the
+// router only persists the grant.
+export interface PendingSolConnect extends PendingBase {
+  type: "solConnect";
+}
+
 export type DappPending =
   | PendingConnect
   | PendingSign
   | PendingSendTx
   | PendingSwitchChain
-  | PendingAddChain;
+  | PendingAddChain
+  | PendingSolConnect;
