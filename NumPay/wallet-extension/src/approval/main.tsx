@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { ethers } from "ethers";
-import { NETWORKS } from "@/lib/networks";
+import { NETWORKS, type Network } from "@/lib/networks";
+import { getCustomChains } from "@/lib/customChains";
 import {
   isLocked,
   unlockActiveVault,
   touchActivity,
+  getSigner,
   SESSION_KEY,
   type WalletData,
 } from "@/lib/wallet";
@@ -15,6 +17,7 @@ import {
   type DappPending,
   type PendingConnect,
   type PendingSign,
+  type PendingSendTx,
 } from "@/lib/dapp/types";
 import {
   decodePersonalSignMessage,
@@ -23,6 +26,11 @@ import {
   typesForEthers,
   type RiskFlag,
 } from "@/lib/dapp/signDecode";
+import {
+  decodeTxData,
+  formatNativeValue,
+  normalizeTxForEthers,
+} from "@/lib/dapp/txDecode";
 import PasswordPrompt from "../popup/components/PasswordPrompt";
 import "../popup/index.css";
 
@@ -83,10 +91,10 @@ function App() {
     return () => window.removeEventListener("beforeunload", onUnload);
   }, [decided, requestId]);
 
-  function decide(approved: boolean, signature?: string) {
+  function decide(approved: boolean, result?: string) {
     setDecided(true);
     try {
-      chrome.runtime.sendMessage({ type: MSG_DAPP_DECISION, requestId, approved, signature });
+      chrome.runtime.sendMessage({ type: MSG_DAPP_DECISION, requestId, approved, result });
     } catch {}
     window.close();
   }
@@ -132,11 +140,24 @@ function App() {
     );
   }
 
-  return pending.type === "sign" ? (
-    <SignView pending={pending} onDecide={decide} />
-  ) : (
-    <ConnectView pending={pending} onDecide={decide} />
-  );
+  if (pending.type === "sendTx") return <SendTxView pending={pending} onDecide={decide} />;
+  if (pending.type === "sign") return <SignView pending={pending} onDecide={decide} />;
+  return <ConnectView pending={pending} onDecide={decide} />;
+}
+
+// Resolve an EVM network (built-in or custom) by numeric chainId, for the rpcUrl
+// and native symbol/decimals used to broadcast and to format the value.
+async function resolveEvmNetwork(chainId: number): Promise<Network | null> {
+  const builtin = Object.values(NETWORKS).find((n) => n.chainId === chainId);
+  if (builtin) return builtin;
+  const custom = (await getCustomChains()).find((c) => c.chainId === chainId);
+  if (custom) {
+    return {
+      id: custom.id, name: custom.name, chainId: custom.chainId, rpcUrl: custom.rpcUrl,
+      symbol: custom.symbol, decimals: custom.decimals, explorer: custom.explorer, logo: custom.logo || "",
+    };
+  }
+  return null;
 }
 
 // ── Connect ─────────────────────────────────────────────────────────────────────
@@ -336,6 +357,185 @@ function SignView({
           className="flex-1 btn-primary-premium text-[13px] disabled:opacity-50"
         >
           {busy ? "Signing..." : "Sign"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Send transaction ─────────────────────────────────────────────────────────────
+
+type SimState =
+  | { status: "loading" }
+  | { status: "ok"; gas: string }
+  | { status: "revert"; message: string }
+  | { status: "skipped" };
+
+function SendTxView({
+  pending,
+  onDecide,
+}: {
+  pending: PendingSendTx;
+  onDecide: (approved: boolean, result?: string) => void;
+}) {
+  const [net, setNet] = useState<Network | null>(null);
+  const [netMissing, setNetMissing] = useState(false);
+  const [sim, setSim] = useState<SimState>({ status: "loading" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const decoded = decodeTxData(pending.tx.data);
+  const risk = decoded.risk;
+
+  // Resolve the target network, then run a pre-broadcast estimateGas as a
+  // simulation. A revert here is surfaced as a warning, not a hard block: some
+  // valid transactions do not estimate cleanly, so we let the user decide.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const n = await resolveEvmNetwork(pending.chainId);
+      if (cancelled) return;
+      if (!n) { setNetMissing(true); setSim({ status: "skipped" }); return; }
+      setNet(n);
+      try {
+        const provider = new ethers.JsonRpcProvider(n.rpcUrl);
+        const req = { ...normalizeTxForEthers(pending.tx), from: pending.account };
+        delete (req as any).gasLimit; // estimate fresh
+        const gas = await provider.estimateGas(req as ethers.TransactionRequest);
+        if (!cancelled) setSim({ status: "ok", gas: gas.toString() });
+      } catch (e: any) {
+        if (!cancelled) {
+          const reason = e?.shortMessage || e?.reason || e?.message || "Transaction is expected to fail";
+          setSim({ status: "revert", message: reason });
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [pending]);
+
+  async function approve() {
+    setError(null);
+    if (!net) { setError("Network not available."); return; }
+    setBusy(true);
+    try {
+      const wd = await getActiveSessionWallet();
+      if (!wd) { setError("Wallet is locked. Close and retry."); setBusy(false); return; }
+
+      let sameAccount = false;
+      try {
+        sameAccount = ethers.getAddress(wd.address) === ethers.getAddress(pending.account);
+      } catch { sameAccount = false; }
+      if (!sameAccount) {
+        setError("Active wallet changed. Reject and retry from the site.");
+        setBusy(false);
+        return;
+      }
+
+      const signer = getSigner(wd.privateKey, net.rpcUrl);
+      // Confirm the RPC actually serves the expected chain before broadcasting,
+      // so a stale/wrong RPC can never produce a wrong-chain send.
+      const providerNet = await signer.provider!.getNetwork();
+      if (Number(providerNet.chainId) !== net.chainId) {
+        setError(`Network mismatch: RPC reports chain ${providerNet.chainId}, expected ${net.chainId}.`);
+        setBusy(false);
+        return;
+      }
+
+      const sent = await signer.sendTransaction(
+        normalizeTxForEthers(pending.tx) as ethers.TransactionRequest
+      );
+      await touchActivity();
+      onDecide(true, sent.hash);
+    } catch (e: any) {
+      setError(e?.shortMessage || e?.reason || e?.message || "Could not send this transaction.");
+      setBusy(false);
+    }
+  }
+
+  const valueStr = net ? formatNativeValue(pending.tx.value, net.decimals, net.symbol) : "…";
+
+  return (
+    <div className="app-bg min-h-full flex flex-col">
+      <div className="px-5 pt-6 pb-4 flex-1 overflow-y-auto">
+        <div className="flex flex-col items-center text-center mb-5">
+          <img src="/logo.png" alt="NumPay" className="w-12 h-12 mb-3" />
+          <h1 className="text-[17px] font-bold text-text-primary">Transaction request</h1>
+          <p className="text-[12px] text-muted mt-1 break-all">{pending.origin}</p>
+        </div>
+
+        {netMissing && (
+          <div className="mb-3 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3.5 py-2.5">
+            <p className="text-[12px] text-rose-300 leading-snug">
+              This transaction targets chain {pending.chainId}, which is not configured in NumPay. Reject it.
+            </p>
+          </div>
+        )}
+
+        {risk.map((r, i) => (
+          <div
+            key={i}
+            className={`mb-3 rounded-xl border px-3.5 py-2.5 ${
+              r.level === "warn"
+                ? "border-amber-500/40 bg-amber-500/10"
+                : "border-border bg-surface-2"
+            }`}
+          >
+            <p className={`text-[12px] leading-snug ${r.level === "warn" ? "text-amber-300" : "text-text-secondary"}`}>
+              {r.level === "warn" ? "⚠ " : ""}{r.text}
+            </p>
+          </div>
+        ))}
+
+        {sim.status === "revert" && (
+          <div className="mb-3 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3.5 py-2.5">
+            <p className="text-[12px] text-rose-300 leading-snug">
+              ⚠ This transaction is likely to fail: {sim.message}
+            </p>
+          </div>
+        )}
+
+        <div className="premium-card p-3.5 mb-3">
+          <p className="text-[11px] text-muted uppercase tracking-wider font-medium mb-1">From</p>
+          <p className="text-[12px] font-mono text-text-primary break-all">{pending.account}</p>
+          <p className="text-[11px] text-muted uppercase tracking-wider font-medium mb-1 mt-3">To</p>
+          <p className="text-[12px] font-mono text-text-primary break-all">{pending.tx.to || "(contract creation)"}</p>
+          <p className="text-[11px] text-muted mt-3">
+            Amount: <span className="text-text-primary font-medium">{valueStr}</span>
+            <span className="text-muted"> · {net ? net.name : `Chain ${pending.chainId}`}</span>
+          </p>
+        </div>
+
+        <div className="premium-card p-3.5 mb-3">
+          <p className="text-[11px] text-muted uppercase tracking-wider font-medium mb-1">Action</p>
+          <p className="text-[12px] text-text-primary break-all">{decoded.summary}</p>
+          {sim.status === "ok" && (
+            <p className="text-[11px] text-muted mt-2">Estimated gas: <span className="text-text-secondary font-mono">{sim.gas}</span></p>
+          )}
+          {decoded.hasData && (
+            <details className="mt-2">
+              <summary className="text-[11px] text-muted cursor-pointer">Raw data</summary>
+              <pre className="text-[10px] text-text-secondary whitespace-pre-wrap break-all font-mono mt-1">{pending.tx.data}</pre>
+            </details>
+          )}
+        </div>
+
+        {error && <p className="text-[12px] text-rose-300 mt-1 mb-1">{error}</p>}
+      </div>
+
+      <div className="px-5 pb-6 flex gap-2">
+        <button
+          onClick={() => onDecide(false)}
+          disabled={busy}
+          className="flex-1 py-2.5 rounded-xl bg-surface-2 text-text-secondary text-[13px] font-medium border border-border hover:bg-surface-3 transition-colors disabled:opacity-50"
+        >
+          Reject
+        </button>
+        <button
+          onClick={approve}
+          disabled={busy || netMissing}
+          className="flex-1 btn-primary-premium text-[13px] disabled:opacity-50"
+        >
+          {busy ? "Sending..." : "Confirm"}
         </button>
       </div>
     </div>

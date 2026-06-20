@@ -35,6 +35,10 @@
     <button onclick="signTyped(true)">eth_signTypedData_v4 (Permit2 ⚠)</button>
     <button onclick="run('eth_sign', [selected, '0xdeadbeef'])">eth_sign (should reject)</button>
   </div>
+  <div class="row">
+    <button onclick="sendNative()">eth_sendTransaction (0-value self)</button>
+    <button onclick="sendApprove()">eth_sendTransaction (unlimited approve ⚠)</button>
+  </div>
 
   <pre id="out">Ready.</pre>
 
@@ -128,6 +132,26 @@
           contents: "Hello, Bob!",
         },
       };
+    }
+
+    // A 0-value self-send: a real, broadcastable tx that spends only gas. Review
+    // it on the NumPay approval, then approve (costs gas) or reject.
+    function sendNative() {
+      if (!selected) return log("Connect first.");
+      run("eth_sendTransaction", [{ from: selected, to: selected, value: "0x0" }]);
+    }
+
+    // approve(spender, MAX_UINT256) on USDC. Should trigger NumPay's unlimited
+    // token-approval warning. Intended to be REVIEWED then rejected.
+    function sendApprove() {
+      if (!selected) return log("Connect first.");
+      const USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+      const spender = "0x1111111254EEB25477B68fb85Ed929f73A960582";
+      const data =
+        "0x095ea7b3" +
+        spender.slice(2).toLowerCase().padStart(64, "0") +
+        "f".repeat(64); // MAX_UINT256
+      run("eth_sendTransaction", [{ from: selected, to: USDC, value: "0x0", data }]);
     }
 
     function permit2Typed(addr) {

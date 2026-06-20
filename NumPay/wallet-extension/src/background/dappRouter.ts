@@ -13,6 +13,8 @@ import {
   type ProviderEventName,
   type PendingConnect,
   type PendingSign,
+  type PendingSendTx,
+  type DappTxRequest,
   type DappPending,
 } from "../lib/dapp/types";
 import { getPermission, grant, updateAllConnected } from "../lib/dapp/permissions";
@@ -139,13 +141,14 @@ function newRequestId(): string {
   return (crypto as Crypto).randomUUID?.() ?? Math.random().toString(36).slice(2);
 }
 
-// Called when the approval window posts its decision. For "sign" requests the
-// window itself produces the signature (the router never touches a key), so it
-// passes it back here purely to relay to the origin.
+// Called when the approval window posts its decision. For "sign" and "sendTx"
+// requests the window itself produces the result (the router never touches a
+// key or broadcasts), so it passes a result string back here purely to relay:
+// a signature for sign, a transaction hash for sendTx.
 async function handleDecision(
   requestId: string,
   approved: boolean,
-  signature?: string
+  result?: string
 ): Promise<void> {
   const key = PENDING_PFX + requestId;
   const p = (await chrome.storage.session.get(key))[key] as DappPending | undefined;
@@ -157,11 +160,12 @@ async function handleDecision(
     return;
   }
 
-  if (p.type === "sign") {
-    if (typeof signature === "string" && signature.startsWith("0x")) {
-      respondToOrigin(p.origin, { id: p.id, channel: p.channel, result: signature });
+  if (p.type === "sign" || p.type === "sendTx") {
+    if (typeof result === "string" && result.startsWith("0x")) {
+      respondToOrigin(p.origin, { id: p.id, channel: p.channel, result });
     } else {
-      // Approved but the window failed to sign (e.g. active wallet changed).
+      // Approved but the window failed to sign/broadcast (e.g. wallet changed,
+      // RPC error). Surface a generic internal error rather than hang.
       respondToOrigin(p.origin, { id: p.id, channel: p.channel, error: ERR.internal });
     }
     return;
@@ -294,6 +298,49 @@ async function handleRequest(
         return; // resolved later by handleDecision (window signs)
       }
 
+      case "eth_sendTransaction": {
+        const perm = await getPermission(origin);
+        if (!perm) {
+          reply(undefined, { code: ERR.unauthorized.code, message: "Connect the wallet first" });
+          return;
+        }
+        const raw = params[0];
+        if (!raw || typeof raw !== "object") {
+          reply(undefined, ERR.invalidParams);
+          return;
+        }
+        const tx = raw as DappTxRequest;
+        // A transaction must do something: have a recipient or carry calldata
+        // (contract deploys without `to` still carry data).
+        if (!tx.to && !tx.data) {
+          reply(undefined, { code: ERR.invalidParams.code, message: "Transaction has no 'to' or 'data'" });
+          return;
+        }
+        // Bind the sender to the connected account. If the dApp set `from`, it
+        // must match; under decrypt-only-active we can only sign for the active
+        // wallet anyway.
+        if (tx.from && !eqAddr(tx.from, perm.account)) {
+          reply(undefined, {
+            code: ERR.unauthorized.code,
+            message: "Transaction 'from' is not the connected account",
+          });
+          return;
+        }
+
+        const sendPending: PendingSendTx = {
+          type: "sendTx",
+          requestId: newRequestId(),
+          origin,
+          id,
+          channel,
+          account: perm.account,
+          chainId: evmChainIdNumber(await getActiveChainId()),
+          tx: { ...tx, from: perm.account },
+        };
+        await openApproval(sendPending);
+        return; // resolved later by handleDecision (window signs + broadcasts)
+      }
+
       default: {
         if (isReadMethod(method)) {
           const result = await proxyRead(await getActiveChainId(), method, params);
@@ -371,7 +418,7 @@ export function initDappRouter(): void {
       void handleDecision(
         msg.requestId,
         !!msg.approved,
-        typeof msg.signature === "string" ? msg.signature : undefined
+        typeof msg.result === "string" ? msg.result : undefined
       );
     } else if (msg?.type === MSG_DAPP_STATE_CHANGED) {
       void broadcastDappState();

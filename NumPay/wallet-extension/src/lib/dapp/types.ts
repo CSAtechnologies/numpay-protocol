@@ -102,7 +102,6 @@ export const DEFERRED_METHODS = new Set<string>([
   "eth_sign",
   "eth_signTypedData",
   "eth_signTypedData_v3",
-  "eth_sendTransaction",
   "eth_sendRawTransaction",
   "wallet_switchEthereumChain",
   "wallet_addEthereumChain",
@@ -110,6 +109,19 @@ export const DEFERRED_METHODS = new Set<string>([
   "wallet_requestPermissions",
   "wallet_getPermissions",
 ]);
+
+// EIP-1193 transaction object as dApps send it (hex quantities, optional fields).
+export interface DappTxRequest {
+  from?: string;
+  to?: string;
+  value?: string;
+  data?: string;
+  gas?: string;
+  gasPrice?: string;
+  maxFeePerGas?: string;
+  maxPriorityFeePerGas?: string;
+  nonce?: string;
+}
 
 // ── Approval-window pending records (stored in chrome.storage.session) ──────────
 // Discriminated union so one approval window can serve both connect and sign.
@@ -135,4 +147,11 @@ export interface PendingSign extends PendingBase {
   payload: string; // personal_sign: message hex; typed data: the JSON string
 }
 
-export type DappPending = PendingConnect | PendingSign;
+export interface PendingSendTx extends PendingBase {
+  type: "sendTx";
+  account: string; // the sender, bound to the connected account
+  chainId: number; // active EVM chain at request time
+  tx: DappTxRequest;
+}
+
+export type DappPending = PendingConnect | PendingSign | PendingSendTx;
