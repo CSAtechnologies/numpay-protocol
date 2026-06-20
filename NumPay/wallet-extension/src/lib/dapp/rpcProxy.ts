@@ -36,14 +36,19 @@ export async function proxyRead(
   const net = NETWORKS[dappEvmChainId(activeChainId)] ?? NETWORKS[DEFAULT_NETWORK];
 
   let res: Response;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
   try {
     res = await fetch(net.rpcUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      signal: ctrl.signal,
     });
   } catch {
     throw { code: ERR.internal.code, message: "RPC request failed" } as RpcError;
+  } finally {
+    clearTimeout(timer);
   }
 
   if (!res.ok) throw { code: ERR.internal.code, message: `RPC HTTP ${res.status}` } as RpcError;

@@ -28,6 +28,8 @@ export interface DecodedTxData {
   risk: RiskFlag[];
 }
 
+const HEX_WORD = /^[0-9a-fA-F]+$/;
+
 function word(data: string, index: number): string {
   // data is 0x + selector(8 hex) + 32-byte words. index 0 = first arg word.
   const start = 2 + 8 + index * 64;
@@ -35,11 +37,18 @@ function word(data: string, index: number): string {
 }
 
 function addrFromWord(w: string): string {
-  return "0x" + w.slice(24); // last 20 bytes of the 32-byte word
+  const tail = w.slice(24); // last 20 bytes of the 32-byte word
+  return HEX_WORD.test(tail) ? "0x" + tail.toLowerCase() : "0x";
 }
 
 function uintFromWord(w: string): bigint {
-  return w ? BigInt("0x" + w) : 0n;
+  // Throw-safe: calldata is untrusted, a non-hex word must never crash decode.
+  if (!w || !HEX_WORD.test(w)) return 0n;
+  try {
+    return BigInt("0x" + w);
+  } catch {
+    return 0n;
+  }
 }
 
 function shortAddr(a: string): string {
@@ -47,13 +56,23 @@ function shortAddr(a: string): string {
 }
 
 // Decode the calldata of a transaction far enough to describe what it authorises
-// and flag the dangerous approval shapes. Unknown calldata is reported as a
-// generic contract interaction (still shown, never silently trusted).
+// and flag the dangerous approval shapes. Unknown or unparseable calldata is
+// reported as a generic contract interaction (still shown, never silently
+// trusted). This function MUST NOT throw: it runs on untrusted calldata in the
+// approval window's render path.
 export function decodeTxData(data?: string): DecodedTxData {
   if (!data || data === "0x" || data.length < 10) {
     return { hasData: false, selector: null, fn: null, summary: "Native value transfer (no contract call)", risk: [] };
   }
   const selector = data.slice(0, 10).toLowerCase();
+  // Non-hex calldata: do not attempt to decode arguments, just report the call.
+  if (!/^0x[0-9a-fA-F]*$/.test(data)) {
+    return {
+      hasData: true, selector, fn: null,
+      summary: "Contract call (unrecognised data)",
+      risk: [{ level: "info", text: "This calls a contract with data NumPay cannot decode. Only continue if you trust the site." }],
+    };
+  }
   const fn = SELECTORS[selector] ?? null;
   const risk: RiskFlag[] = [];
 

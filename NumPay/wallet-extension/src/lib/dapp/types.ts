@@ -60,9 +60,15 @@ export const ERR = {
   unauthorized: { code: 4100, message: "The requested account/method has not been authorized" },
   unsupportedMethod: { code: 4200, message: "Method not supported in this version of NumPay yet" },
   disconnected: { code: 4900, message: "Provider is disconnected" },
+  requestPending: { code: -32002, message: "A NumPay request is already pending. Finish it first." },
   invalidParams: { code: -32602, message: "Invalid method parameters" },
   internal: { code: -32603, message: "Internal error" },
 } as const;
+
+// Hard cap on a single sign/transaction payload (typed-data JSON, message hex,
+// or calldata). Untrusted page input is stored in storage.session and rendered;
+// anything beyond this is rejected rather than buffered.
+export const MAX_PAYLOAD_BYTES = 128 * 1024;
 
 // Read methods proxied straight to our configured RPC. Anything not listed and
 // not handled explicitly is rejected, so the page can never drive arbitrary

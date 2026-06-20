@@ -10,6 +10,7 @@ import {
   MSG_DAPP_STATE_CHANGED,
   ERR,
   DEFERRED_METHODS,
+  MAX_PAYLOAD_BYTES,
   type ProviderEventName,
   type PendingConnect,
   type PendingSign,
@@ -86,6 +87,12 @@ async function isUnlocked(): Promise<boolean> {
 
 // ── Port registry + emit ───────────────────────────────────────────────────────
 
+// Undeliverable responses (no live port for the origin, e.g. the worker
+// restarted mid-approval) are parked here and flushed when a port for that
+// origin re-registers, so the dApp promise resolves instead of hanging.
+const OUTBOX_PFX = "numpay_dapp_outbox_";
+const MAX_OUTBOX = 20;
+
 function registerPort(port: chrome.runtime.Port, origin: string): void {
   originByPort.set(port, origin);
   let set = portsByOrigin.get(origin);
@@ -94,6 +101,7 @@ function registerPort(port: chrome.runtime.Port, origin: string): void {
     portsByOrigin.set(origin, set);
   }
   set.add(port);
+  void flushOutbox(origin, port);
 }
 
 function unregisterPort(port: chrome.runtime.Port): void {
@@ -103,17 +111,44 @@ function unregisterPort(port: chrome.runtime.Port): void {
   originByPort.delete(port);
 }
 
-function respondToOrigin(
-  origin: string,
-  payload: { id: string; channel: string; result?: unknown; error?: unknown }
-): void {
-  portsByOrigin.get(origin)?.forEach((p) => {
+type OutboxItem = { id: string; channel: string; result?: unknown; error?: unknown };
+
+async function bufferResponse(origin: string, payload: OutboxItem): Promise<void> {
+  const key = OUTBOX_PFX + origin;
+  const cur = ((await chrome.storage.session.get(key))[key] as OutboxItem[] | undefined) ?? [];
+  cur.push(payload);
+  // Bound the buffer so a pathological origin cannot grow session storage.
+  while (cur.length > MAX_OUTBOX) cur.shift();
+  await chrome.storage.session.set({ [key]: cur });
+}
+
+async function flushOutbox(origin: string, port: chrome.runtime.Port): Promise<void> {
+  const key = OUTBOX_PFX + origin;
+  const items = (await chrome.storage.session.get(key))[key] as OutboxItem[] | undefined;
+  if (!items || !items.length) return;
+  await chrome.storage.session.remove(key);
+  for (const it of items) {
+    try {
+      port.postMessage(it);
+    } catch {
+      // Port died again before flush completed: re-park whatever is left.
+      void bufferResponse(origin, it);
+    }
+  }
+}
+
+function respondToOrigin(origin: string, payload: OutboxItem): void {
+  const ports = portsByOrigin.get(origin);
+  let delivered = false;
+  ports?.forEach((p) => {
     try {
       p.postMessage(payload);
+      delivered = true;
     } catch {
       /* dead port */
     }
   });
+  if (!delivered) void bufferResponse(origin, payload);
 }
 
 function emitToOrigin(origin: string, name: ProviderEventName, data: unknown): void {
@@ -138,11 +173,40 @@ function eqAddr(a: string, b: string): boolean {
 
 // ── Approval handshake (connect + sign) ─────────────────────────────────────────
 
+// One interactive approval window per origin at a time. Without this a hostile
+// page could loop a signing/connect request and spawn unlimited popups (DoS).
+const MAX_OPEN_PER_ORIGIN = 1;
+const openApprovalsByOrigin = new Map<string, Set<string>>();
+
+function originHasOpenApproval(origin: string): boolean {
+  return (openApprovalsByOrigin.get(origin)?.size ?? 0) >= MAX_OPEN_PER_ORIGIN;
+}
+
+function addOpenApproval(origin: string, requestId: string): void {
+  let s = openApprovalsByOrigin.get(origin);
+  if (!s) { s = new Set(); openApprovalsByOrigin.set(origin, s); }
+  s.add(requestId);
+}
+
+function removeOpenApproval(origin: string, requestId: string): void {
+  const s = openApprovalsByOrigin.get(origin);
+  if (!s) return;
+  s.delete(requestId);
+  if (s.size === 0) openApprovalsByOrigin.delete(origin);
+}
+
 async function openApproval(p: DappPending): Promise<void> {
+  // Reject a second concurrent interactive request from the same origin instead
+  // of opening another window.
+  if (originHasOpenApproval(p.origin)) {
+    respondToOrigin(p.origin, { id: p.id, channel: p.channel, error: ERR.requestPending });
+    return;
+  }
   await chrome.storage.session.set({ [PENDING_PFX + p.requestId]: p });
   const url = chrome.runtime.getURL(`approval.html?requestId=${encodeURIComponent(p.requestId)}`);
   try {
     await chrome.windows.create({ url, type: "popup", width: 380, height: 600 });
+    addOpenApproval(p.origin, p.requestId);
   } catch {
     // If the window cannot open, fail the request rather than hang.
     respondToOrigin(p.origin, { id: p.id, channel: p.channel, error: ERR.internal });
@@ -167,6 +231,7 @@ async function handleDecision(
   const p = (await chrome.storage.session.get(key))[key] as DappPending | undefined;
   if (!p) return;
   await chrome.storage.session.remove(key);
+  removeOpenApproval(p.origin, requestId); // free the per-origin slot
 
   if (!approved) {
     respondToOrigin(p.origin, { id: p.id, channel: p.channel, error: ERR.userRejected });
@@ -324,6 +389,11 @@ async function handleRequest(
           return;
         }
 
+        if (payload.length > MAX_PAYLOAD_BYTES) {
+          reply(undefined, { code: ERR.invalidParams.code, message: "Sign payload too large" });
+          return;
+        }
+
         const signPending: PendingSign = {
           type: "sign",
           method,
@@ -355,6 +425,10 @@ async function handleRequest(
         // (contract deploys without `to` still carry data).
         if (!tx.to && !tx.data) {
           reply(undefined, { code: ERR.invalidParams.code, message: "Transaction has no 'to' or 'data'" });
+          return;
+        }
+        if (typeof tx.data === "string" && tx.data.length > MAX_PAYLOAD_BYTES) {
+          reply(undefined, { code: ERR.invalidParams.code, message: "Transaction data too large" });
           return;
         }
         // Bind the sender to the connected account. If the dApp set `from`, it

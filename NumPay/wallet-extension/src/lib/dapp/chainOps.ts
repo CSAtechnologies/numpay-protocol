@@ -44,13 +44,17 @@ export function validateHttpsRpc(raw: unknown): string {
 
 // Ask an RPC which chain it serves (eth_chainId). Returns the numeric id, or
 // null on any failure. Used to confirm a freshly added RPC actually serves the
-// chain it claims, so a site cannot point a chain id at an unrelated node.
-export async function rpcServesChain(rpcUrl: string): Promise<number | null> {
+// chain it claims, so a site cannot point a chain id at an unrelated node. A
+// hard timeout keeps a slow/hostile RPC from hanging the add-chain flow.
+export async function rpcServesChain(rpcUrl: string, timeoutMs = 8000): Promise<number | null> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(rpcUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+      signal: ctrl.signal,
     });
     if (!res.ok) return null;
     const j = await res.json().catch(() => null);
@@ -59,6 +63,8 @@ export async function rpcServesChain(rpcUrl: string): Promise<number | null> {
     return Number.isSafeInteger(n) ? n : null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(t);
   }
 }
 

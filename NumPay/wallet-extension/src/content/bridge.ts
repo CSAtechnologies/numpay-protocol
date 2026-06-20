@@ -14,6 +14,11 @@ import {
 const ORIGIN = window.location.origin;
 
 let port: chrome.runtime.Port | null = null;
+// Ids of requests awaiting a response. Used to decide whether to reconnect the
+// port if the background worker suspends: we only keep the connection alive
+// while something is genuinely in flight (e.g. an approval window is open), so
+// a buffered response can reach the page instead of stranding its promise.
+const inflight = new Set<string>();
 
 function connect(): chrome.runtime.Port {
   if (port) return port;
@@ -29,6 +34,7 @@ function connect(): chrome.runtime.Port {
       );
     } else {
       // response to a specific request
+      if (typeof msg.id === "string") inflight.delete(msg.id);
       window.postMessage(
         {
           target: TO_INPAGE,
@@ -45,8 +51,16 @@ function connect(): chrome.runtime.Port {
 
   p.onDisconnect.addListener(() => {
     // Worker suspended or extension reloaded. Drop the handle; the next message
-    // (or the registration below) reconnects so events keep flowing.
+    // (or the registration below) reconnects so events keep flowing. If a
+    // request is still awaiting its response, reconnect proactively so the
+    // router can flush the buffered response (bounded: stops once nothing is in
+    // flight, so the worker is free to suspend when idle).
     port = null;
+    if (inflight.size > 0) {
+      setTimeout(() => {
+        try { connect(); } catch { /* extension context gone */ }
+      }, 300);
+    }
   });
 
   // Register this tab's origin with the router so it can target events.
@@ -76,6 +90,7 @@ window.addEventListener("message", (e: MessageEvent) => {
   if (!d || d.target !== TO_CONTENT) return;
   if (typeof d.method !== "string" || typeof d.id !== "string" || typeof d.channel !== "string") return;
 
+  inflight.add(d.id);
   send({
     kind: "request",
     id: d.id,

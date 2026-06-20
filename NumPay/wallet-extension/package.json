@@ -7,7 +7,9 @@
     "dev": "vite build --watch",
     "build": "tsc && vite build && vite build -c vite.config.inpage.ts && vite build -c vite.config.content.ts",
     "preview": "vite preview",
-    "test:vectors": "node test/verify-address-vectors.mjs"
+    "test:vectors": "node test/verify-address-vectors.mjs",
+    "test:dapp": "node test/dapp-adversarial.mjs",
+    "test": "node test/verify-address-vectors.mjs && node test/dapp-adversarial.mjs"
   },
   "dependencies": {
     "@noble/hashes": "^1.3.2",

@@ -1,0 +1,187 @@
+/**
+ * Adversarial test suite for the dApp-layer parsers (P4).
+ *
+ *   node test/dapp-adversarial.mjs
+ *
+ * signDecode / txDecode / chainOps all run on UNTRUSTED page input in security-
+ * sensitive paths (the approval window render path, the connect/sign/send
+ * router). The cardinal rule: a hostile or malformed payload must never throw
+ * (which would white-screen the approval) and must reach a safe decision. This
+ * bundles the real modules with esbuild and hammers them with junk + a fuzz
+ * loop. Exits non-zero on any failure so it can gate CI.
+ */
+import { build } from "esbuild";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, "..");
+
+// Bundle the three modules to a temp dir (type-only imports erase; the Vite
+// import.meta.env reads in env.ts are defined away; chrome is absent so
+// getCustomChains() falls back to []).
+const out = mkdtempSync(join(tmpdir(), "numpay-dapp-test-"));
+async function bundle(entry, name) {
+  const file = join(out, name + ".mjs");
+  await build({
+    entryPoints: [join(root, entry)],
+    bundle: true,
+    format: "esm",
+    outfile: file,
+    logLevel: "error",
+    define: {
+      "import.meta.env.VITE_ALCHEMY_KEY": '""',
+      "import.meta.env.VITE_MORALIS_KEY": '""',
+      "import.meta.env.VITE_GOLDRUSH_KEY": '""',
+      "import.meta.env.DEV": "false",
+    },
+  });
+  return import(pathToFileURL(file).href);
+}
+
+let pass = 0;
+let fail = 0;
+function ok(cond, label) {
+  if (cond) { pass++; } else { fail++; console.log("FAIL " + label); }
+}
+function noThrow(label, fn) {
+  try { fn(); pass++; } catch (e) { fail++; console.log("FAIL " + label + " threw: " + (e && e.message)); }
+}
+function throws(label, fn) {
+  return fn().then(
+    () => { fail++; console.log("FAIL " + label + " (did not throw)"); },
+    () => { pass++; }
+  );
+}
+
+const sign = await bundle("src/lib/dapp/signDecode.ts", "signDecode");
+const tx = await bundle("src/lib/dapp/txDecode.ts", "txDecode");
+const chain = await bundle("src/lib/dapp/chainOps.ts", "chainOps");
+
+// ── signDecode.decodePersonalSignMessage: never throw, correct utf8 detection ──
+{
+  const d = sign.decodePersonalSignMessage;
+  noThrow("personal huge hex", () => d("0x" + "ab".repeat(500000)));
+  noThrow("personal null", () => d(null));
+  noThrow("personal number", () => d(12345));
+  noThrow("personal object", () => d({}));
+  noThrow("personal empty 0x", () => d("0x"));
+  ok(d("0x68656c6c6f").isUtf8 === true, "personal hex hello is utf8");
+  ok(d("hello").isUtf8 === true, "personal plain hello is utf8");
+  ok(d("0xfffe").isUtf8 === false, "personal invalid utf8 -> hex");
+  ok(d("0x01020304").isUtf8 === false, "personal control bytes -> hex");
+  // SIWE-style multi-line message must stay readable (tab/newline allowed).
+  const siwe = "0x" + Buffer.from("example.com wants you to sign in\nNonce: 42").toString("hex");
+  ok(d(siwe).isUtf8 === true, "personal SIWE multiline is utf8");
+}
+
+// ── signDecode.parseTypedData + risk ──
+{
+  const p = sign.parseTypedData;
+  ok(p("not json").ok === false, "typed invalid json -> error");
+  ok(p(null).ok === false, "typed null -> error");
+  ok(p("{}").ok === false, "typed empty obj -> error");
+  ok(p(JSON.stringify({ types: {}, primaryType: "X", message: {} })).ok === false, "typed primaryType missing in types");
+  const mail = {
+    types: { EIP712Domain: [{ name: "name", type: "string" }], Mail: [{ name: "x", type: "string" }] },
+    primaryType: "Mail", domain: { name: "M", chainId: 1 }, message: { x: "hi" },
+  };
+  const parsed = p(mail);
+  ok(parsed.ok === true, "typed valid object ok");
+  ok("EIP712Domain" in sign.typesForEthers(parsed.types) === false, "typesForEthers strips EIP712Domain");
+  // risk
+  const permit2 = p({
+    types: { EIP712Domain: [], PermitSingle: [{ name: "a", type: "uint" }] },
+    primaryType: "PermitSingle",
+    domain: { name: "Permit2", chainId: 1, verifyingContract: "0x000000000022d473030f116ddee9f6b43ac78ba3" },
+    message: {},
+  });
+  ok(sign.assessTypedDataRisk(permit2, 1).some((f) => f.level === "warn"), "Permit2 -> warn");
+  const permitName = p({ types: { EIP712Domain: [], Permit: [{ name: "a", type: "uint" }] }, primaryType: "Permit", domain: { chainId: 1 }, message: {} });
+  ok(sign.assessTypedDataRisk(permitName, 1).some((f) => f.level === "warn"), "Permit primaryType -> warn");
+  ok(sign.assessTypedDataRisk(parsed, 137).some((f) => /chain/i.test(f.text)), "chainId mismatch -> warn");
+  ok(sign.assessTypedDataRisk(parsed, 1).length === 0, "benign same-chain Mail -> no warn");
+}
+
+// ── txDecode.decodeTxData: NEVER throw + correct flags ──
+{
+  const dec = tx.decodeTxData;
+  noThrow("tx undefined", () => dec(undefined));
+  noThrow("tx 0x", () => dec("0x"));
+  noThrow("tx short", () => dec("0x0934"));
+  noThrow("tx selector only (truncated args)", () => dec("0x095ea7b3"));
+  noThrow("tx non-hex calldata", () => dec("0x095ea7b3zzzzzzzz"));
+  noThrow("tx huge data", () => dec("0x095ea7b3" + "f".repeat(2000000)));
+  const spender = "0x1111111254eeb25477b68fb85ed929f73a960582";
+  const approveMax = "0x095ea7b3" + spender.slice(2).padStart(64, "0") + "f".repeat(64);
+  ok(/unlimited/i.test(dec(approveMax).summary), "approve max -> unlimited");
+  const approve1k = "0x095ea7b3" + spender.slice(2).padStart(64, "0") + (1000).toString(16).padStart(64, "0");
+  ok(/1000/.test(dec(approve1k).summary), "approve bounded shows amount");
+  const safaOn = "0xa22cb465" + spender.slice(2).padStart(64, "0") + "1".padStart(64, "0");
+  ok(dec(safaOn).risk.some((f) => f.level === "warn"), "setApprovalForAll(true) -> warn");
+  const safaOff = "0xa22cb465" + spender.slice(2).padStart(64, "0") + "0".padStart(64, "0");
+  ok(dec(safaOff).risk.length === 0, "setApprovalForAll(false) -> no warn");
+  ok(dec("0xdeadbeef").risk.some((f) => f.level === "info"), "unknown selector -> info");
+  ok(dec("0x").hasData === false, "no data -> native transfer");
+}
+
+// ── txDecode.formatNativeValue + normalizeTxForEthers ──
+{
+  const f = tx.formatNativeValue;
+  noThrow("format junk hex", () => f("0xzzzz", 18, "ETH"));
+  noThrow("format undefined", () => f(undefined, 18, "ETH"));
+  ok(f("0x" + (10n ** 18n).toString(16), 18, "ETH") === "1 ETH", "format 1 ETH");
+  ok(f("0x0", 18, "ETH") === "0 ETH", "format 0");
+  const n = tx.normalizeTxForEthers({ to: "0xabc", data: "0x", value: "0x5", gas: "0x5208", nonce: "0x2" });
+  ok(n.gasLimit === "0x5208", "normalize gas->gasLimit");
+  ok(!("data" in n), "normalize drops empty data");
+  ok(n.nonce === 2, "normalize nonce->number");
+}
+
+// ── chainOps ──
+{
+  ok(chain.parseChainId("0x89") === 137, "parseChainId 0x89");
+  ok(chain.parseChainId("0x0") === null, "parseChainId 0x0 -> null");
+  ok(chain.parseChainId("nope") === null, "parseChainId junk -> null");
+  ok(chain.parseChainId(137) === null, "parseChainId number -> null");
+  ok((await chain.resolveInternalChainId(1)) === "ethereum", "resolve 1 -> ethereum");
+  ok((await chain.resolveInternalChainId(9999)) === null, "resolve unknown -> null");
+  await throws("validateHttpsRpc http", async () => chain.validateHttpsRpc("http://x.com"));
+  await throws("validateHttpsRpc junk", async () => chain.validateHttpsRpc("not a url"));
+  ok(chain.validateHttpsRpc("https://x.com") === "https://x.com/", "validateHttpsRpc https ok");
+  await throws("add built-in collision", async () => chain.buildAddChainCandidate({ chainId: "0x1", rpcUrls: ["https://x"] }));
+  await throws("add http rpc", async () => chain.buildAddChainCandidate({ chainId: "0x14a34", rpcUrls: ["http://x"] }));
+  await throws("add missing chainId", async () => chain.buildAddChainCandidate({ rpcUrls: ["https://x"] }));
+  const cand = await chain.buildAddChainCandidate({ chainId: "0x14a34", chainName: "T", rpcUrls: ["https://t.example"], nativeCurrency: { symbol: "ETH", decimals: 18 } });
+  ok(cand.chain.chainId === 84532 && cand.alreadyExists === false, "add new chain candidate");
+}
+
+// ── Fuzz: random inputs must never throw the decoders ──
+{
+  const hexchars = "0123456789abcdefABCDEFxyzZ-_ ";
+  function randHex(n) {
+    let s = "0x";
+    for (let i = 0; i < n; i++) s += hexchars[(Math.random() * hexchars.length) | 0];
+    return s;
+  }
+  let threw = 0;
+  for (let i = 0; i < 2000; i++) {
+    const data = randHex((Math.random() * 200) | 0);
+    try {
+      tx.decodeTxData(data);
+      sign.decodePersonalSignMessage(data);
+      tx.formatNativeValue(data, 18, "ETH");
+      sign.parseTypedData(data);
+    } catch {
+      threw++;
+    }
+  }
+  ok(threw === 0, "fuzz: 2000 random inputs, no throws (saw " + threw + ")");
+}
+
+rmSync(out, { recursive: true, force: true });
+
+console.log("\n" + pass + " passed, " + fail + " failed");
+if (fail > 0) process.exit(1);
