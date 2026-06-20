@@ -14,15 +14,28 @@ import {
   type PendingConnect,
   type PendingSign,
   type PendingSendTx,
+  type PendingSwitchChain,
+  type PendingAddChain,
   type DappTxRequest,
   type DappPending,
+  type RpcError,
 } from "../lib/dapp/types";
 import { getPermission, grant, updateAllConnected } from "../lib/dapp/permissions";
 import { proxyRead, isReadMethod, evmChainIdHex, evmChainIdNumber } from "../lib/dapp/rpcProxy";
+import {
+  parseChainId,
+  resolveInternalChainId,
+  rpcServesChain,
+  buildAddChainCandidate,
+} from "../lib/dapp/chainOps";
+import { setItem } from "../lib/storage";
+import { saveCustomChain } from "../lib/customChains";
+import { NETWORKS } from "../lib/networks";
 
 const VAULTS_KEY = "numpay_vaults";
 const ACTIVE_ID_KEY = "numpay_active_id";
 const ACTIVE_CHAIN_KEY = "numpay_active_chain";
+const NETWORK_KEY = "numpay_network";
 const SESSION_KEY = "numpay_session";
 const ACTIVITY_KEY = "numpay_lastActivity";
 const AUTO_LOCK_MS = 15 * 60 * 1000;
@@ -168,6 +181,34 @@ async function handleDecision(
       // RPC error). Surface a generic internal error rather than hang.
       respondToOrigin(p.origin, { id: p.id, channel: p.channel, error: ERR.internal });
     }
+    return;
+  }
+
+  if (p.type === "switchChain") {
+    // Make the requested chain active wallet-wide, then emit chainChanged to
+    // every connected origin. Returns null per EIP-3326.
+    await setItem(ACTIVE_CHAIN_KEY, p.targetInternalId);
+    await setItem(NETWORK_KEY, p.targetInternalId);
+    await broadcastDappState();
+    respondToOrigin(p.origin, { id: p.id, channel: p.channel, result: null });
+    return;
+  }
+
+  if (p.type === "addChain") {
+    // The window has just requested the host permission for this RPC origin.
+    // Confirm the endpoint actually serves the chain id it claims before saving,
+    // so a site cannot register a chain id pointed at an unrelated node.
+    const served = await rpcServesChain(p.chain.rpcUrl);
+    if (served !== p.chain.chainId) {
+      respondToOrigin(p.origin, {
+        id: p.id,
+        channel: p.channel,
+        error: { code: ERR.invalidParams.code, message: `RPC does not serve chain ${p.chain.chainId}` },
+      });
+      return;
+    }
+    await saveCustomChain(p.chain);
+    respondToOrigin(p.origin, { id: p.id, channel: p.channel, result: null });
     return;
   }
 
@@ -339,6 +380,61 @@ async function handleRequest(
         };
         await openApproval(sendPending);
         return; // resolved later by handleDecision (window signs + broadcasts)
+      }
+
+      case "wallet_switchEthereumChain": {
+        const target = parseChainId((params[0] as { chainId?: unknown })?.chainId);
+        if (!target) {
+          reply(undefined, ERR.invalidParams);
+          return;
+        }
+        const internalId = await resolveInternalChainId(target);
+        if (!internalId) {
+          // EIP-3326: 4902 = chain not added to the wallet.
+          reply(undefined, { code: 4902, message: "Unrecognized chain ID. Add it to NumPay first." });
+          return;
+        }
+        if (evmChainIdNumber(await getActiveChainId()) === target) {
+          reply(null); // already on this chain: no-op success
+          return;
+        }
+        const net = NETWORKS[internalId];
+        const switchPending: PendingSwitchChain = {
+          type: "switchChain",
+          requestId: newRequestId(),
+          origin,
+          id,
+          channel,
+          targetInternalId: internalId,
+          chainId: target,
+          chainName: net ? net.name : `Chain ${target}`,
+        };
+        await openApproval(switchPending);
+        return;
+      }
+
+      case "wallet_addEthereumChain": {
+        let candidate;
+        try {
+          candidate = await buildAddChainCandidate(params[0]);
+        } catch (e) {
+          reply(undefined, e as RpcError);
+          return;
+        }
+        if (candidate.alreadyExists) {
+          reply(null); // already configured: no-op success
+          return;
+        }
+        const addPending: PendingAddChain = {
+          type: "addChain",
+          requestId: newRequestId(),
+          origin,
+          id,
+          channel,
+          chain: candidate.chain,
+        };
+        await openApproval(addPending);
+        return;
       }
 
       default: {

@@ -39,6 +39,12 @@
     <button onclick="sendNative()">eth_sendTransaction (0-value self)</button>
     <button onclick="sendApprove()">eth_sendTransaction (unlimited approve ⚠)</button>
   </div>
+  <div class="row">
+    <button onclick="run('wallet_switchEthereumChain', [{ chainId: '0x89' }])">switch → Polygon</button>
+    <button onclick="run('wallet_switchEthereumChain', [{ chainId: '0x270f' }])">switch → 9999 (expect 4902)</button>
+    <button onclick="addBaseSepolia()">addEthereumChain (Base Sepolia)</button>
+    <button onclick="addBuiltin()">addEthereumChain (chain 1, expect reject)</button>
+  </div>
 
   <pre id="out">Ready.</pre>
 
@@ -139,6 +145,29 @@
     function sendNative() {
       if (!selected) return log("Connect first.");
       run("eth_sendTransaction", [{ from: selected, to: selected, value: "0x0" }]);
+    }
+
+    // Add a genuinely new chain (Base Sepolia, 84532). Its RPC actually serves
+    // that chain id, so NumPay's post-approval verification passes.
+    function addBaseSepolia() {
+      run("wallet_addEthereumChain", [{
+        chainId: "0x14a34",
+        chainName: "Base Sepolia",
+        rpcUrls: ["https://sepolia.base.org"],
+        nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+        blockExplorerUrls: ["https://sepolia.basescan.org"],
+      }]);
+    }
+
+    // Attempt to override a built-in chain (Ethereum mainnet, id 1). NumPay must
+    // refuse: a site cannot repoint a canonical network at its own RPC.
+    function addBuiltin() {
+      run("wallet_addEthereumChain", [{
+        chainId: "0x1",
+        chainName: "Fake Ethereum",
+        rpcUrls: ["https://evil.example/rpc"],
+        nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+      }]);
     }
 
     // approve(spender, MAX_UINT256) on USDC. Should trigger NumPay's unlimited

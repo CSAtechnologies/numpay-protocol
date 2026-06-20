@@ -103,8 +103,6 @@ export const DEFERRED_METHODS = new Set<string>([
   "eth_signTypedData",
   "eth_signTypedData_v3",
   "eth_sendRawTransaction",
-  "wallet_switchEthereumChain",
-  "wallet_addEthereumChain",
   "wallet_watchAsset",
   "wallet_requestPermissions",
   "wallet_getPermissions",
@@ -154,4 +152,21 @@ export interface PendingSendTx extends PendingBase {
   tx: DappTxRequest;
 }
 
-export type DappPending = PendingConnect | PendingSign | PendingSendTx;
+export interface PendingSwitchChain extends PendingBase {
+  type: "switchChain";
+  targetInternalId: string; // NumPay network id to make active
+  chainId: number; // numeric EVM chain id being switched to
+  chainName: string; // for display
+}
+
+export interface PendingAddChain extends PendingBase {
+  type: "addChain";
+  chain: import("../customChains").CustomChain; // validated candidate to save
+}
+
+export type DappPending =
+  | PendingConnect
+  | PendingSign
+  | PendingSendTx
+  | PendingSwitchChain
+  | PendingAddChain;

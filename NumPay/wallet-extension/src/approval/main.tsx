@@ -18,6 +18,8 @@ import {
   type PendingConnect,
   type PendingSign,
   type PendingSendTx,
+  type PendingSwitchChain,
+  type PendingAddChain,
 } from "@/lib/dapp/types";
 import {
   decodePersonalSignMessage,
@@ -141,8 +143,23 @@ function App() {
   }
 
   if (pending.type === "sendTx") return <SendTxView pending={pending} onDecide={decide} />;
+  if (pending.type === "switchChain") return <SwitchChainView pending={pending} onDecide={decide} />;
+  if (pending.type === "addChain") return <AddChainView pending={pending} onDecide={decide} />;
   if (pending.type === "sign") return <SignView pending={pending} onDecide={decide} />;
   return <ConnectView pending={pending} onDecide={decide} />;
+}
+
+// Request the runtime host permission for a custom RPC origin (declared under
+// optional_host_permissions). Must run from a user gesture in this window.
+async function requestRpcHostPermission(rpcUrl: string): Promise<boolean> {
+  try {
+    if (typeof chrome === "undefined" || !chrome.permissions) return true;
+    const origins = [`${new URL(rpcUrl).origin}/*`];
+    if (await chrome.permissions.contains({ origins })) return true;
+    return await chrome.permissions.request({ origins });
+  } catch {
+    return false;
+  }
 }
 
 // Resolve an EVM network (built-in or custom) by numeric chainId, for the rpcUrl
@@ -536,6 +553,130 @@ function SendTxView({
           className="flex-1 btn-primary-premium text-[13px] disabled:opacity-50"
         >
           {busy ? "Sending..." : "Confirm"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Switch chain ─────────────────────────────────────────────────────────────────
+
+function SwitchChainView({
+  pending,
+  onDecide,
+}: {
+  pending: PendingSwitchChain;
+  onDecide: (approved: boolean, result?: string) => void;
+}) {
+  return (
+    <div className="app-bg min-h-full flex flex-col">
+      <div className="px-5 pt-6 pb-4 flex-1">
+        <div className="flex flex-col items-center text-center mb-6">
+          <img src="/logo.png" alt="NumPay" className="w-12 h-12 mb-3" />
+          <h1 className="text-[17px] font-bold text-text-primary">Switch network</h1>
+          <p className="text-[12px] text-muted mt-1 break-all">{pending.origin}</p>
+        </div>
+
+        <div className="premium-card p-3.5 mb-3">
+          <p className="text-[12px] text-text-secondary">
+            This site wants NumPay to switch to{" "}
+            <span className="text-brand-400 font-medium">{pending.chainName}</span>.
+          </p>
+          <p className="text-[11px] text-muted mt-2">
+            This changes the active network for the whole wallet, not just this site.
+          </p>
+        </div>
+      </div>
+
+      <div className="px-5 pb-6 flex gap-2">
+        <button
+          onClick={() => onDecide(false)}
+          className="flex-1 py-2.5 rounded-xl bg-surface-2 text-text-secondary text-[13px] font-medium border border-border hover:bg-surface-3 transition-colors"
+        >
+          Reject
+        </button>
+        <button onClick={() => onDecide(true)} className="flex-1 btn-primary-premium text-[13px]">
+          Switch
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Add chain ─────────────────────────────────────────────────────────────────────
+
+function AddChainView({
+  pending,
+  onDecide,
+}: {
+  pending: PendingAddChain;
+  onDecide: (approved: boolean, result?: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const c = pending.chain;
+
+  async function approve() {
+    setError(null);
+    setBusy(true);
+    // Granting the host permission needs this user gesture; the background then
+    // verifies the RPC actually serves this chain before saving it.
+    const granted = await requestRpcHostPermission(c.rpcUrl);
+    if (!granted) {
+      setError("Permission to reach this RPC was denied. NumPay needs it to use the network.");
+      setBusy(false);
+      return;
+    }
+    onDecide(true);
+  }
+
+  return (
+    <div className="app-bg min-h-full flex flex-col">
+      <div className="px-5 pt-6 pb-4 flex-1 overflow-y-auto">
+        <div className="flex flex-col items-center text-center mb-5">
+          <img src="/logo.png" alt="NumPay" className="w-12 h-12 mb-3" />
+          <h1 className="text-[17px] font-bold text-text-primary">Add network</h1>
+          <p className="text-[12px] text-muted mt-1 break-all">{pending.origin}</p>
+        </div>
+
+        <div className="mb-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3.5 py-2.5">
+          <p className="text-[12px] text-amber-300 leading-snug">
+            ⚠ Only add networks you trust. NumPay will route balances and transactions for this chain through the RPC below.
+          </p>
+        </div>
+
+        <div className="premium-card p-3.5 mb-3 space-y-2">
+          <div>
+            <p className="text-[11px] text-muted uppercase tracking-wider font-medium">Network</p>
+            <p className="text-[12px] text-text-primary">{c.name}</p>
+          </div>
+          <div>
+            <p className="text-[11px] text-muted uppercase tracking-wider font-medium">Chain ID</p>
+            <p className="text-[12px] text-text-primary">{c.chainId}</p>
+          </div>
+          <div>
+            <p className="text-[11px] text-muted uppercase tracking-wider font-medium">Currency</p>
+            <p className="text-[12px] text-text-primary">{c.symbol}</p>
+          </div>
+          <div>
+            <p className="text-[11px] text-muted uppercase tracking-wider font-medium">RPC URL</p>
+            <p className="text-[12px] font-mono text-text-primary break-all">{c.rpcUrl}</p>
+          </div>
+        </div>
+
+        {error && <p className="text-[12px] text-rose-300 mt-1 mb-1">{error}</p>}
+      </div>
+
+      <div className="px-5 pb-6 flex gap-2">
+        <button
+          onClick={() => onDecide(false)}
+          disabled={busy}
+          className="flex-1 py-2.5 rounded-xl bg-surface-2 text-text-secondary text-[13px] font-medium border border-border hover:bg-surface-3 transition-colors disabled:opacity-50"
+        >
+          Reject
+        </button>
+        <button onClick={approve} disabled={busy} className="flex-1 btn-primary-premium text-[13px] disabled:opacity-50">
+          {busy ? "Adding..." : "Add network"}
         </button>
       </div>
     </div>
