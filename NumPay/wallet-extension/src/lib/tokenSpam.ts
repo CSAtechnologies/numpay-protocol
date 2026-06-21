@@ -10,16 +10,25 @@
  * A token is hidden only when we have positive evidence against it:
  *   - an indexer explicitly flags it as spam, or
  *   - it is priced and the holding is worth under $0.01, or
- *   - it has a market cap but almost no liquidity backing it (a classic fake:
- *     e.g. $100k "market cap" propped up by $200 of liquidity).
+ *   - it has a sizable market cap but almost no liquidity backing it (a classic
+ *     fake: e.g. $100k "market cap" propped up by $200 of liquidity).
  *
  * A token with no price and no liquidity data is left VISIBLE — absence of data
  * is not evidence of spam.
+ *
+ * The liquidity-vs-market-cap rule is gated on LOW ABSOLUTE liquidity. A global
+ * market cap (e.g. USDT's ~$180B) dwarfs any single chain's pool, so the ratio
+ * alone would wrongly flag legitimate large-cap and bridged tokens that have a
+ * modest but perfectly real pool. The scam pattern is thin liquidity in
+ * absolute terms, so we only apply the ratio when the pool itself is tiny.
  */
 
 export const SPAM_MIN_VALUE_USD = 0.01;
-// Liquidity below this fraction of market cap reads as manipulable / fake.
+// Liquidity below this fraction of market cap reads as manipulable / fake...
 export const SPAM_MIN_LIQ_MC_RATIO = 0.005; // 0.5%
+// ...but only when the pool is also tiny in absolute terms. A real token (even
+// a stablecoin pool worth tens of thousands) sits well above this floor.
+export const SPAM_THIN_LIQ_USD = 10_000;
 
 export interface SpamSignals {
   balance?: string | number;
@@ -53,14 +62,16 @@ export function classifyToken(t: SpamSignals): SpamVerdict {
     }
   }
 
-  // 3. Market cap with almost no liquidity behind it.
+  // 3. A tiny pool whose liquidity is also a negligible fraction of a sizable
+  //    market cap — a fake/manipulable token. Both conditions are required so
+  //    big-cap and bridged tokens (USDT/USDC) with real pools are never hidden.
   if (
     typeof t.liquidityUsd === "number" && t.liquidityUsd >= 0 &&
-    typeof t.marketCapUsd === "number" && t.marketCapUsd > 0
+    typeof t.marketCapUsd === "number" && t.marketCapUsd > 0 &&
+    t.liquidityUsd < SPAM_THIN_LIQ_USD &&
+    t.liquidityUsd / t.marketCapUsd < SPAM_MIN_LIQ_MC_RATIO
   ) {
-    if (t.liquidityUsd / t.marketCapUsd < SPAM_MIN_LIQ_MC_RATIO) {
-      return { hidden: true, reason: "Very low liquidity vs market cap" };
-    }
+    return { hidden: true, reason: "Tiny liquidity behind its market cap" };
   }
 
   return { hidden: false };
