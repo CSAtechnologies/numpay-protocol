@@ -537,7 +537,23 @@ export async function simulateSolanaTx(
     const data = await resp.json();
     if (data.error) return { ok: false, err: data.error.message ?? "Simulation failed", logs: [] };
     const v = data.result?.value;
-    if (v?.err) return { ok: false, err: decodeSimulationFailure(v.err, v.logs ?? []), logs: v.logs ?? [] };
+    if (v?.err) {
+      // Transaction-neutral copy (this path serves arbitrary dApp transactions,
+      // not just swaps, so it must not say "swap"/"quote"/"amount").
+      const logs: string[] = v.logs ?? [];
+      const hay = logs.join("\n") + " " + JSON.stringify(v.err);
+      let err: string;
+      if (/insufficient|InsufficientFunds|0x1788|rent/i.test(hay)) {
+        err = "Insufficient SOL to cover this transaction and the network fee.";
+      } else if (/BlockhashNotFound/i.test(hay)) {
+        err = "The transaction's blockhash has expired. The site needs to rebuild it.";
+      } else {
+        const last = [...logs].reverse().find((l) => /error|failed/i.test(l));
+        err = "Simulation says this transaction would fail, so it was not sent." +
+          (last ? ` (${last.trim()})` : "");
+      }
+      return { ok: false, err, logs };
+    }
     return { ok: true, logs: v?.logs ?? [] };
   } catch {
     return { ok: false, err: "Could not reach the Solana network to simulate this transaction.", logs: [] };

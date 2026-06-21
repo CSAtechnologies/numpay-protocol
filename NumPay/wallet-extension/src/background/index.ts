@@ -44,10 +44,15 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 // Explicit activity pings from the popup. Only our own extension pages send
-// these (a content script in a web page has a `sender.tab`); ignore anything
-// else so a page cannot keep the wallet awake or reset the auto-lock timer.
+// these — identify them by the chrome-extension://<our-id>/ URL prefix (a
+// content script shares our id but its sender.url is the web page). Ignore
+// anything else so a page cannot keep the wallet awake or reset the auto-lock.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (sender.id !== chrome.runtime.id || sender.tab) return false;
+  const own =
+    sender.id === chrome.runtime.id &&
+    typeof sender.url === "string" &&
+    sender.url.startsWith(chrome.runtime.getURL(""));
+  if (!own) return false;
   if (msg?.type === "ACTIVITY") {
     resetLockTimer();
     sendResponse({ ok: true });

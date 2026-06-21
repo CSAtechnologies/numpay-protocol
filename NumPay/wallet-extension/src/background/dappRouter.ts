@@ -186,6 +186,17 @@ function eqAddr(a: string, b: string): boolean {
   return a.toLowerCase() === b.toLowerCase();
 }
 
+// True only for runtime messages sent by one of our own extension pages (popup,
+// approval window). A content script in a web page shares our extension id but
+// its sender.url is the web page, so the URL prefix check rejects it.
+function isOwnExtensionPage(sender: chrome.runtime.MessageSender): boolean {
+  return (
+    sender.id === chrome.runtime.id &&
+    typeof sender.url === "string" &&
+    sender.url.startsWith(chrome.runtime.getURL(""))
+  );
+}
+
 // ── Approval handshake (connect + sign) ─────────────────────────────────────────
 
 // One interactive approval window per origin at a time. Without this a hostile
@@ -760,10 +771,11 @@ export function initDappRouter(): void {
   chrome.runtime.onMessage.addListener((msg, sender) => {
     // Defense in depth: approval decisions and wallet-state changes are only
     // ever sent by our own extension pages (the popup and the approval window).
-    // An extension page has no `sender.tab`; a content script in a web page
-    // does. Reject anything that is not our extension's own page so a content
-    // script cannot spoof a decision or inject a Solana address.
-    if (sender.id !== chrome.runtime.id || sender.tab) return false;
+    // Identify those by sender URL: an extension page's URL is
+    // chrome-extension://<our-id>/..., while a content script's sender.url is the
+    // web page it runs in. (We can't use !sender.tab: the approval window is a
+    // popup-type window whose page lives in a tab, so it DOES have sender.tab.)
+    if (!isOwnExtensionPage(sender)) return false;
 
     if (msg?.type === MSG_DAPP_DECISION && typeof msg.requestId === "string") {
       void handleDecision(
