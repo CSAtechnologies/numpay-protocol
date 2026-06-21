@@ -69,6 +69,8 @@ export interface AutoToken {
   possibleSpam?: boolean;
   securityScore?: number;
   verifiedContract?: boolean;
+  liquidityUsd?: number;
+  marketCapUsd?: number;
 }
 
 // Indexers (Moralis/GoldRush) occasionally return a chain's native coin as a

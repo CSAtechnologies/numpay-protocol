@@ -6,6 +6,8 @@ import { derivePath } from "./slip10";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
 import { ethers } from "ethers";
+import { sha256 } from "@noble/hashes/sha256";
+import { ed25519 } from "@noble/curves/ed25519";
 import { ALCHEMY_KEY, MORALIS_KEY } from "../env";
 
 // Solana BIP44 derivation path
@@ -138,6 +140,154 @@ export async function sendSolanaTransfer(
   const sendData = await sendResp.json();
   if (sendData.error) throw new Error(sendData.error.message ?? JSON.stringify(sendData.error));
   return sendData.result as string;
+}
+
+// ── SPL / Token-2022 transfer ────────────────────────────────────────────────
+
+const TOKEN_PROGRAM       = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const TOKEN_2022_PROGRAM  = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+const ATA_PROGRAM         = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+const ATA_PROGRAM_BYTES   = bs58.decode(ATA_PROGRAM);
+const PDA_MARKER          = new TextEncoder().encode("ProgramDerivedAddress");
+
+function toHexStr(b: Uint8Array): string {
+  return Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+// A 32-byte value is "on curve" when it decodes to a valid Ed25519 point. A
+// Program Derived Address must be OFF the curve, so ATA derivation walks the
+// bump down from 255 until the hash is off-curve (the same canonical algorithm
+// web3.js's PublicKey.findProgramAddress uses).
+function isOnCurve(point: Uint8Array): boolean {
+  try { ed25519.ExtendedPoint.fromHex(toHexStr(point)); return true; } catch { return false; }
+}
+
+// Canonical associated-token-account address for (owner, mint, tokenProgram).
+function findAssociatedTokenAccount(
+  owner: Uint8Array, mint: Uint8Array, tokenProgram: Uint8Array,
+): Uint8Array {
+  for (let bump = 255; bump >= 0; bump--) {
+    const h = sha256(
+      concatBytes(owner, tokenProgram, mint, new Uint8Array([bump]), ATA_PROGRAM_BYTES, PDA_MARKER),
+    );
+    if (!isOnCurve(h)) return h;
+  }
+  throw new Error("Unable to derive the associated token account.");
+}
+
+// Minimal Solana JSON-RPC call; throws on RPC-level errors.
+async function solRpc(method: string, params: any[]): Promise<any> {
+  const r = await fetch(SOL_RPC, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error.message ?? JSON.stringify(d.error));
+  return d.result;
+}
+
+/**
+ * Send an SPL or Token-2022 token. Solana has no server-side transaction
+ * builder, so the transfer is assembled and signed client-side:
+ *   1. Read the mint's owner program to pick SPL vs Token-2022.
+ *   2. Find the sender's source token account for the mint.
+ *   3. Derive the recipient's associated token account (created idempotently in
+ *      the same transaction if it does not exist yet — the sender pays its rent).
+ *   4. transferChecked (carries decimals, so a wrong-decimals mint reverts).
+ * Preflight simulation (skipPreflight:false) catches a bad build before it lands.
+ *
+ * @param secretKey  tweetnacl 64-byte secret key (seed || pubkey) of the sender.
+ * @param mintAddress Mint of the token to send (base58).
+ * @param toAddress   Recipient WALLET address (base58) — not a token account.
+ * @param amount      Amount in the token's base units.
+ * @param decimals    Token decimals (asserted on-chain by transferChecked).
+ */
+export async function sendSolanaTokenTransfer(
+  secretKey: Uint8Array,
+  mintAddress: string,
+  toAddress: string,
+  amount: bigint,
+  decimals: number,
+): Promise<string> {
+  if (amount <= 0n) throw new Error("Enter an amount greater than zero");
+
+  const fromPubkey = secretKey.slice(32);
+  const mint    = bs58.decode(mintAddress);
+  const toOwner = bs58.decode(toAddress);
+  // Account keys are spliced into the message at fixed 32-byte offsets, so a
+  // non-32-byte decode would silently corrupt the serialized message.
+  if (mint.length !== 32)    throw new Error("Invalid token mint address.");
+  if (toOwner.length !== 32) throw new Error("Invalid Solana recipient address (must decode to 32 bytes).");
+
+  // 1. Token program comes from the mint account's owner.
+  const mintInfo = await solRpc("getAccountInfo", [mintAddress, { encoding: "base64" }]);
+  const ownerProgram = mintInfo?.value?.owner as string | undefined;
+  if (ownerProgram !== TOKEN_PROGRAM && ownerProgram !== TOKEN_2022_PROGRAM) {
+    throw new Error("Unsupported token: this mint is not owned by a known SPL token program.");
+  }
+  const tokenProgram = bs58.decode(ownerProgram);
+
+  // 2. Source = the sender's token account for this mint with enough balance.
+  const owned = await solRpc("getTokenAccountsByOwner", [
+    bs58.encode(fromPubkey), { mint: mintAddress }, { encoding: "jsonParsed" },
+  ]);
+  let source: Uint8Array | null = null;
+  for (const acc of (owned?.value ?? [])) {
+    const raw = BigInt(acc.account?.data?.parsed?.info?.tokenAmount?.amount ?? "0");
+    if (raw >= amount) { source = bs58.decode(acc.pubkey); break; }
+  }
+  if (!source) throw new Error("Your token account does not hold enough of this token to cover the transfer.");
+
+  // 3. Recipient ATA (canonical, deterministic).
+  const recipientAta = findAssociatedTokenAccount(toOwner, mint, tokenProgram);
+  const sysProgram = new Uint8Array(32); // System program = all-zero key
+
+  // Account keys, ordered: writable-signer, writable non-signers, readonly
+  // non-signers. Header below declares 1 signer and 5 readonly-unsigned.
+  const keys = [
+    fromPubkey,      // 0 writable signer (fee payer + ATA rent)
+    source,          // 1 writable
+    recipientAta,    // 2 writable
+    toOwner,         // 3 readonly
+    mint,            // 4 readonly
+    sysProgram,      // 5 readonly
+    tokenProgram,    // 6 readonly (transferChecked program id)
+    ATA_PROGRAM_BYTES, // 7 readonly (create program id)
+  ];
+  const header = new Uint8Array([1, 0, 5]);
+
+  // CreateIdempotent (ATA program, data [1]): funding, ata, owner, mint, system, tokenProgram
+  const createIx = concatBytes(
+    new Uint8Array([7]),
+    encodeCompactU16(6), new Uint8Array([0, 2, 3, 4, 5, 6]),
+    encodeCompactU16(1), new Uint8Array([1]),
+  );
+  // transferChecked (token program, data [12, amount u64, decimals u8]): source, mint, dest, owner
+  const transferData = concatBytes(new Uint8Array([12]), u64le(amount), new Uint8Array([decimals & 0xff]));
+  const transferIx = concatBytes(
+    new Uint8Array([6]),
+    encodeCompactU16(4), new Uint8Array([1, 4, 2, 0]),
+    encodeCompactU16(transferData.length), transferData,
+  );
+
+  const bh = await solRpc("getLatestBlockhash", [{ commitment: "finalized" }]);
+  const blockhashBytes = bs58.decode(bh.value.blockhash);
+
+  const message = concatBytes(
+    header,
+    encodeCompactU16(keys.length), ...keys,
+    blockhashBytes,
+    encodeCompactU16(2), createIx, transferIx,
+  );
+
+  const sig = nacl.sign.detached(message, secretKey);
+  const txB64 = bytesToB64(concatBytes(encodeCompactU16(1), sig, message));
+
+  const result = await solRpc("sendTransaction", [
+    txB64, { encoding: "base64", skipPreflight: false, preflightCommitment: "confirmed" },
+  ]);
+  return result as string;
 }
 
 // ── Jupiter swap (Solana DEX aggregator) ─────────────────────────────────────
@@ -674,6 +824,7 @@ function parseToken2022Metadata(
 export async function fetchSolanaTokens(address: string): Promise<Array<{
   symbol: string; name: string; address: string; decimals: number; balance: string; logo?: string; priceUsd?: number;
   possibleSpam?: boolean; verifiedContract?: boolean; securityScore?: number;
+  liquidityUsd?: number; marketCapUsd?: number;
 }>> {
   try {
     // ── Step 0: get all token accounts (SPL + Token2022) ─────────────────────
@@ -711,6 +862,10 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
 
     const metaMap: Record<string, { symbol?: string; name?: string; logo?: string }> = {};
     const priceMap: Record<string, number> = {};
+    // DexScreener market data for spam classification, keyed by mint. liqMap
+    // tracks the deepest pair's liquidity so the matching market cap is kept.
+    const liqMap: Record<string, number> = {};
+    const mcMap: Record<string, number> = {};
     // Moralis-sourced data: CDN logo + risk flags, keyed by mint.
     const moralisMap: Record<string, {
       name?: string; symbol?: string; logo?: string;
@@ -810,29 +965,37 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
       } catch {}
     }
 
-    // ── Step 3: DexScreener (graduated tokens) — fills name/logo + price ─────
-    const missing3 = holdings.filter((h) => !metaMap[h.mint]?.name && !moralisMap[h.mint]?.name).map((h) => h.mint);
-    if (missing3.length > 0) {
+    // ── Step 3: DexScreener — fills missing name/logo/price AND captures the
+    // liquidity + market cap of each token's deepest pair (used for spam
+    // classification). Queried for ALL held mints, batched 30 per call.
+    const allMints = holdings.map((h) => h.mint);
+    for (let i = 0; i < allMints.length; i += 30) {
+      const batch = allMints.slice(i, i + 30);
       try {
-        const r = await fetch(
-          `https://api.dexscreener.com/latest/dex/tokens/${missing3.slice(0, 10).join(",")}`,
-        );
-        if (r.ok) {
-          const d = await r.json();
-          for (const pair of (d.pairs ?? [])) {
-            const mint = pair.baseToken?.address;
-            if (!mint) continue;
-            if (!metaMap[mint]?.name) {
-              metaMap[mint] = {
-                symbol: pair.baseToken.symbol?.trim(),
-                name:   pair.baseToken.name?.trim(),
-                logo:   pair.info?.imageUrl,
-              };
-            }
-            if (priceMap[mint] == null && pair.priceUsd) {
-              const p = parseFloat(pair.priceUsd);
-              if (p > 0) priceMap[mint] = p;
-            }
+        const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${batch.join(",")}`);
+        if (!r.ok) continue;
+        const d = await r.json();
+        for (const pair of (d.pairs ?? [])) {
+          const mint = pair.baseToken?.address;
+          if (!mint) continue;
+          if (!metaMap[mint]?.name) {
+            metaMap[mint] = {
+              symbol: pair.baseToken.symbol?.trim(),
+              name:   pair.baseToken.name?.trim(),
+              logo:   pair.info?.imageUrl,
+            };
+          }
+          if (priceMap[mint] == null && pair.priceUsd) {
+            const p = parseFloat(pair.priceUsd);
+            if (p > 0) priceMap[mint] = p;
+          }
+          // Keep the deepest pair's liquidity and its market cap together.
+          const liq = typeof pair.liquidity?.usd === "number" ? pair.liquidity.usd : null;
+          if (liq != null && (liqMap[mint] == null || liq > liqMap[mint])) {
+            liqMap[mint] = liq;
+            const mc = typeof pair.marketCap === "number" ? pair.marketCap
+                     : typeof pair.fdv === "number" ? pair.fdv : null;
+            if (mc != null) mcMap[mint] = mc;
           }
         }
       } catch {}
@@ -854,6 +1017,8 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
         possibleSpam:     mor.possibleSpam,
         verifiedContract: mor.verifiedContract,
         securityScore:    mor.securityScore,
+        liquidityUsd: liqMap[mint],
+        marketCapUsd: mcMap[mint],
       };
     });
   } catch { return []; }

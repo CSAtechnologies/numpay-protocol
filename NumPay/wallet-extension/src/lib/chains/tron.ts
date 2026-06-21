@@ -164,6 +164,99 @@ export async function sendTronTransfer(
   );
 }
 
+// keccak256("transfer(address,uint256)")[:4]
+const TRC20_TRANSFER_SELECTOR = "a9059cbb";
+
+/**
+ * Send a TRC-20 token (a TriggerSmartContract call to transfer(address,uint256)).
+ * Same trust model as the native path: the node builds the unsigned call, we
+ * verify it encodes exactly our recipient + amount (in both the JSON and the
+ * raw_data_hex we actually sign) before signing, then broadcast.
+ *
+ * @param privateKey      0x secp256k1 key from the Tron derivation path.
+ * @param fromAddress     Sender, base58 (T...).
+ * @param contractAddress TRC-20 contract, base58 (T...).
+ * @param toAddress       Recipient, base58 (T...).
+ * @param amount          Amount in the token's base units.
+ */
+export async function sendTronTokenTransfer(
+  privateKey: string,
+  fromAddress: string,
+  contractAddress: string,
+  toAddress: string,
+  amount: bigint,
+): Promise<string> {
+  if (amount <= 0n) throw new Error("Enter an amount greater than zero");
+
+  // ABI-encode transfer(address,uint256): the 20-byte recipient (drop Tron's
+  // 0x41 version byte) left-padded to 32 bytes, then the amount as uint256.
+  const toHex20 = tronAddressToHex(toAddress).slice(2);
+  if (toHex20.length !== 40) throw new Error("Invalid Tron recipient address");
+  const param = toHex20.padStart(64, "0") + amount.toString(16).padStart(64, "0");
+  const expectedData = (TRC20_TRANSFER_SELECTOR + param).toLowerCase();
+
+  // 1. Node builds the unsigned smart-contract call.
+  const createResp = await fetch(`${TRON_RPC}/wallet/triggersmartcontract`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({
+      owner_address: fromAddress,
+      contract_address: contractAddress,
+      function_selector: "transfer(address,uint256)",
+      parameter: param,
+      fee_limit: 100_000_000, // 100 TRX energy cap; unused energy is not charged
+      call_value: 0,
+      visible: true,
+    }),
+  });
+  const res = await createResp.json();
+  const tx = res.transaction;
+  if (!tx?.raw_data_hex || !tx?.txID || res.result?.result !== true) {
+    throw new Error(
+      decodeTronMessage(res.result?.message) || res.result?.code || "Could not build the Tron token transfer",
+    );
+  }
+
+  // 2. Verify the node-built call encodes exactly our intent.
+  const contract = tx.raw_data?.contract?.[0];
+  const value = contract?.parameter?.value;
+  if (contract?.type !== "TriggerSmartContract") {
+    throw new Error("Unexpected transaction type returned by the node");
+  }
+  if (value?.owner_address !== fromAddress)        throw new Error("Sender mismatch in built transaction");
+  if (value?.contract_address !== contractAddress) throw new Error("Token contract mismatch in built transaction");
+  if (String(value?.data ?? "").toLowerCase() !== expectedData) {
+    throw new Error("Built transaction does not encode the intended recipient/amount");
+  }
+  // The bytes we sign are raw_data_hex; confirm our exact call data is in them
+  // (a hostile node could echo the right JSON while encoding different bytes).
+  if (!String(tx.raw_data_hex).toLowerCase().includes(expectedData)) {
+    throw new Error("Signed bytes do not encode the intended transfer");
+  }
+
+  // 3. txID = SHA256(raw_data_hex); recompute and cross-check.
+  const txID = ethers.sha256("0x" + tx.raw_data_hex).slice(2);
+  if (txID.toLowerCase() !== String(tx.txID).toLowerCase()) {
+    throw new Error("Transaction id mismatch — refusing to sign");
+  }
+
+  // Sign: r(32) || s(32) || recoveryId(1, raw 0/1).
+  const sig = new ethers.SigningKey(privateKey).sign("0x" + txID);
+  const signature = sig.r.slice(2) + sig.s.slice(2) + sig.yParity.toString(16).padStart(2, "0");
+
+  // 4. Broadcast.
+  const broadcastResp = await fetch(`${TRON_RPC}/wallet/broadcasttransaction`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ ...tx, signature: [signature] }),
+  });
+  const result = await broadcastResp.json();
+  if (result.result === true || result.code === "SUCCESS") return txID;
+  throw new Error(
+    decodeTronMessage(result.message) || result.code || result.Error || "Broadcast failed",
+  );
+}
+
 export async function fetchTronBalance(address: string): Promise<number> {
   // Primary: Trongrid REST API
   try {

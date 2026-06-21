@@ -8,8 +8,12 @@ import { isBPANInput, isValidBPAN, resolveBPANChecked, BPANConsensusError, forma
 import { BPAN_CHAINS, DEFAULT_NETWORK, NETWORKS, type BPANChainId, type Network } from "@/lib/networks";
 import { getSigner, isLocked } from "@/lib/wallet";
 import { sendToken, type Token } from "@/lib/tokens";
-import { sendSolanaTransfer, sendTronTransfer, sendSuiTransfer } from "@/lib/chains";
+import {
+  sendSolanaTransfer, sendTronTransfer, sendSuiTransfer,
+  sendSolanaTokenTransfer, sendTronTokenTransfer, sendSuiTokenTransfer,
+} from "@/lib/chains";
 import { isValidNonEvmAddress } from "@/lib/addressValidation";
+import { classifyToken } from "@/lib/tokenSpam";
 import Layout from "../components/Layout";
 import {
   CheckIcon, ExternalLinkIcon, HashIcon, ChevronDownIcon,
@@ -43,7 +47,7 @@ function toBaseUnits(amount: string, decimals: number): bigint {
 
 export default function Send() {
   const {
-    wallet, network, balance, tokens,
+    wallet, network, balance, tokens, tokensByChain,
     activeChainId, nonEvmWallet, nonEvmChains, nonEvmLoading,
     switchChain, customChains,
   } = useWallet();
@@ -77,6 +81,7 @@ export default function Send() {
   const [error, setError] = useState("");
   const [selectedToken, setSelectedToken] = useState<Token | null>(null);
   const [showTokenPicker, setShowTokenPicker] = useState(false);
+  const [showHiddenTokens, setShowHiddenTokens] = useState(false);
 
   const chainInfo  = BPAN_CHAINS.find((c) => c.id === selectedChainId)!;
   const isEvmChain = chainInfo?.isEVM ?? true;
@@ -106,17 +111,25 @@ export default function Send() {
   // Non-EVM metadata
   const nonEvmMeta      = NON_EVM_META[selectedChainId];
   const activeNonEvmChain = !isEvmChain ? nonEvmChains.find((c) => c.id === selectedChainId) : null;
+  const nativeSymbol = isEvmChain ? sendNetwork.symbol : (nonEvmMeta?.symbol ?? selectedChainId.toUpperCase());
 
-  // Unified send values — work for both EVM and non-EVM
-  const sendSymbol = isEvmChain
-    ? (selectedToken ? selectedToken.symbol : sendNetwork.symbol)
-    : (nonEvmMeta?.symbol ?? selectedChainId.toUpperCase());
-  const sendBalance = isEvmChain
-    ? (selectedToken ? parseFloat(selectedToken.balance || "0") : parseFloat(balance))
-    : (activeNonEvmChain?.balance ?? 0);
-  const sendDecimals = isEvmChain
-    ? (selectedToken ? selectedToken.decimals : sendNetwork.decimals)
-    : (nonEvmMeta?.decimals ?? 9);
+  // Held tokens for the selected non-EVM chain, split into visible vs. hidden
+  // (spam / worthless / thin-liquidity) so the picker can collapse the junk.
+  const nonEvmTokens = !isEvmChain ? (tokensByChain[selectedChainId] ?? []) : [];
+  const visibleNonEvmTokens = nonEvmTokens.filter((t) => !classifyToken(t).hidden);
+  const hiddenNonEvmTokens  = nonEvmTokens.filter((t) =>  classifyToken(t).hidden);
+
+  // Unified send values — respect a selected token on either EVM or non-EVM,
+  // otherwise fall back to the chain's native coin.
+  const sendSymbol = selectedToken
+    ? selectedToken.symbol
+    : nativeSymbol;
+  const sendBalance = selectedToken
+    ? parseFloat(selectedToken.balance || "0")
+    : isEvmChain ? parseFloat(balance) : (activeNonEvmChain?.balance ?? 0);
+  const sendDecimals = selectedToken
+    ? selectedToken.decimals
+    : isEvmChain ? sendNetwork.decimals : (nonEvmMeta?.decimals ?? 9);
 
   const canSendNative = !isEvmChain && !!CAN_SEND_NATIVE[selectedChainId];
 
@@ -125,6 +138,7 @@ export default function Send() {
     switchChain(id);
     setTo(""); setResolvedAddr(""); setResolvedBPAN(""); setBpanTrust(null);
     setError(""); setAmount(""); setSelectedToken(null); setTxHash("");
+    setShowTokenPicker(false); setShowHiddenTokens(false);
     chainSynced.current = true;
   }
 
@@ -253,21 +267,45 @@ export default function Send() {
     setSending(true); setError(""); setTxHash("");
     try {
       if (selectedChainId === "solana") {
-        const lamports = toBaseUnits(amount, 9);
-        const sig = await sendSolanaTransfer(nonEvmWallet.solana.secretKey, destinationAddress, lamports);
-        setTxHash(sig);
+        if (selectedToken) {
+          const amt = toBaseUnits(amount, selectedToken.decimals);
+          const sig = await sendSolanaTokenTransfer(
+            nonEvmWallet.solana.secretKey, selectedToken.address, destinationAddress, amt, selectedToken.decimals,
+          );
+          setTxHash(sig);
+        } else {
+          const lamports = toBaseUnits(amount, 9);
+          const sig = await sendSolanaTransfer(nonEvmWallet.solana.secretKey, destinationAddress, lamports);
+          setTxHash(sig);
+        }
       } else if (selectedChainId === "tron") {
-        const sun = toBaseUnits(amount, 6);
-        const hash = await sendTronTransfer(
-          nonEvmWallet.tron.privateKey, nonEvmWallet.tron.address, destinationAddress, sun,
-        );
-        setTxHash(hash);
+        if (selectedToken) {
+          const amt = toBaseUnits(amount, selectedToken.decimals);
+          const hash = await sendTronTokenTransfer(
+            nonEvmWallet.tron.privateKey, nonEvmWallet.tron.address, selectedToken.address, destinationAddress, amt,
+          );
+          setTxHash(hash);
+        } else {
+          const sun = toBaseUnits(amount, 6);
+          const hash = await sendTronTransfer(
+            nonEvmWallet.tron.privateKey, nonEvmWallet.tron.address, destinationAddress, sun,
+          );
+          setTxHash(hash);
+        }
       } else if (selectedChainId === "sui") {
-        const mist = toBaseUnits(amount, 9);
-        const digest = await sendSuiTransfer(
-          nonEvmWallet.sui.secretKey, nonEvmWallet.sui.address, destinationAddress, mist,
-        );
-        setTxHash(digest);
+        if (selectedToken) {
+          const amt = toBaseUnits(amount, selectedToken.decimals);
+          const digest = await sendSuiTokenTransfer(
+            nonEvmWallet.sui.secretKey, nonEvmWallet.sui.address, selectedToken.address, destinationAddress, amt,
+          );
+          setTxHash(digest);
+        } else {
+          const mist = toBaseUnits(amount, 9);
+          const digest = await sendSuiTransfer(
+            nonEvmWallet.sui.secretKey, nonEvmWallet.sui.address, destinationAddress, mist,
+          );
+          setTxHash(digest);
+        }
       } else {
         throw new Error(`Native ${selectedChainId} sending is not available yet`);
       }
@@ -445,9 +483,90 @@ export default function Send() {
             </>
           )}
 
-          {/* Non-EVM: amount + send */}
+          {/* Non-EVM: token picker (chains with token-send support) + amount + send */}
           {!isEvmChain && (
             <>
+              {canSendNative && (
+                <>
+                  <label className="text-xs text-text-secondary mb-1.5 block font-medium">Token</label>
+                  <button
+                    onClick={() => setShowTokenPicker(!showTokenPicker)}
+                    className="w-full input-field mb-1.5 text-left flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-2">
+                      <TokenIcon symbol={sendSymbol} logo={selectedToken?.logo} size={20} />
+                      <span className="text-[13px] text-text-primary font-medium">{sendSymbol}</span>
+                    </div>
+                    <ChevronDownIcon
+                      size={14}
+                      className={`text-muted transition-transform duration-200 ${showTokenPicker ? "rotate-180" : ""}`}
+                    />
+                  </button>
+
+                  {showTokenPicker && (
+                    <div className="premium-card mb-3 overflow-hidden animate-slide-up">
+                      {/* Native coin */}
+                      <button
+                        onClick={() => { setSelectedToken(null); setShowTokenPicker(false); setAmount(""); }}
+                        className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] hover:bg-surface-2 transition-colors ${!selectedToken ? "text-brand-400" : "text-text-primary"}`}
+                      >
+                        <TokenIcon symbol={nativeSymbol} size={22} />
+                        <div className="flex-1 text-left">
+                          <span className="font-medium">{nativeSymbol}</span>
+                          <span className="text-[11px] text-muted ml-2">{(activeNonEvmChain?.balance ?? 0).toFixed(4)}</span>
+                        </div>
+                        {!selectedToken && <CheckIcon size={14} className="text-brand-400" />}
+                      </button>
+
+                      {/* Held tokens */}
+                      {visibleNonEvmTokens.map((t) => (
+                        <button
+                          key={t.address}
+                          onClick={() => { setSelectedToken(t); setShowTokenPicker(false); setAmount(""); }}
+                          className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] hover:bg-surface-2 transition-colors ${selectedToken?.address === t.address ? "text-brand-400" : "text-text-primary"}`}
+                        >
+                          <TokenIcon symbol={t.symbol} logo={t.logo} size={22} />
+                          <div className="flex-1 text-left">
+                            <span className="font-medium">{t.symbol}</span>
+                            <span className="text-[11px] text-muted ml-2">{parseFloat(t.balance || "0").toFixed(4)}</span>
+                          </div>
+                          {selectedToken?.address === t.address && <CheckIcon size={14} className="text-brand-400" />}
+                        </button>
+                      ))}
+
+                      {/* Hidden (spam / worthless / thin-liquidity) — collapsed */}
+                      {hiddenNonEvmTokens.length > 0 && (
+                        <>
+                          <button
+                            onClick={() => setShowHiddenTokens(!showHiddenTokens)}
+                            className="w-full flex items-center justify-between px-3.5 py-2 text-[11px] text-muted hover:bg-surface-2 transition-colors border-t border-border"
+                          >
+                            <span>
+                              {showHiddenTokens ? "Hide" : "Show"} {hiddenNonEvmTokens.length} hidden token{hiddenNonEvmTokens.length > 1 ? "s" : ""}
+                            </span>
+                            <ChevronDownIcon size={12} className={`transition-transform ${showHiddenTokens ? "rotate-180" : ""}`} />
+                          </button>
+                          {showHiddenTokens && hiddenNonEvmTokens.map((t) => (
+                            <button
+                              key={t.address}
+                              onClick={() => { setSelectedToken(t); setShowTokenPicker(false); setAmount(""); }}
+                              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] hover:bg-surface-2 transition-colors opacity-60 ${selectedToken?.address === t.address ? "text-brand-400" : "text-text-primary"}`}
+                            >
+                              <TokenIcon symbol={t.symbol} logo={t.logo} size={22} />
+                              <div className="flex-1 text-left">
+                                <span className="font-medium">{t.symbol}</span>
+                                <span className="text-[11px] text-muted ml-2">{parseFloat(t.balance || "0").toFixed(4)}</span>
+                              </div>
+                              {selectedToken?.address === t.address && <CheckIcon size={14} className="text-brand-400" />}
+                            </button>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+
               <label className="text-xs text-text-secondary mb-1.5 block font-medium">Amount</label>
               <div className="relative mb-1">
                 <input

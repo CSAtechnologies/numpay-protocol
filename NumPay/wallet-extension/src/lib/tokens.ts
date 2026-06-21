@@ -13,6 +13,9 @@ export interface Token {
   possibleSpam?: boolean;
   securityScore?: number;     // 0-100; lower = riskier (Moralis security_score)
   verifiedContract?: boolean;
+  // Optional market data (e.g. DexScreener), used for spam classification.
+  liquidityUsd?: number;
+  marketCapUsd?: number;
 }
 
 const ERC20_ABI = [

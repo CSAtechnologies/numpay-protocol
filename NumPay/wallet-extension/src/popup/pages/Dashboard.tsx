@@ -8,6 +8,7 @@ import {
 import { NETWORKS, BPAN_CHAINS } from "@/lib/networks";
 import { findOwnedBPANs } from "@/lib/bpan";
 import { type Rates } from "@/lib/currency";
+import { classifyToken } from "@/lib/tokenSpam";
 
 const SYMBOL_TO_COINGECKO: Record<string, string> = {
   ETH: "ethereum", BTC: "bitcoin", SOL: "solana", SUI: "sui",
@@ -125,6 +126,8 @@ interface DisplayToken {
   possibleSpam?: boolean;
   securityScore?: number;
   verifiedContract?: boolean;
+  // Spam / thin-liquidity verdict from the shared classifier.
+  spamHidden?: boolean;
 }
 
 export default function Dashboard({ onLock }: Props) {
@@ -327,6 +330,11 @@ export default function Dashboard({ onLock }: Props) {
           possibleSpam: t.possibleSpam,
           securityScore: t.securityScore,
           verifiedContract: t.verifiedContract,
+          spamHidden: classifyToken({
+            balance: t.balance, priceUsd: t.priceUsd,
+            liquidityUsd: t.liquidityUsd, marketCapUsd: t.marketCapUsd,
+            possibleSpam: t.possibleSpam,
+          }).hidden,
         });
       }
     }
@@ -339,6 +347,7 @@ export default function Dashboard({ onLock }: Props) {
     for (const t of filtered) {
       const bal = parseFloat(t.balance);
       if (bal <= 0) { dust.push(t); continue; }
+      if (t.spamHidden) { dust.push(t); continue; }
       if (t.usdValue > 0 && t.usdValue < 0.10) { dust.push(t); continue; }
       visible.push(t);
     }
