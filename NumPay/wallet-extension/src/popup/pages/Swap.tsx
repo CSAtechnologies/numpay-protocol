@@ -15,6 +15,7 @@ import {
   assertIsContract, assertNativeValue, simulateOrThrow,
 } from "@/lib/swapGuards";
 import Layout from "../components/Layout";
+import TxResultOverlay, { type TxFxStatus } from "../components/TxResultOverlay";
 import {
   SwapIcon, ChevronDownIcon, SettingsIcon, TokenIcon, ChainIcon,
   SearchIcon, ArrowLeftIcon, AlertIcon, ExternalLinkIcon, RefreshIcon, CheckIcon,
@@ -511,6 +512,11 @@ export default function Swap() {
   const [bridging,      setBridging]      = useState(false);
   const [bridgeTxHash,  setBridgeTxHash]  = useState("");
 
+  // Drives the animated result overlay. Set only inside executeSwap/executeBridge
+  // (not on route-fetch errors), so the celebration/error overlay is tied to an
+  // actual signed transaction.
+  const [txFx,          setTxFx]          = useState<TxFxStatus | null>(null);
+
   const quoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const location = useLocation();
   const prefillApplied = useRef(false);
@@ -787,7 +793,7 @@ export default function Swap() {
     // ── Solana swap via Jupiter ─────────────────────────────────────────────
     if (route.provider === "jupiter") {
       if (!nonEvmWallet?.solana) { setSwapError("Solana wallet not ready"); return; }
-      setSwapping(true); setSwapError(""); setTxHash("");
+      setSwapping(true); setSwapError(""); setTxHash(""); setTxFx("pending");
       try {
         // Compute what THIS swap actually needs in SOL (Jupiter 6024 fails
         // otherwise): a bounded fee (base + priority capped at 0.001 SOL),
@@ -839,8 +845,10 @@ export default function Swap() {
           quoteToUse,
         );
         setTxHash(txid);
+        setTxFx("success");
       } catch (e: any) {
         setSwapError(e.message || "Swap failed");
+        setTxFx("error");
       } finally {
         setSwapping(false);
       }
@@ -849,7 +857,7 @@ export default function Swap() {
 
     const net = NETWORKS[fromToken.chainId];
     if (!net) return;
-    setSwapping(true); setSwapError(""); setTxHash("");
+    setSwapping(true); setSwapError(""); setTxHash(""); setTxFx("pending");
     try {
       const signer    = getSigner(wallet.privateKey, net.rpcUrl);
       const srcAmount = ethers.parseUnits(fromAmount, fromToken.decimals).toString();
@@ -927,7 +935,8 @@ export default function Swap() {
         const tx = await signer.sendTransaction({ to: routerAddress, data, value });
         setTxHash(tx.hash);
       }
-    } catch (e: any) { setSwapError(e.message || "Swap failed"); }
+      setTxFx("success");
+    } catch (e: any) { setSwapError(e.message || "Swap failed"); setTxFx("error"); }
     finally { setSwapping(false); }
   }
 
@@ -938,7 +947,7 @@ export default function Swap() {
     if (await isLocked()) { setBridgeError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
     const fromNet = NETWORKS[fromToken.chainId];
     if (!fromNet) { setBridgeError("Bridge execution only supported from EVM chains"); return; }
-    setBridging(true); setBridgeError(""); setBridgeTxHash("");
+    setBridging(true); setBridgeError(""); setBridgeTxHash(""); setTxFx("pending");
     try {
       // /advanced/routes gives display data only; /quote gives the actual transactionRequest
       const fromLifiId  = LIFI_CHAIN_ID[fromToken.chainId];
@@ -988,7 +997,8 @@ export default function Swap() {
         gasLimit: txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined,
       });
       setBridgeTxHash(tx.hash);
-    } catch (e: any) { setBridgeError(e.message || "Bridge failed"); }
+      setTxFx("success");
+    } catch (e: any) { setBridgeError(e.message || "Bridge failed"); setTxFx("error"); }
     finally { setBridging(false); }
   }
 
@@ -1529,6 +1539,22 @@ export default function Swap() {
 
         </div>
       </div>
+
+      {txFx && (() => {
+        const parsed = txFx === "error" && activeExecErr ? parseSwapError(activeExecErr) : null;
+        return (
+          <TxResultOverlay
+            status={txFx}
+            kind={isBridge ? "bridge" : "swap"}
+            amountLabel={`${fromAmount} ${fromToken.symbol} → ${toToken.symbol}`}
+            explorerUrl={explorerTxUrl}
+            txHash={activeTxHash}
+            errorTitle={parsed?.title}
+            errorMessage={parsed ? (parsed.hint ? `${parsed.body} ${parsed.hint}` : parsed.body) : undefined}
+            onClose={() => setTxFx(null)}
+          />
+        );
+      })()}
     </Layout>
   );
 }

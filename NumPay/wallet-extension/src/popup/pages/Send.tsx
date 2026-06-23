@@ -15,6 +15,7 @@ import {
 import { isValidNonEvmAddress } from "@/lib/addressValidation";
 import { classifyToken } from "@/lib/tokenSpam";
 import Layout from "../components/Layout";
+import TxResultOverlay, { type TxFxStatus } from "../components/TxResultOverlay";
 import {
   CheckIcon, ExternalLinkIcon, HashIcon, ChevronDownIcon,
   TokenIcon, AlertIcon,
@@ -79,6 +80,9 @@ export default function Send() {
   const [sending, setSending] = useState(false);
   const [txHash, setTxHash] = useState("");
   const [error, setError] = useState("");
+  // Drives the animated result overlay. Only the actual send paths set it, so
+  // field-validation errors never trigger the celebration overlay.
+  const [txFx, setTxFx] = useState<TxFxStatus | null>(null);
   const [selectedToken, setSelectedToken] = useState<Token | null>(null);
   const [showTokenPicker, setShowTokenPicker] = useState(false);
   const [showHiddenTokens, setShowHiddenTokens] = useState(false);
@@ -228,7 +232,7 @@ export default function Send() {
     if (!amount || parseFloat(amount) <= 0) { setError("Enter an amount greater than zero"); return; }
     if (parseFloat(amount) > sendBalance) { setError("Insufficient balance"); return; }
     if (await isLocked()) { setError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
-    setSending(true); setError(""); setTxHash("");
+    setSending(true); setError(""); setTxHash(""); setTxFx("pending");
     try {
       const signer = getSigner(wallet.privateKey, sendNetwork.rpcUrl);
 
@@ -251,8 +255,10 @@ export default function Send() {
         });
         setTxHash(tx.hash);
       }
+      setTxFx("success");
     } catch (e: any) {
       setError(e.reason || e.message || "Transaction failed");
+      setTxFx("error");
     } finally {
       setSending(false);
     }
@@ -264,7 +270,7 @@ export default function Send() {
     if (!amount || parseFloat(amount) <= 0) { setError("Enter an amount greater than zero"); return; }
     if (parseFloat(amount) > sendBalance) { setError("Insufficient balance"); return; }
     if (await isLocked()) { setError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
-    setSending(true); setError(""); setTxHash("");
+    setSending(true); setError(""); setTxHash(""); setTxFx("pending");
     try {
       if (selectedChainId === "solana") {
         if (selectedToken) {
@@ -309,8 +315,10 @@ export default function Send() {
       } else {
         throw new Error(`Native ${selectedChainId} sending is not available yet`);
       }
+      setTxFx("success");
     } catch (e: any) {
       setError(e.message || "Transaction failed");
+      setTxFx("error");
     } finally {
       setSending(false);
     }
@@ -687,6 +695,18 @@ export default function Send() {
           )}
         </div>
       </div>
+
+      {txFx && (
+        <TxResultOverlay
+          status={txFx}
+          kind="send"
+          amountLabel={`${amount} ${sendSymbol}`}
+          explorerUrl={explorerUrl}
+          txHash={txHash}
+          errorMessage={error}
+          onClose={() => setTxFx(null)}
+        />
+      )}
     </Layout>
   );
 }

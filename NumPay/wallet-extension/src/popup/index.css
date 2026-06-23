@@ -701,6 +701,38 @@ input[type="number"]::-webkit-outer-spin-button {
 .animate-slide-up { animation: slideUp 0.3s ease-out; }
 .animate-float    { animation: float 4s ease-in-out infinite; }
 
+/* ─── Transaction result overlay (send / swap / bridge) ──────── */
+/* Drawn-in stroke for the ring and the check/cross mark. Paths use
+   pathLength="1" so a single keyframe drives any geometry. */
+@keyframes tx-draw   { to { stroke-dashoffset: 0; } }
+@keyframes tx-pop {
+  0%   { transform: scale(0.9);  opacity: 0; }
+  55%  { transform: scale(1.015); }
+  100% { transform: scale(1);    opacity: 1; }
+}
+@keyframes tx-orb-rise {
+  0%   { transform: translateY(10px) scale(0.5); opacity: 0; }
+  25%  { opacity: 0.85; }
+  100% { transform: translateY(-54px) scale(1);  opacity: 0; }
+}
+@keyframes tx-glow {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 0.65; }
+}
+
+.tx-pop       { animation: tx-pop 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+.tx-ring      { stroke-dasharray: 1; stroke-dashoffset: 1; animation: tx-draw 0.55s ease-out forwards; }
+.tx-mark      { stroke-dasharray: 1; stroke-dashoffset: 1; animation: tx-draw 0.4s ease-out 0.42s forwards; }
+.tx-mark-late { animation-delay: 0.58s; }
+.tx-orb       { animation: tx-orb-rise 1.5s ease-out forwards; }
+.tx-glow      { animation: tx-glow 1.9s ease-in-out infinite; }
+.tx-pulse     { animation: ring-pulse 1.3s ease-out 0.5s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tx-pop, .tx-ring, .tx-mark, .tx-orb, .tx-glow, .tx-pulse { animation: none; }
+  .tx-ring, .tx-mark { stroke-dashoffset: 0; }
+}
+
 /* ─── Hero section (dashboard gradient header) ───────────────── */
 .hero-section {
   background:
