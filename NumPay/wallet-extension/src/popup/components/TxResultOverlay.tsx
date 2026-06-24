@@ -60,7 +60,7 @@ export default function TxResultOverlay({
       aria-modal="true"
     >
       <div
-        className="tx-pop premium-card w-full max-w-[300px] px-6 py-7 flex flex-col items-center text-center"
+        className="tx-pop tx-card w-full max-w-[290px] px-7 py-8 flex flex-col items-center text-center"
         onClick={(e) => e.stopPropagation()}
       >
         {/* ── Animated mark ─────────────────────────────────────────── */}
@@ -120,7 +120,7 @@ export default function TxResultOverlay({
         </div>
 
         {/* ── Copy ──────────────────────────────────────────────────── */}
-        <h2 className="mt-4 text-[18px] font-bold text-text-primary">{title}</h2>
+        <h2 className="tx-title mt-4 text-[19px] font-bold">{title}</h2>
         {amountLabel && !isError && (
           <p className="mt-1 text-[13px] text-text-secondary break-all">{amountLabel}</p>
         )}

@@ -702,6 +702,36 @@ input[type="number"]::-webkit-outer-spin-button {
 .animate-float    { animation: float 4s ease-in-out infinite; }
 
 /* ─── Transaction result overlay (send / swap / bridge) ──────── */
+/* Rounded, softly-lit card so the dialog reads as a floating pill, not a
+   flat rectangle. The brand wash at the top echoes the dashboard. */
+.tx-card {
+  position: relative;
+  background:
+    radial-gradient(130% 90% at 50% -10%, rgba(124, 109, 240, 0.16), transparent 62%),
+    var(--card);
+  border: 1px solid var(--border-light);
+  border-radius: 28px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.07) inset,
+    0 24px 64px rgba(0, 0, 0, 0.5),
+    0 0 48px var(--brand-glow);
+}
+[data-theme="light"] .tx-card {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 24px 64px rgba(46, 38, 90, 0.16),
+    0 0 40px rgba(124, 109, 240, 0.16);
+}
+/* Title: keep it fully opaque regardless of any inherited gradient text
+   fill, and add a soft shadow so it reads cleanly over the lit card. */
+.tx-title {
+  color: var(--text-primary);
+  -webkit-text-fill-color: var(--text-primary);
+  letter-spacing: -0.01em;
+  text-shadow: 0 1px 14px rgba(0, 0, 0, 0.3);
+}
+[data-theme="light"] .tx-title { text-shadow: none; }
+
 /* Drawn-in stroke for the ring and the check/cross mark. Paths use
    pathLength="1" so a single keyframe drives any geometry. */
 @keyframes tx-draw   { to { stroke-dashoffset: 0; } }
@@ -731,6 +761,42 @@ input[type="number"]::-webkit-outer-spin-button {
 @media (prefers-reduced-motion: reduce) {
   .tx-pop, .tx-ring, .tx-mark, .tx-orb, .tx-glow, .tx-pulse { animation: none; }
   .tx-ring, .tx-mark { stroke-dashoffset: 0; }
+}
+
+/* ─── NumPay logo assemble animation (open splash) ───────────── */
+/* Each stroke ("stick") flies in from an offset with a slight overshoot while
+   its white edge draws itself in, assembling the N. */
+@keyframes npSq   { from { transform: scale(0.86); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes npFlyL { from { transform: translate(-34px, -6px) rotate(-8deg); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes npFlyR { from { transform: translate(34px, -6px) rotate(8deg);  opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes npFlyD { from { transform: translate(0, -30px) scale(0.7);       opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes npFlyU { from { transform: translate(0, 26px) scaleX(0.4);       opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes npDraw { to { stroke-dashoffset: 0; } }
+
+.np-logo .np-sq    { transform-box: fill-box; transform-origin: center; }
+.np-logo .np-stick { transform-box: fill-box; transform-origin: center; }
+
+/* Splash logo floats as a rounded app icon, not a flat rectangle. */
+.np-logo.np-animate { filter: drop-shadow(0 14px 34px rgba(124, 109, 240, 0.5)); }
+
+.np-logo.np-animate .np-edge { stroke-dasharray: 200; stroke-dashoffset: 200; }
+.np-logo.np-animate .np-sq { animation: npSq 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+.np-logo.np-animate .np-gL { animation: npFlyL 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) 0.10s both; }
+.np-logo.np-animate .np-gR { animation: npFlyR 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) 0.18s both; }
+.np-logo.np-animate .np-gD { animation: npFlyD 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) 0.28s both; }
+.np-logo.np-animate .np-gU { animation: npFlyU 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) 0.36s both; }
+.np-logo.np-animate .np-gL .np-edge { animation: npDraw 0.55s ease-out 0.34s forwards; }
+.np-logo.np-animate .np-gR .np-edge { animation: npDraw 0.55s ease-out 0.42s forwards; }
+.np-logo.np-animate .np-gD .np-edge { animation: npDraw 0.55s ease-out 0.52s forwards; }
+.np-logo.np-animate .np-gU .np-edge { animation: npDraw 0.55s ease-out 0.60s forwards; }
+
+@keyframes fadeOut { to { opacity: 0; } }
+.animate-fade-out { animation: fadeOut 0.32s ease forwards; }
+
+@media (prefers-reduced-motion: reduce) {
+  .np-logo.np-animate .np-sq, .np-logo.np-animate .np-stick,
+  .np-logo.np-animate .np-edge { animation: none; }
+  .np-logo.np-animate .np-edge { stroke-dashoffset: 0; }
 }
 
 /* ─── Hero section (dashboard gradient header) ───────────────── */

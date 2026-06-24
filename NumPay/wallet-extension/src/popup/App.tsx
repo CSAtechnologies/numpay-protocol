@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { hasWallet, isLocked, touchActivity, lockWallet } from "@/lib/wallet";
 import { CurrencyProvider } from "./contexts/CurrencyContext";
+import NumPayLogo from "./components/NumPayLogo";
 
 import Welcome from "./pages/Welcome";
 import CreateWallet from "./pages/CreateWallet";
@@ -22,9 +23,19 @@ type AppState = "loading" | "onboarding" | "locked" | "unlocked";
 
 export default function App() {
   const [state, setState] = useState<AppState>("loading");
+  // One-time open splash: the logo assembles, then fades to reveal the wallet.
+  // The popup remounts every time it is opened, so this plays on each open.
+  const [splash, setSplash] = useState(true);
+  const [splashOut, setSplashOut] = useState(false);
 
   useEffect(() => {
     checkState();
+  }, []);
+
+  useEffect(() => {
+    const t1 = setTimeout(() => setSplashOut(true), 1150);
+    const t2 = setTimeout(() => setSplash(false), 1480);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
   async function checkState() {
@@ -72,44 +83,59 @@ export default function App() {
     };
   }, [state]);
 
-  if (state === "loading") {
-    return (
-      <div className="flex items-center justify-center h-full bg-surface-0">
-        <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
+  const content = (() => {
+    if (state === "loading") {
+      return (
+        <div className="flex items-center justify-center h-full bg-surface-0">
+          <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      );
+    }
 
-  if (state === "onboarding") {
-    return (
-      <Routes>
-        <Route path="/" element={<Welcome />} />
-        <Route path="/create" element={<CreateWallet onComplete={() => setState("unlocked")} />} />
-        <Route path="/import" element={<ImportWallet onComplete={() => setState("unlocked")} />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    );
-  }
+    if (state === "onboarding") {
+      return (
+        <Routes>
+          <Route path="/" element={<Welcome />} />
+          <Route path="/create" element={<CreateWallet onComplete={() => setState("unlocked")} />} />
+          <Route path="/import" element={<ImportWallet onComplete={() => setState("unlocked")} />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      );
+    }
 
-  if (state === "locked") {
-    return <Unlock onUnlock={() => setState("unlocked")} />;
-  }
+    if (state === "locked") {
+      return <Unlock onUnlock={() => setState("unlocked")} />;
+    }
+
+    return (
+      <CurrencyProvider>
+        <Routes>
+          <Route path="/" element={<Dashboard onLock={() => setState("locked")} />} />
+          <Route path="/send" element={<Send />} />
+          <Route path="/receive" element={<Receive />} />
+          <Route path="/history" element={<History />} />
+          <Route path="/bpan" element={<BPANPage />} />
+          <Route path="/swap" element={<Swap />} />
+          <Route path="/defi" element={<DeFi />} />
+          <Route path="/settings" element={<Settings onLock={() => setState("locked")} onReset={() => setState("onboarding")} />} />
+          <Route path="/manage-assets" element={<ManageAssets />} />
+          <Route path="/token" element={<TokenDetail />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </CurrencyProvider>
+    );
+  })();
 
   return (
-    <CurrencyProvider>
-      <Routes>
-        <Route path="/" element={<Dashboard onLock={() => setState("locked")} />} />
-        <Route path="/send" element={<Send />} />
-        <Route path="/receive" element={<Receive />} />
-        <Route path="/history" element={<History />} />
-        <Route path="/bpan" element={<BPANPage />} />
-        <Route path="/swap" element={<Swap />} />
-        <Route path="/defi" element={<DeFi />} />
-        <Route path="/settings" element={<Settings onLock={() => setState("locked")} onReset={() => setState("onboarding")} />} />
-        <Route path="/manage-assets" element={<ManageAssets />} />
-        <Route path="/token" element={<TokenDetail />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </CurrencyProvider>
+    <>
+      {content}
+      {splash && (
+        <div
+          className={`fixed inset-0 z-[100] flex items-center justify-center bg-surface-0 ${splashOut ? "animate-fade-out" : "animate-fade-in"}`}
+        >
+          <NumPayLogo size={132} animate variant="filled" />
+        </div>
+      )}
+    </>
   );
 }
