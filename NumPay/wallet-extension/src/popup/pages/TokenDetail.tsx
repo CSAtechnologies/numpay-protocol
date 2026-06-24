@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
 import { useCurrency } from "../hooks/useCurrency";
@@ -8,7 +8,7 @@ import {
   TrendingUpIcon, TokenIcon, ChainIcon, RefreshIcon, SwapIcon,
 } from "../components/Icons";
 import { NETWORKS } from "@/lib/networks";
-import { ALCHEMY_KEY } from "@/lib/env";
+import { type TxRecord, fetchChainHistory, tokenMetaFromList } from "@/lib/txHistory";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -36,17 +36,6 @@ interface MarketData {
   ath: number;
 }
 
-interface TxRecord {
-  hash: string;
-  counterparty: string;
-  value: string;
-  symbol: string;
-  timestamp: number;
-  type: "sent" | "received";
-  explorerUrl: string;
-  chainName?: string;
-}
-
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const SYMBOL_TO_COINGECKO: Record<string, string> = {
@@ -64,24 +53,6 @@ const RANGES = [
   { label: "3M", days: 90 },
   { label: "1Y", days: 365 },
 ] as const;
-
-const ALCHEMY_NETS: Record<string, string> = {
-  ethereum: "eth-mainnet", polygon: "polygon-mainnet",
-  arbitrum: "arb-mainnet", optimism: "opt-mainnet", base: "base-mainnet",
-};
-const SCAN_APIS: Record<string, string> = {
-  bsc: "https://api.bscscan.com/api",
-  avalanche: "https://api.snowscan.xyz/api",
-  fantom: "https://api.ftmscan.com/api",
-  cronos: "https://api.cronoscan.com/api",
-  gnosis: "https://api.gnosisscan.io/api",
-  moonbeam: "https://api-moonbeam.moonscan.io/api",
-  celo: "https://api.celoscan.io/api",
-  scroll: "https://api.scrollscan.com/api",
-  linea: "https://api.lineascan.build/api",
-  mantle: "https://api.mantlescan.xyz/api",
-  blast: "https://api.blastscan.io/api",
-};
 
 // ── Chart ─────────────────────────────────────────────────────────────────────
 
@@ -107,7 +78,6 @@ function PriceChart({ prices, isUp }: { prices: [number, number][]; isUp: boolea
   const pathD = `M${pts.join("L")}`;
   const fillD = `${pathD}L${W},${H}L0,${H}Z`;
   const stroke = isUp ? "#22c55e" : "#ef4444";
-  const fill = isUp ? "rgba(34,197,94,0.10)" : "rgba(239,68,68,0.10)";
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 110 }} preserveAspectRatio="none">
@@ -123,7 +93,7 @@ function PriceChart({ prices, isUp }: { prices: [number, number][]; isUp: boolea
   );
 }
 
-// ── Transaction fetchers (single-chain) ───────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────────
 
 function shortAddr(addr: string): string {
   if (!addr || addr.length < 12) return addr || "Unknown";
@@ -142,215 +112,6 @@ function timeAgo(ms: number): string {
   if (days === 1) return "Yesterday";
   if (days < 30) return `${days}d ago`;
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-function tronAddrToHex(addr: string): string {
-  const ABC = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-  let n = BigInt(0);
-  for (const c of addr) {
-    const i = ABC.indexOf(c);
-    if (i < 0) return "";
-    n = n * 58n + BigInt(i);
-  }
-  return n.toString(16).padStart(50, "0").slice(0, 42);
-}
-
-async function fetchForChain(
-  chainId: string,
-  evmAddress: string,
-  nonEvmWallet: any,
-): Promise<TxRecord[]> {
-  try {
-    if (ALCHEMY_NETS[chainId]) {
-      const sub = ALCHEMY_NETS[chainId];
-      const net = NETWORKS[chainId];
-      const url = `https://${sub}.g.alchemy.com/v2/${ALCHEMY_KEY}`;
-      const opts = { method: "POST", headers: { "Content-Type": "application/json" } };
-      const body = (dir: "from" | "to") => JSON.stringify({
-        jsonrpc: "2.0", id: 1, method: "alchemy_getAssetTransfers",
-        params: [{ fromBlock: "0x0", toBlock: "latest",
-          [dir === "from" ? "fromAddress" : "toAddress"]: evmAddress,
-          category: ["external", "internal", "erc20"],
-          withMetadata: true, maxCount: "0x14", order: "desc" }],
-      });
-      const [sentR, recvR] = await Promise.all([
-        fetch(url, { ...opts, body: body("from") }).then((r) => r.json()).catch(() => null),
-        fetch(url, { ...opts, body: body("to") }).then((r) => r.json()).catch(() => null),
-      ]);
-      const seen = new Set<string>();
-      const records: TxRecord[] = [];
-      const push = (transfers: any[], type: "sent" | "received") => {
-        for (const tx of transfers || []) {
-          if (seen.has(tx.hash)) continue;
-          seen.add(tx.hash);
-          const ts = tx.metadata?.blockTimestamp ? new Date(tx.metadata.blockTimestamp).getTime() : 0;
-          records.push({
-            hash: tx.hash,
-            counterparty: type === "sent" ? (tx.to || "") : (tx.from || ""),
-            value: tx.value != null ? parseFloat(tx.value).toFixed(6) : "0",
-            symbol: tx.asset || net?.symbol || "",
-            timestamp: ts, type,
-            explorerUrl: `${net?.explorer}/tx/${tx.hash}`,
-            chainName: net?.name,
-          });
-        }
-      };
-      push(sentR?.result?.transfers, "sent");
-      push(recvR?.result?.transfers, "received");
-      return records.sort((a, b) => b.timestamp - a.timestamp).slice(0, 25);
-    }
-
-    if (SCAN_APIS[chainId]) {
-      const base = SCAN_APIS[chainId];
-      const net = NETWORKS[chainId];
-      const data = await fetch(
-        `${base}?module=account&action=txlist&address=${evmAddress}&page=1&offset=20&sort=desc`
-      ).then((r) => r.json());
-      if (data.status !== "1" || !Array.isArray(data.result)) return [];
-      const addr = evmAddress.toLowerCase();
-      return data.result.map((tx: any) => {
-        const isSent = tx.from?.toLowerCase() === addr;
-        return {
-          hash: tx.hash,
-          counterparty: isSent ? tx.to : tx.from,
-          value: (parseInt(tx.value || "0") / 1e18).toFixed(6),
-          symbol: net?.symbol || "",
-          timestamp: parseInt(tx.timeStamp || "0") * 1000,
-          type: isSent ? "sent" : "received",
-          explorerUrl: `${net?.explorer}/tx/${tx.hash}`,
-          chainName: net?.name,
-        } as TxRecord;
-      });
-    }
-
-    const addr = nonEvmWallet?.[chainId]?.address;
-    if (!addr) return [];
-
-    if (chainId === "bitcoin") {
-      const txs = await fetch(`https://blockstream.info/api/address/${addr}/txs`).then((r) => r.json());
-      return (txs || []).slice(0, 20).map((tx: any): TxRecord => {
-        const inputs: string[] = tx.vin.map((v: any) => v.prevout?.scriptpubkey_address || "");
-        const isSent = inputs.includes(addr);
-        const ts = (tx.status?.block_time || 0) * 1000;
-        if (isSent) {
-          const amt = tx.vout.filter((v: any) => v.scriptpubkey_address !== addr).reduce((s: number, v: any) => s + (v.value || 0), 0);
-          const to = tx.vout.find((v: any) => v.scriptpubkey_address !== addr)?.scriptpubkey_address || "";
-          return { hash: tx.txid, counterparty: to, value: (amt / 1e8).toFixed(8), symbol: "BTC", timestamp: ts, type: "sent", explorerUrl: `https://blockstream.info/tx/${tx.txid}`, chainName: "Bitcoin" };
-        }
-        const amt = tx.vout.filter((v: any) => v.scriptpubkey_address === addr).reduce((s: number, v: any) => s + (v.value || 0), 0);
-        const from = inputs.find((a) => a && a !== addr) || "";
-        return { hash: tx.txid, counterparty: from, value: (amt / 1e8).toFixed(8), symbol: "BTC", timestamp: ts, type: "received", explorerUrl: `https://blockstream.info/tx/${tx.txid}`, chainName: "Bitcoin" };
-      });
-    }
-
-    if (chainId === "litecoin") {
-      const txs = await fetch(`https://litecoinspace.org/api/address/${addr}/txs`).then((r) => r.json());
-      return (txs || []).slice(0, 20).map((tx: any): TxRecord => {
-        const inputs: string[] = tx.vin.map((v: any) => v.prevout?.scriptpubkey_address || "");
-        const isSent = inputs.includes(addr);
-        const ts = (tx.status?.block_time || 0) * 1000;
-        if (isSent) {
-          const amt = tx.vout.filter((v: any) => v.scriptpubkey_address !== addr).reduce((s: number, v: any) => s + (v.value || 0), 0);
-          const to = tx.vout.find((v: any) => v.scriptpubkey_address !== addr)?.scriptpubkey_address || "";
-          return { hash: tx.txid, counterparty: to, value: (amt / 1e8).toFixed(8), symbol: "LTC", timestamp: ts, type: "sent", explorerUrl: `https://litecoinspace.org/tx/${tx.txid}`, chainName: "Litecoin" };
-        }
-        const amt = tx.vout.filter((v: any) => v.scriptpubkey_address === addr).reduce((s: number, v: any) => s + (v.value || 0), 0);
-        const from = inputs.find((a) => a && a !== addr) || "";
-        return { hash: tx.txid, counterparty: from, value: (amt / 1e8).toFixed(8), symbol: "LTC", timestamp: ts, type: "received", explorerUrl: `https://litecoinspace.org/tx/${tx.txid}`, chainName: "Litecoin" };
-      });
-    }
-
-    if (chainId === "solana") {
-      const rpc = `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
-      const sigData = await fetch(rpc, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [addr, { limit: 12 }] }),
-      }).then((r) => r.json());
-      const sigs: any[] = sigData?.result || [];
-      const results = await Promise.all(sigs.map(async (sig): Promise<TxRecord | null> => {
-        try {
-          const txData = await fetch(rpc, {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getTransaction", params: [sig.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }] }),
-          }).then((r) => r.json());
-          const tx = txData?.result;
-          if (!tx) return null;
-          const keys: string[] = (tx.transaction.message.accountKeys || []).map((k: any) => typeof k === "string" ? k : (k.pubkey || ""));
-          const myIdx = keys.findIndex((k) => k === addr);
-          if (myIdx < 0) return null;
-          const pre = tx.meta?.preBalances?.[myIdx] ?? 0;
-          const post = tx.meta?.postBalances?.[myIdx] ?? 0;
-          const diff = post - pre;
-          if (Math.abs(diff) < 5000) return null;
-          let counterparty = "";
-          for (let i = 0; i < keys.length; i++) {
-            if (i === myIdx) continue;
-            const d = diff < 0 ? (tx.meta?.postBalances?.[i] ?? 0) - (tx.meta?.preBalances?.[i] ?? 0) : (tx.meta?.preBalances?.[i] ?? 0) - (tx.meta?.postBalances?.[i] ?? 0);
-            if (d > 0) { counterparty = keys[i]; break; }
-          }
-          return { hash: sig.signature, counterparty, value: (Math.abs(diff) / 1e9).toFixed(6), symbol: "SOL", timestamp: (sig.blockTime || 0) * 1000, type: diff < 0 ? "sent" : "received", explorerUrl: `https://solscan.io/tx/${sig.signature}`, chainName: "Solana" };
-        } catch { return null; }
-      }));
-      return results.filter(Boolean) as TxRecord[];
-    }
-
-    if (chainId === "xrp") {
-      const data = await fetch("https://xrplcluster.com", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ method: "account_tx", params: [{ account: addr, limit: 20 }] }),
-      }).then((r) => r.json());
-      const XRP_EPOCH = 946684800;
-      return (data?.result?.transactions || []).flatMap((entry: any): TxRecord[] => {
-        const tx = entry.tx || entry;
-        if (tx.TransactionType !== "Payment" || typeof tx.Amount !== "string") return [];
-        const isSent = tx.Account === addr;
-        if (!tx.hash) return [];
-        return [{ hash: tx.hash, counterparty: isSent ? (tx.Destination || "") : (tx.Account || ""), value: (parseInt(tx.Amount) / 1e6).toFixed(4), symbol: "XRP", timestamp: tx.date ? (tx.date + XRP_EPOCH) * 1000 : 0, type: isSent ? "sent" : "received", explorerUrl: `https://xrpscan.com/tx/${tx.hash}`, chainName: "XRP Ledger" }];
-      });
-    }
-
-    if (chainId === "tron") {
-      const myHex = tronAddrToHex(addr);
-      const data = await fetch(`https://api.trongrid.io/v1/accounts/${addr}/transactions?limit=20&order_by=block_timestamp%2Cdesc`).then((r) => r.json());
-      return (data?.data || []).slice(0, 20).flatMap((tx: any): TxRecord[] => {
-        const contract = tx.raw_data?.contract?.[0];
-        if (!contract || contract.type !== "TransferContract") return [];
-        const val = contract.parameter?.value;
-        if (!val?.amount) return [];
-        const isSent = myHex ? val.owner_address === myHex : false;
-        return [{ hash: tx.txID, counterparty: isSent ? (val.to_address || "") : (val.owner_address || ""), value: (val.amount / 1e6).toFixed(4), symbol: "TRX", timestamp: tx.block_timestamp || 0, type: isSent ? "sent" : "received", explorerUrl: `https://tronscan.org/#/transaction/${tx.txID}`, chainName: "Tron" }];
-      });
-    }
-
-    if (chainId === "sui") {
-      const rpc = "https://fullnode.mainnet.sui.io";
-      const opts = { method: "POST", headers: { "Content-Type": "application/json" } };
-      const [sentR, recvR] = await Promise.all([
-        fetch(rpc, { ...opts, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "suix_queryTransactionBlocks", params: [{ filter: { FromAddress: addr }, options: { showBalanceChanges: true } }, null, 12, true] }) }).then((r) => r.json()).catch(() => null),
-        fetch(rpc, { ...opts, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "suix_queryTransactionBlocks", params: [{ filter: { ToAddress: addr }, options: { showBalanceChanges: true } }, null, 12, true] }) }).then((r) => r.json()).catch(() => null),
-      ]);
-      const seen = new Set<string>();
-      const records: TxRecord[] = [];
-      const parse = (blocks: any[], type: "sent" | "received") => {
-        for (const block of blocks || []) {
-          if (seen.has(block.digest)) continue;
-          seen.add(block.digest);
-          const change = (block.balanceChanges || []).find((c: any) => c.owner?.AddressOwner === addr && c.coinType?.includes("::sui::SUI"));
-          if (!change) continue;
-          const amount = parseInt(change.amount || "0");
-          if (Math.abs(amount) < 10_000) continue;
-          records.push({ hash: block.digest, counterparty: "", value: (Math.abs(amount) / 1e9).toFixed(6), symbol: "SUI", timestamp: block.timestampMs ? parseInt(block.timestampMs) : 0, type, explorerUrl: `https://suiscan.xyz/mainnet/tx/${block.digest}`, chainName: "Sui" });
-        }
-      };
-      parse(sentR?.result?.data, "sent");
-      parse(recvR?.result?.data, "received");
-      return records.sort((a, b) => b.timestamp - a.timestamp).slice(0, 20);
-    }
-
-    return [];
-  } catch {
-    return [];
-  }
 }
 
 // ── Market data ───────────────────────────────────────────────────────────────
@@ -409,7 +170,7 @@ export default function TokenDetail() {
   const navigate = useNavigate();
   const location = useLocation();
   const token = (location.state as TokenDetailState | null);
-  const { wallet, activeAddress, nonEvmWallet } = useWallet();
+  const { wallet, activeAddress, nonEvmWallet, tokensByChain } = useWallet();
   const { currency } = useCurrency();
   const sym = currency?.symbol || "$";
 
@@ -422,6 +183,12 @@ export default function TokenDetail() {
   const [marketLoading, setMarketLoading] = useState(false);
   const [txs, setTxs] = useState<TxRecord[]>([]);
   const [txLoading, setTxLoading] = useState(false);
+
+  // Symbol lookup for SPL/token rows on this chain.
+  const solTokenMeta = useMemo(
+    () => tokenMetaFromList(token?.chainId ? tokensByChain?.[token.chainId] : undefined),
+    [tokensByChain, token?.chainId]
+  );
 
   // Fetch market data once
   useEffect(() => {
@@ -437,15 +204,23 @@ export default function TokenDetail() {
     fetchPriceChart(coinId, RANGES[rangeIdx].days).then((p) => { setChartPrices(p); setChartLoading(false); });
   }, [coinId, rangeIdx]);
 
-  // Fetch transaction history for this chain
+  // Fetch transaction history for this chain, then narrow to THIS token: native
+  // coin pages show native transfers; a token page shows only that token's
+  // transfers (matched by contract / mint).
   const loadTxs = useCallback(async () => {
     if (!token?.chainId) return;
     setTxLoading(true);
     const evmAddr = activeAddress || wallet?.address || "";
-    const records = await fetchForChain(token.chainId, evmAddr, nonEvmWallet);
-    setTxs(records);
+    const records = await fetchChainHistory(token.chainId, evmAddr, nonEvmWallet, solTokenMeta);
+    const tokenAddr = token.address?.toLowerCase();
+    const filtered = token.isNative
+      ? records.filter((r) => !r.assetAddr)
+      : tokenAddr
+        ? records.filter((r) => r.assetAddr === tokenAddr)
+        : records;
+    setTxs(filtered);
     setTxLoading(false);
-  }, [token?.chainId, activeAddress, wallet?.address, nonEvmWallet]);
+  }, [token?.chainId, token?.address, token?.isNative, activeAddress, wallet?.address, nonEvmWallet, solTokenMeta]);
 
   useEffect(() => { loadTxs(); }, [loadTxs]);
 
@@ -714,7 +489,7 @@ export default function TokenDetail() {
           <div className="space-y-1.5">
             {txs.map((tx) => (
               <a
-                key={tx.hash}
+                key={`${tx.hash}-${tx.assetAddr || "native"}`}
                 href={tx.explorerUrl}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -736,8 +511,9 @@ export default function TokenDetail() {
                   <div className="min-w-0">
                     <p className="text-[12px] font-medium text-text-primary capitalize">{tx.type}</p>
                     <p className="text-[10px] text-muted truncate">
-                      {tx.type === "sent" ? "To " : "From "}
-                      {shortAddr(tx.counterparty)}
+                      {tx.counterparty
+                        ? <>{tx.type === "sent" ? "To " : "From "}{shortAddr(tx.counterparty)}</>
+                        : <span className="italic opacity-60">address unavailable</span>}
                     </p>
                   </div>
                 </div>

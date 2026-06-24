@@ -1,48 +1,20 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useWallet } from "../hooks/useWallet";
 import Layout from "../components/Layout";
 import { SendIcon, ReceiveIcon, ExternalLinkIcon, RefreshIcon, ActivityIcon, ChainIcon } from "../components/Icons";
 import { NETWORKS } from "@/lib/networks";
-import { ALCHEMY_KEY } from "@/lib/env";
-
-const ALCHEMY_NETS: Record<string, string> = {
-  ethereum: "eth-mainnet",
-  polygon:  "polygon-mainnet",
-  arbitrum: "arb-mainnet",
-  optimism: "opt-mainnet",
-  base:     "base-mainnet",
-};
-
-const SCAN_APIS: Record<string, string> = {
-  bsc:       "https://api.bscscan.com/api",
-  avalanche: "https://api.snowscan.xyz/api",
-  fantom:    "https://api.ftmscan.com/api",
-  cronos:    "https://api.cronoscan.com/api",
-  gnosis:    "https://api.gnosisscan.io/api",
-  moonbeam:  "https://api-moonbeam.moonscan.io/api",
-  celo:      "https://api.celoscan.io/api",
-  scroll:    "https://api.scrollscan.com/api",
-  linea:     "https://api.lineascan.build/api",
-  mantle:    "https://api.mantlescan.xyz/api",
-  blast:     "https://api.blastscan.io/api",
-};
+import {
+  type TxRecord,
+  fetchChainHistory,
+  fetchAllChains,
+  tokenMetaFromList,
+  SUPPORTED,
+} from "@/lib/txHistory";
 
 const NON_EVM_NAMES: Record<string, string> = {
   bitcoin: "Bitcoin", solana: "Solana", sui: "Sui",
   tron: "Tron", xrp: "XRP Ledger", litecoin: "Litecoin",
 };
-
-interface TxRecord {
-  hash: string;
-  counterparty: string;
-  value: string;
-  symbol: string;
-  timestamp: number;
-  type: "sent" | "received";
-  explorerUrl: string;
-  chainName?: string;
-  chainId?: string;
-}
 
 function shortAddr(addr: string): string {
   if (!addr || addr.length < 12) return addr || "Unknown";
@@ -63,323 +35,10 @@ function timeAgo(ms: number): string {
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function tronAddrToHex(addr: string): string {
-  const ABC = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-  let n = BigInt(0);
-  for (const c of addr) {
-    const i = ABC.indexOf(c);
-    if (i < 0) return "";
-    n = n * 58n + BigInt(i);
-  }
-  return n.toString(16).padStart(50, "0").slice(0, 42);
-}
-
-// ── Fetchers ──────────────────────────────────────────────────────────────────
-
-async function fetchAlchemy(chainId: string, address: string): Promise<TxRecord[]> {
-  const sub = ALCHEMY_NETS[chainId];
-  if (!sub) return [];
-  const net = NETWORKS[chainId];
-  const url = `https://${sub}.g.alchemy.com/v2/${ALCHEMY_KEY}`;
-  const opts = { method: "POST", headers: { "Content-Type": "application/json" } };
-  const body = (dir: "from" | "to") => JSON.stringify({
-    jsonrpc: "2.0", id: 1, method: "alchemy_getAssetTransfers",
-    params: [{
-      fromBlock: "0x0", toBlock: "latest",
-      [dir === "from" ? "fromAddress" : "toAddress"]: address,
-      category: ["external", "internal", "erc20"],
-      withMetadata: true, maxCount: "0x14", order: "desc",
-    }],
-  });
-
-  const [sentR, recvR] = await Promise.all([
-    fetch(url, { ...opts, body: body("from") }).then(r => r.json()).catch(() => null),
-    fetch(url, { ...opts, body: body("to")   }).then(r => r.json()).catch(() => null),
-  ]);
-
-  const records: TxRecord[] = [];
-  const seen = new Set<string>();
-
-  const push = (transfers: any[], type: "sent" | "received") => {
-    for (const tx of transfers || []) {
-      if (seen.has(tx.hash)) continue;
-      seen.add(tx.hash);
-      const ts = tx.metadata?.blockTimestamp
-        ? new Date(tx.metadata.blockTimestamp).getTime() : 0;
-      records.push({
-        hash: tx.hash,
-        counterparty: type === "sent" ? (tx.to || "") : (tx.from || ""),
-        value: tx.value != null ? parseFloat(tx.value).toFixed(6) : "0",
-        symbol: tx.asset || net?.symbol || "",
-        timestamp: ts, type,
-        explorerUrl: `${net?.explorer}/tx/${tx.hash}`,
-        chainName: net?.name, chainId,
-      });
-    }
-  };
-
-  push(sentR?.result?.transfers, "sent");
-  push(recvR?.result?.transfers, "received");
-  return records.sort((a, b) => b.timestamp - a.timestamp).slice(0, 25);
-}
-
-async function fetchScan(chainId: string, address: string): Promise<TxRecord[]> {
-  const base = SCAN_APIS[chainId];
-  if (!base) return [];
-  const net = NETWORKS[chainId];
-  try {
-    const data = await fetch(
-      `${base}?module=account&action=txlist&address=${address}&page=1&offset=20&sort=desc`
-    ).then(r => r.json());
-    if (data.status !== "1" || !Array.isArray(data.result)) return [];
-    const addr = address.toLowerCase();
-    return data.result.map((tx: any) => {
-      const isSent = tx.from?.toLowerCase() === addr;
-      return {
-        hash: tx.hash,
-        counterparty: isSent ? tx.to : tx.from,
-        value: (parseInt(tx.value || "0") / 1e18).toFixed(6),
-        symbol: net?.symbol || "",
-        timestamp: parseInt(tx.timeStamp || "0") * 1000,
-        type: isSent ? "sent" : "received",
-        explorerUrl: `${net?.explorer}/tx/${tx.hash}`,
-        chainName: net?.name, chainId,
-      } as TxRecord;
-    });
-  } catch { return []; }
-}
-
-async function fetchBitcoin(address: string): Promise<TxRecord[]> {
-  try {
-    const txs = await fetch(`https://blockstream.info/api/address/${address}/txs`).then(r => r.json());
-    return (txs || []).slice(0, 20).map((tx: any): TxRecord => {
-      const inputs: string[] = tx.vin.map((v: any) => v.prevout?.scriptpubkey_address || "");
-      const isSent = inputs.includes(address);
-      const ts = (tx.status?.block_time || 0) * 1000;
-      if (isSent) {
-        const amt = tx.vout.filter((v: any) => v.scriptpubkey_address !== address).reduce((s: number, v: any) => s + (v.value || 0), 0);
-        const to = tx.vout.find((v: any) => v.scriptpubkey_address !== address)?.scriptpubkey_address || "";
-        return { hash: tx.txid, counterparty: to, value: (amt / 1e8).toFixed(8), symbol: "BTC", timestamp: ts, type: "sent", explorerUrl: `https://blockstream.info/tx/${tx.txid}`, chainName: "Bitcoin", chainId: "bitcoin" };
-      } else {
-        const amt = tx.vout.filter((v: any) => v.scriptpubkey_address === address).reduce((s: number, v: any) => s + (v.value || 0), 0);
-        const from = inputs.find(a => a && a !== address) || "";
-        return { hash: tx.txid, counterparty: from, value: (amt / 1e8).toFixed(8), symbol: "BTC", timestamp: ts, type: "received", explorerUrl: `https://blockstream.info/tx/${tx.txid}`, chainName: "Bitcoin", chainId: "bitcoin" };
-      }
-    });
-  } catch { return []; }
-}
-
-async function fetchLitecoin(address: string): Promise<TxRecord[]> {
-  try {
-    const txs = await fetch(`https://litecoinspace.org/api/address/${address}/txs`).then(r => r.json());
-    return (txs || []).slice(0, 20).map((tx: any): TxRecord => {
-      const inputs: string[] = tx.vin.map((v: any) => v.prevout?.scriptpubkey_address || "");
-      const isSent = inputs.includes(address);
-      const ts = (tx.status?.block_time || 0) * 1000;
-      if (isSent) {
-        const amt = tx.vout.filter((v: any) => v.scriptpubkey_address !== address).reduce((s: number, v: any) => s + (v.value || 0), 0);
-        const to = tx.vout.find((v: any) => v.scriptpubkey_address !== address)?.scriptpubkey_address || "";
-        return { hash: tx.txid, counterparty: to, value: (amt / 1e8).toFixed(8), symbol: "LTC", timestamp: ts, type: "sent", explorerUrl: `https://litecoinspace.org/tx/${tx.txid}`, chainName: "Litecoin", chainId: "litecoin" };
-      } else {
-        const amt = tx.vout.filter((v: any) => v.scriptpubkey_address === address).reduce((s: number, v: any) => s + (v.value || 0), 0);
-        const from = inputs.find(a => a && a !== address) || "";
-        return { hash: tx.txid, counterparty: from, value: (amt / 1e8).toFixed(8), symbol: "LTC", timestamp: ts, type: "received", explorerUrl: `https://litecoinspace.org/tx/${tx.txid}`, chainName: "Litecoin", chainId: "litecoin" };
-      }
-    });
-  } catch { return []; }
-}
-
-async function fetchSolana(address: string): Promise<TxRecord[]> {
-  const rpc = `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
-  try {
-    const sigData = await fetch(rpc, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getSignaturesForAddress", params: [address, { limit: 12 }] }),
-    }).then(r => r.json());
-
-    const sigs: any[] = sigData?.result || [];
-
-    const results = await Promise.all(sigs.map(async (sig): Promise<TxRecord | null> => {
-      try {
-        const txData = await fetch(rpc, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getTransaction", params: [sig.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }] }),
-        }).then(r => r.json());
-        const tx = txData?.result;
-        if (!tx) return null;
-
-        const keys: string[] = (tx.transaction.message.accountKeys || []).map((k: any) =>
-          typeof k === "string" ? k : (k.pubkey || "")
-        );
-        const myIdx = keys.findIndex(k => k === address);
-        if (myIdx < 0) return null;
-
-        const pre  = tx.meta?.preBalances?.[myIdx]  ?? 0;
-        const post = tx.meta?.postBalances?.[myIdx] ?? 0;
-        const diff = post - pre;
-        if (Math.abs(diff) < 5000) return null;
-
-        let counterparty = "";
-        for (let i = 0; i < keys.length; i++) {
-          if (i === myIdx) continue;
-          const d = diff < 0
-            ? (tx.meta?.postBalances?.[i] ?? 0) - (tx.meta?.preBalances?.[i] ?? 0)
-            : (tx.meta?.preBalances?.[i] ?? 0)  - (tx.meta?.postBalances?.[i] ?? 0);
-          if (d > 0) { counterparty = keys[i]; break; }
-        }
-
-        return {
-          hash: sig.signature, counterparty,
-          value: (Math.abs(diff) / 1e9).toFixed(6), symbol: "SOL",
-          timestamp: (sig.blockTime || 0) * 1000,
-          type: diff < 0 ? "sent" : "received",
-          explorerUrl: `https://solscan.io/tx/${sig.signature}`,
-          chainName: "Solana", chainId: "solana",
-        };
-      } catch { return null; }
-    }));
-
-    return results.filter(Boolean) as TxRecord[];
-  } catch { return []; }
-}
-
-async function fetchXrp(address: string): Promise<TxRecord[]> {
-  try {
-    const data = await fetch("https://xrplcluster.com", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ method: "account_tx", params: [{ account: address, limit: 20 }] }),
-    }).then(r => r.json());
-
-    const XRP_EPOCH = 946684800;
-    return (data?.result?.transactions || []).flatMap((entry: any): TxRecord[] => {
-      const tx = entry.tx || entry;
-      if (tx.TransactionType !== "Payment" || typeof tx.Amount !== "string") return [];
-      const isSent = tx.Account === address;
-      const amount = parseInt(tx.Amount) / 1e6;
-      if (!tx.hash) return [];
-      return [{
-        hash: tx.hash,
-        counterparty: isSent ? (tx.Destination || "") : (tx.Account || ""),
-        value: amount.toFixed(4), symbol: "XRP",
-        timestamp: tx.date ? (tx.date + XRP_EPOCH) * 1000 : 0,
-        type: isSent ? "sent" : "received",
-        explorerUrl: `https://xrpscan.com/tx/${tx.hash}`,
-        chainName: "XRP Ledger", chainId: "xrp",
-      }];
-    });
-  } catch { return []; }
-}
-
-async function fetchTron(address: string): Promise<TxRecord[]> {
-  try {
-    const myHex = tronAddrToHex(address);
-    const data = await fetch(
-      `https://api.trongrid.io/v1/accounts/${address}/transactions?limit=20&order_by=block_timestamp%2Cdesc`
-    ).then(r => r.json());
-
-    return (data?.data || []).slice(0, 20).flatMap((tx: any): TxRecord[] => {
-      const contract = tx.raw_data?.contract?.[0];
-      if (!contract || contract.type !== "TransferContract") return [];
-      const val = contract.parameter?.value;
-      if (!val?.amount) return [];
-      const isSent = myHex ? val.owner_address === myHex : false;
-      return [{
-        hash: tx.txID,
-        counterparty: isSent ? (val.to_address || "") : (val.owner_address || ""),
-        value: (val.amount / 1e6).toFixed(4), symbol: "TRX",
-        timestamp: tx.block_timestamp || 0,
-        type: isSent ? "sent" : "received",
-        explorerUrl: `https://tronscan.org/#/transaction/${tx.txID}`,
-        chainName: "Tron", chainId: "tron",
-      }];
-    });
-  } catch { return []; }
-}
-
-async function fetchSui(address: string): Promise<TxRecord[]> {
-  try {
-    const rpc = "https://fullnode.mainnet.sui.io";
-    const opts = { method: "POST", headers: { "Content-Type": "application/json" } };
-
-    const [sentR, recvR] = await Promise.all([
-      fetch(rpc, { ...opts, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "suix_queryTransactionBlocks", params: [{ filter: { FromAddress: address }, options: { showBalanceChanges: true } }, null, 12, true] }) }).then(r => r.json()).catch(() => null),
-      fetch(rpc, { ...opts, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "suix_queryTransactionBlocks", params: [{ filter: { ToAddress: address },   options: { showBalanceChanges: true } }, null, 12, true] }) }).then(r => r.json()).catch(() => null),
-    ]);
-
-    const seen = new Set<string>();
-    const records: TxRecord[] = [];
-
-    const parse = (blocks: any[], type: "sent" | "received") => {
-      for (const block of blocks || []) {
-        if (seen.has(block.digest)) continue;
-        seen.add(block.digest);
-        const change = (block.balanceChanges || []).find((c: any) =>
-          c.owner?.AddressOwner === address && c.coinType?.includes("::sui::SUI")
-        );
-        if (!change) continue;
-        const amount = parseInt(change.amount || "0");
-        if (Math.abs(amount) < 10_000) continue;
-        records.push({
-          hash: block.digest, counterparty: "",
-          value: (Math.abs(amount) / 1e9).toFixed(6), symbol: "SUI",
-          timestamp: block.timestampMs ? parseInt(block.timestampMs) : 0,
-          type,
-          explorerUrl: `https://suiscan.xyz/mainnet/tx/${block.digest}`,
-          chainName: "Sui", chainId: "sui",
-        });
-      }
-    };
-
-    parse(sentR?.result?.data, "sent");
-    parse(recvR?.result?.data, "received");
-    return records.sort((a, b) => b.timestamp - a.timestamp).slice(0, 20);
-  } catch { return []; }
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-const SUPPORTED = new Set([
-  ...Object.keys(ALCHEMY_NETS),
-  ...Object.keys(SCAN_APIS),
-  "bitcoin", "litecoin", "solana", "xrp", "tron", "sui",
-]);
-
-async function fetchAllChains(evmAddress: string, nonEvmWallet: any | null): Promise<TxRecord[]> {
-  const jobs: Promise<TxRecord[]>[] = [];
-
-  // All Alchemy EVM chains
-  for (const chainId of Object.keys(ALCHEMY_NETS)) {
-    jobs.push(fetchAlchemy(chainId, evmAddress).catch(() => []));
-  }
-  // All scan-API EVM chains
-  for (const chainId of Object.keys(SCAN_APIS)) {
-    jobs.push(fetchScan(chainId, evmAddress).catch(() => []));
-  }
-  // Non-EVM (only if addresses are available)
-  if (nonEvmWallet) {
-    jobs.push(fetchBitcoin(nonEvmWallet.bitcoin.address).catch(() => []));
-    jobs.push(fetchLitecoin(nonEvmWallet.litecoin.address).catch(() => []));
-    jobs.push(fetchSolana(nonEvmWallet.solana.address).catch(() => []));
-    jobs.push(fetchXrp(nonEvmWallet.xrp.address).catch(() => []));
-    jobs.push(fetchTron(nonEvmWallet.tron.address).catch(() => []));
-    jobs.push(fetchSui(nonEvmWallet.sui.address).catch(() => []));
-  }
-
-  const results = await Promise.all(jobs);
-  const all = results.flat();
-
-  // Deduplicate by hash, sort newest first, cap at 50
-  const seen = new Set<string>();
-  return all
-    .filter((tx) => { if (seen.has(tx.hash)) return false; seen.add(tx.hash); return true; })
-    .sort((a, b) => b.timestamp - a.timestamp)
-    .slice(0, 50);
-}
-
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function History() {
-  const { wallet, activeChainId, activeAddress, filterChainId, nonEvmWallet } = useWallet();
+  const { wallet, activeChainId, activeAddress, filterChainId, nonEvmWallet, tokensByChain } = useWallet();
   const [txs, setTxs] = useState<TxRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -391,33 +50,23 @@ export default function History() {
     ? `${NETWORKS[displayChainId].explorer}/address/${activeAddress}`
     : null;
 
+  // Symbol lookup so SPL/token rows show a real ticker instead of a raw mint.
+  const solTokenMeta = useMemo(() => tokenMetaFromList(tokensByChain?.["solana"]), [tokensByChain]);
+
   const fetchHistory = useCallback(async () => {
     if (!activeAddress && !wallet?.address) { setLoading(false); return; }
     setLoading(true);
     try {
-      let records: TxRecord[] = [];
-
-      if (isAllChains) {
-        records = await fetchAllChains(wallet?.address || "", nonEvmWallet);
-      } else {
-        const addr = activeAddress;
-        if      (ALCHEMY_NETS[displayChainId])      records = await fetchAlchemy(displayChainId, addr);
-        else if (SCAN_APIS[displayChainId])         records = await fetchScan(displayChainId, addr);
-        else if (displayChainId === "bitcoin")      records = await fetchBitcoin(addr);
-        else if (displayChainId === "litecoin")     records = await fetchLitecoin(addr);
-        else if (displayChainId === "solana")       records = await fetchSolana(addr);
-        else if (displayChainId === "xrp")          records = await fetchXrp(addr);
-        else if (displayChainId === "tron")         records = await fetchTron(addr);
-        else if (displayChainId === "sui")          records = await fetchSui(addr);
-      }
-
+      const records = isAllChains
+        ? await fetchAllChains(wallet?.address || "", nonEvmWallet, solTokenMeta)
+        : await fetchChainHistory(displayChainId, activeAddress, nonEvmWallet, solTokenMeta);
       setTxs(records);
     } catch {
       setTxs([]);
     } finally {
       setLoading(false);
     }
-  }, [isAllChains, displayChainId, activeAddress, wallet?.address, nonEvmWallet]);
+  }, [isAllChains, displayChainId, activeAddress, wallet?.address, nonEvmWallet, solTokenMeta]);
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
 
@@ -496,7 +145,7 @@ export default function History() {
             <div className="pt-1">
               {txs.map((tx) => (
                 <a
-                  key={`${tx.chainId}-${tx.hash}`}
+                  key={`${tx.chainId}-${tx.hash}-${tx.assetAddr || "native"}`}
                   href={tx.explorerUrl}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -512,16 +161,13 @@ export default function History() {
                       ? <SendIcon size={13} className="text-accent-red" />
                       : <ReceiveIcon size={13} className="text-accent-green" />
                     }
-                    {/* Chain badge — shown in All Assets mode */}
+                    {/* Chain badge — shown in All Assets mode. ChainIcon resolves a
+                        real logo for every chain (EVM + non-EVM) by chainId, with
+                        its own branded per-chain fallback, so no chain falls back to
+                        a bare initial. */}
                     {isAllChains && tx.chainId && (
                       <div className="absolute -bottom-0.5 -right-0.5 w-[14px] h-[14px] rounded-full overflow-hidden ring-1 ring-surface-0">
-                        {NETWORKS[tx.chainId] ? (
-                          <ChainIcon chainId={tx.chainId} logo={NETWORKS[tx.chainId].logo} size={14} />
-                        ) : (
-                          <div className="w-full h-full bg-surface-3 flex items-center justify-center">
-                            <span className="text-[6px] font-bold text-muted">{tx.symbol.slice(0,1)}</span>
-                          </div>
-                        )}
+                        <ChainIcon chainId={tx.chainId} logo={NETWORKS[tx.chainId]?.logo} size={14} />
                       </div>
                     )}
                   </div>
