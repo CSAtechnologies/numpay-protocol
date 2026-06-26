@@ -114,6 +114,15 @@ const KYBER_FEE_BPS: string  = "50";
 const KYBER_CHARGE_BY        = "currency_in";
 const kyberFeeActive = () => Boolean(FEE_RECIPIENT) && KYBER_FEE_BPS !== "0";
 
+// LI.FI bridge fee. Unlike the others, the fee wallet is NOT sent in the request:
+// LI.FI maps the integrator string to a wallet registered on their side, so this
+// stays "0" (disabled) until LI.FI registers `numpay` + FEE_RECIPIENT. Passing a
+// fee before then is rejected. `fee` is a FRACTION (0.005 = 0.5%), not bps. To go
+// live after they confirm: set LIFI_FEE to "0.005".
+const LIFI_INTEGRATOR = "numpay";
+const LIFI_FEE: string = "0";
+const lifiFeeActive = () => parseFloat(LIFI_FEE) > 0;
+
 const ERC20_ABI = [
   "function name() view returns (string)",
   "function symbol() view returns (string)",
@@ -715,7 +724,12 @@ export default function Swap() {
             toTokenAddress:   toTokenAddr,
             fromAmount:       ethers.parseUnits(amt, from.decimals).toString(),
             fromAddress: fromAddr, toAddress: toAddr,
-            options: { slippage: sanitizeSlippagePct(slippage) / 100, order: "RECOMMENDED", integrator: "numpay" },
+            options: {
+              slippage: sanitizeSlippagePct(slippage) / 100, order: "RECOMMENDED",
+              integrator: LIFI_INTEGRATOR,
+              // Fee baked into the routes so the shown bridge receive is post-fee.
+              ...(lifiFeeActive() ? { fee: parseFloat(LIFI_FEE) } : {}),
+            },
           }),
         });
         if (!res.ok) {
@@ -1095,9 +1109,11 @@ export default function Swap() {
       const toTokAddr   = toToken.address   || LIFI_NATIVE_TOKEN[toToken.chainId]   || LIFI_NATIVE;
       const fromAmtRaw  = ethers.parseUnits(fromAmount, fromToken.decimals).toString();
 
-      const quoteUrl = `${LIFI_API}/quote?fromChain=${fromLifiId}&toChain=${toLifiId}` +
+      let quoteUrl = `${LIFI_API}/quote?fromChain=${fromLifiId}&toChain=${toLifiId}` +
         `&fromToken=${encodeURIComponent(fromTokAddr)}&toToken=${encodeURIComponent(toTokAddr)}` +
-        `&fromAmount=${fromAmtRaw}&fromAddress=${fromAddr}&toAddress=${toAddr}&integrator=numpay`;
+        `&fromAmount=${fromAmtRaw}&fromAddress=${fromAddr}&toAddress=${toAddr}&integrator=${LIFI_INTEGRATOR}`;
+      // Must match the fee used when the routes were fetched above.
+      if (lifiFeeActive()) quoteUrl += `&fee=${LIFI_FEE}`;
       const qRes = await fetch(quoteUrl);
       if (!qRes.ok) {
         const err = await qRes.text().catch(() => "");
