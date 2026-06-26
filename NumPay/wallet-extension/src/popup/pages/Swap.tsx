@@ -37,7 +37,7 @@ interface SwapToken {
 }
 
 interface RouteOption {
-  provider: "paraswap" | "kyberswap" | "jupiter";
+  provider: "paraswap" | "kyberswap" | "jupiter" | "relay";
   label: string;
   logo: string;
   destAmount: string;
@@ -47,6 +47,8 @@ interface RouteOption {
   priceRoute?: any;
   routeSummary?: any;
   kyberRouterAddress?: string;
+  // Relay returns ready-to-sign steps with the quote (no separate build call).
+  relaySteps?: any[];
 }
 
 interface BridgeRoute {
@@ -70,6 +72,47 @@ const LIFI_ROUTES_URL  = `${LIFI_API}/advanced/routes`;
 const NATIVE_ADDR      = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 const LIFI_NATIVE      = "0x0000000000000000000000000000000000000000";
 const CUSTOM_TOKENS_KEY = "numpay_custom_tokens";
+
+// Shared fee-collection wallet (EVM). One address works across every EVM
+// aggregator and chain — used by ParaSwap, KyberSwap and Relay app fees.
+const FEE_RECIPIENT: string = "0x68870B4CA1b586Da2E8977dAaA18DF00514e52A1"; // NumPay fee wallet
+
+// Relay (relay.link) — a third same-chain EVM quote source. The /quote response
+// already carries the ready-to-sign `steps`, so there is no separate build call.
+const RELAY_API        = "https://api.relay.link";
+const RELAY_NATIVE     = "0x0000000000000000000000000000000000000000"; // native coin
+// EVM chains Relay supports for same-chain swaps (others fall back to PS/Kyber).
+const RELAY_CHAINS = new Set<number>([
+  1, 10, 56, 137, 8453, 42161, 43114, 534352, 59144, 5000, 81457, 324, 1101, 250,
+]);
+// App fee (revenue). Disabled until BOTH are set, so users are never charged
+// against an unset recipient. Keep the bps at or under competitors (~25 = 0.25%).
+// RELAY_FEE_RECIPIENT must be an EVM wallet you control; fee accrues off-chain
+// and is withdrawn via Relay's integrator endpoints.
+const RELAY_APP_FEE_BPS: string   = "50";          // 0.5%
+const RELAY_FEE_RECIPIENT: string = FEE_RECIPIENT;
+
+// ParaSwap / Velora partner fee. Taken from the destination token. The fee is
+// applied on BOTH the /prices quote and the /transactions build, so the receive
+// amount shown to the user already reflects it. Disabled until a recipient is
+// set, so nothing is charged before then. A single EVM address works as the
+// claim wallet across every ParaSwap chain; with isDirectFeeTransfer=false the
+// fee accrues in ParaSwap's Fee Vault and is withdrawn per chain later.
+const PARASWAP_PARTNER         = "numpay";
+const PARASWAP_FEE_BPS: string         = "50";   // 0.5%
+const PARASWAP_FEE_RECIPIENT: string   = FEE_RECIPIENT;
+const PARASWAP_DIRECT_TRANSFER = false;  // false = Fee Vault accrual (claim later)
+const paraswapFeeActive = () => Boolean(PARASWAP_FEE_RECIPIENT) && PARASWAP_FEE_BPS !== "0";
+
+// KyberSwap integrator fee. Charged from the INPUT token (chargeFeeBy=currency_in)
+// so the quoted receive amount is exactly what the user gets regardless of how
+// Kyber reports amountOut. The fee params ride on the GET /routes call and come
+// back inside routeSummary.extraFee, which /route/build already passes through —
+// so the router sends the fee to FEE_RECIPIENT on-chain per swap (no later claim).
+// isInBps=true with feeAmount out of 10000, so 50 = 0.5%. Disabled if unset.
+const KYBER_FEE_BPS: string  = "50";
+const KYBER_CHARGE_BY        = "currency_in";
+const kyberFeeActive = () => Boolean(FEE_RECIPIENT) && KYBER_FEE_BPS !== "0";
 
 const ERC20_ABI = [
   "function name() view returns (string)",
@@ -253,9 +296,13 @@ function buildAllSwapTokens(
 
 async function fetchParaswapQuote(chainId: number, from: SwapToken, to: SwapToken, amt: string): Promise<RouteOption | null> {
   try {
-    const url = `${PARASWAP_API}/prices?srcToken=${from.address || NATIVE_ADDR}&srcDecimals=${from.decimals}` +
+    let url = `${PARASWAP_API}/prices?srcToken=${from.address || NATIVE_ADDR}&srcDecimals=${from.decimals}` +
       `&destToken=${to.address || NATIVE_ADDR}&destDecimals=${to.decimals}` +
-      `&amount=${ethers.parseUnits(amt, from.decimals)}&network=${chainId}&partner=numpay`;
+      `&amount=${ethers.parseUnits(amt, from.decimals)}&network=${chainId}&partner=${PARASWAP_PARTNER}`;
+    // Bake the partner fee into the quote so the shown receive amount is post-fee.
+    if (paraswapFeeActive()) {
+      url += `&partnerFeeBps=${PARASWAP_FEE_BPS}&partnerAddress=${PARASWAP_FEE_RECIPIENT}`;
+    }
     const res = await fetch(url);
     if (!res.ok) return null;
     const data = await res.json();
@@ -274,9 +321,14 @@ async function fetchKyberQuote(chainId: number, from: SwapToken, to: SwapToken, 
   const chain = KYBERSWAP_CHAIN[chainId];
   if (!chain) return null;
   try {
-    const url = `https://aggregator-api.kyberswap.com/${chain}/api/v1/routes` +
+    let url = `https://aggregator-api.kyberswap.com/${chain}/api/v1/routes` +
       `?tokenIn=${from.address || NATIVE_ADDR}&tokenOut=${to.address || NATIVE_ADDR}` +
       `&amountIn=${ethers.parseUnits(amt, from.decimals)}&saveGas=0&gasInclude=1`;
+    // Bake the integrator fee into the route; it returns inside routeSummary.extraFee
+    // and is enforced on-chain at build time. currency_in keeps the quote honest.
+    if (kyberFeeActive()) {
+      url += `&feeAmount=${KYBER_FEE_BPS}&chargeFeeBy=${KYBER_CHARGE_BY}&isInBps=true&feeReceiver=${FEE_RECIPIENT}`;
+    }
     const res = await fetch(url);
     if (!res.ok) return null;
     const data = await res.json();
@@ -288,6 +340,47 @@ async function fetchKyberQuote(chainId: number, from: SwapToken, to: SwapToken, 
       destAmount: parseFloat(ethers.formatUnits(rs.amountOut, to.decimals)).toFixed(Math.min(to.decimals, 6)),
       destAmountRaw: rs.amountOut, gasCostUSD: rs.gasUsd || "0",
       routeSummary: rs, kyberRouterAddress: data.data.routerAddress,
+    };
+  } catch { return null; }
+}
+
+async function fetchRelayQuote(
+  chainId: number, from: SwapToken, to: SwapToken, amt: string,
+  userAddr: string, slippagePct: number,
+): Promise<RouteOption | null> {
+  if (!RELAY_CHAINS.has(chainId) || !userAddr) return null;
+  try {
+    const body: any = {
+      user: userAddr,
+      recipient: userAddr,
+      originChainId: chainId,
+      destinationChainId: chainId,
+      originCurrency: from.address || RELAY_NATIVE,
+      destinationCurrency: to.address || RELAY_NATIVE,
+      amount: ethers.parseUnits(amt, from.decimals).toString(),
+      tradeType: "EXACT_INPUT",
+      slippageTolerance: String(Math.round(slippagePct * 100)), // bps
+      referrer: "numpay",
+    };
+    // Only attach the app fee when a collection wallet is configured.
+    if (RELAY_FEE_RECIPIENT && RELAY_APP_FEE_BPS !== "0") {
+      body.appFees = [{ recipient: RELAY_FEE_RECIPIENT, fee: RELAY_APP_FEE_BPS }];
+    }
+    const res = await fetch(`${RELAY_API}/quote`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const out = data?.details?.currencyOut?.amount;
+    if (!out || !data?.steps?.length) return null;
+    const gasUsd = data?.fees?.gas?.amountUsd ?? "0";
+    return {
+      provider: "relay", label: "Relay",
+      logo: "https://assets.relay.link/icon.png",
+      destAmount: parseFloat(ethers.formatUnits(out, to.decimals)).toFixed(Math.min(to.decimals, 6)),
+      destAmountRaw: String(out), gasCostUSD: String(gasUsd || "0"),
+      relaySteps: data.steps,
     };
   } catch { return null; }
 }
@@ -672,11 +765,12 @@ export default function Swap() {
       if (!net) return;
       setLoadingQuote(true); setQuoteError(""); setRouteOptions([]); setSelectedRoute(0);
       try {
-        const [ps, ky] = await Promise.all([
+        const [ps, ky, rl] = await Promise.all([
           fetchParaswapQuote(net.chainId, from, to, amt),
           fetchKyberQuote(net.chainId, from, to, amt),
+          fetchRelayQuote(net.chainId, from, to, amt, wallet.address, sanitizeSlippagePct(slippage)),
         ]);
-        const routes = [ps, ky].filter(Boolean) as RouteOption[];
+        const routes = [ps, ky, rl].filter(Boolean) as RouteOption[];
         if (routes.length > 0) {
           routes.sort((a, b) => parseFloat(b.destAmount) - parseFloat(a.destAmount));
           routes[0].tag = "Best";
@@ -874,7 +968,13 @@ export default function Swap() {
             srcToken: fromToken.address || NATIVE_ADDR, destToken: toToken.address || NATIVE_ADDR,
             srcAmount,
             slippage: Math.round(sanitizeSlippagePct(slippage) * 100),
-            userAddress: wallet.address, priceRoute: route.priceRoute, partner: "numpay",
+            userAddress: wallet.address, priceRoute: route.priceRoute, partner: PARASWAP_PARTNER,
+            // Partner fee must match the values baked into the quoted priceRoute.
+            ...(paraswapFeeActive() ? {
+              partnerAddress: PARASWAP_FEE_RECIPIENT,
+              partnerFeeBps: PARASWAP_FEE_BPS,
+              isDirectFeeTransfer: PARASWAP_DIRECT_TRANSFER,
+            } : {}),
           }),
         });
         if (!txRes.ok) { const e = await txRes.json().catch(() => ({})); throw new Error(e.error || `Build failed (${txRes.status})`); }
@@ -907,6 +1007,43 @@ export default function Swap() {
           gasLimit: txData.gas ? BigInt(txData.gas) : undefined,
         });
         setTxHash(tx.hash);
+      } else if (route.provider === "relay") {
+        // Relay returns ready-to-sign steps (an approval step for ERC-20 input,
+        // then the swap/deposit step). Its router/spender is dynamic per quote,
+        // so it cannot use the chain-constant whitelist that Kyber/ParaSwap do.
+        // Each step is instead bound by: chain-id match, contract-code, a native
+        // value bound, and a pre-broadcast simulation — and steps run in order so
+        // an approval is mined before the swap step is simulated.
+        const steps = route.relaySteps || [];
+        if (!steps.length) throw new Error("Relay returned no execution steps");
+        let lastHash = "";
+        for (const step of steps) {
+          for (const item of (step.items || [])) {
+            const d = item?.data;
+            if (!d?.to || !d?.data) continue;
+            if (item.status === "complete") continue;
+            if (d.chainId != null && Number(d.chainId) !== net.chainId) {
+              throw new Error(`Blocked for safety: Relay step targets chain ${d.chainId}, expected ${net.chainId}.`);
+            }
+            const value = d.value ? BigInt(d.value) : 0n;
+            // Native input: only the deposit step may carry value, never more than
+            // the amount being swapped. ERC-20 input: every step must carry zero.
+            if (isNativeSwap) {
+              if (value > srcAmountBn) {
+                throw new Error(`Blocked for safety: Relay step sends ${value} wei, more than the ${srcAmountBn} wei being swapped.`);
+              }
+            } else if (value !== 0n) {
+              throw new Error(`Blocked for safety: ERC-20 swap step should not send native value, but ${value} wei is attached.`);
+            }
+            await assertIsContract(signer.provider!, d.to);
+            await simulateOrThrow(signer, { to: d.to, data: d.data, value });
+            const tx = await signer.sendTransaction({ to: d.to, data: d.data, value });
+            await tx.wait();
+            lastHash = tx.hash;
+          }
+        }
+        if (!lastHash) throw new Error("Relay produced no signable transaction");
+        setTxHash(lastHash);
       } else {
         const kyberChain = KYBERSWAP_CHAIN[net.chainId];
         const buildRes = await fetch(`https://aggregator-api.kyberswap.com/${kyberChain}/api/v1/route/build`, {
@@ -1240,7 +1377,7 @@ export default function Swap() {
           <div className="flex items-center justify-between mb-5">
             <div>
               <h2 className="text-lg font-bold text-text-primary">{isBridge ? "Bridge" : "Swap"}</h2>
-              <p className="text-[10px] text-muted">{isBridge ? "Powered by LI.FI" : (fromToken.chainId === "solana" ? "Powered by Jupiter" : "ParaSwap · KyberSwap")}</p>
+              <p className="text-[10px] text-muted">{isBridge ? "Powered by LI.FI" : (fromToken.chainId === "solana" ? "Powered by Jupiter" : "ParaSwap · KyberSwap · Relay")}</p>
             </div>
             <button onClick={() => setShowSettings(!showSettings)}
               className="p-2 rounded-lg text-muted hover:text-text-primary hover:bg-surface-1 transition-colors">
@@ -1433,7 +1570,7 @@ export default function Swap() {
           {isLoading && (
             <div className="flex items-center gap-2 mb-4 px-3 py-2.5 rounded-xl bg-surface-1">
               <RefreshIcon size={13} className="text-brand-400 animate-spin flex-shrink-0" />
-              <p className="text-[11px] text-muted">{isBridge ? "Searching bridge routes…" : "Getting quotes from ParaSwap and KyberSwap…"}</p>
+              <p className="text-[11px] text-muted">{isBridge ? "Searching bridge routes…" : "Getting quotes from ParaSwap, KyberSwap and Relay…"}</p>
             </div>
           )}
 

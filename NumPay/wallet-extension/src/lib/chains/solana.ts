@@ -296,6 +296,30 @@ const JUP_SWAP = "https://lite-api.jup.ag/swap/v1";
 // Wrapped SOL mint — Jupiter's stand-in for native SOL on both sides of a swap.
 export const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
+// ── Jupiter platform fee (revenue) ───────────────────────────────────────────
+// Unlike the EVM aggregators, a Solana fee can ONLY be collected into a real SPL
+// token account (ATA) owned by a SOLANA wallet — an EVM fee address cannot hold
+// SPL tokens — and that ATA must already exist on-chain (Jupiter's /swap will not
+// create it). The fee is taken in one token, so a swap earns only when its input
+// or output mint is configured below. `platformFeeBps` rides on /quote and the
+// matching `feeAccount` on /swap. Disabled until at least one ATA is filled in.
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
+const JUP_FEE_BPS = "50"; // 0.5%
+// SPL mint → that token's ATA under your Solana fee wallet (must exist on-chain).
+const JUP_FEE_ATAS: Record<string, string> = {
+  [USDC_MINT]: "5Hkjinap4PzeM5fp6VKMxm7BoZ2RU9N7yAkX1e3tvHR", // fee wallet 3tgG96wN… USDC
+  [USDT_MINT]: "ZfVanBfkpvsK4iQJiGoMsu7KbmYdL3yu2ycuaLMx8kw", // fee wallet 3tgG96wN… USDT
+  [WSOL_MINT]: "", // <- your fee wallet's wrapped-SOL token account (not created yet)
+};
+const jupFeeActive = () => Object.values(JUP_FEE_ATAS).some(Boolean);
+// ExactIn lets the fee sit on either side; prefer the output mint, then the input.
+function jupiterFeeAccountFor(inputMint?: string, outputMint?: string): string | null {
+  if (!jupFeeActive()) return null;
+  const a = (outputMint && JUP_FEE_ATAS[outputMint]) || (inputMint && JUP_FEE_ATAS[inputMint]);
+  return a || null;
+}
+
 // A small curated set of popular Solana tokens for the swap "buy" side, so users
 // can swap into them even when they hold none yet. Held tokens are added separately.
 export const SOLANA_SWAP_TOKENS = [
@@ -351,8 +375,12 @@ export async function fetchJupiterQuote(
   inputMint: string, outputMint: string, amountRaw: string, slippageBps: number,
 ): Promise<JupiterQuote | null> {
   try {
-    const url = `${JUP_SWAP}/quote?inputMint=${inputMint}&outputMint=${outputMint}` +
+    let url = `${JUP_SWAP}/quote?inputMint=${inputMint}&outputMint=${outputMint}` +
       `&amount=${amountRaw}&slippageBps=${slippageBps}`;
+    // Bake the platform fee into the quote so the shown receive amount is post-fee.
+    // executeJupiterSwap re-derives the same feeAccount from the quote's mints, so
+    // the two stay consistent without threading extra state through the UI.
+    if (jupiterFeeAccountFor(inputMint, outputMint)) url += `&platformFeeBps=${JUP_FEE_BPS}`;
     const r = await fetch(url);
     if (!r.ok) return null;
     const d = await r.json();
@@ -639,6 +667,12 @@ export async function signSolanaTransaction(
 export async function executeJupiterSwap(
   secretKey: Uint8Array, userPublicKey: string, quoteRaw: any,
 ): Promise<string> {
+  // Collect the platform fee into our SPL fee account, but only when the quote
+  // was actually built with a platformFeeBps (same gate as fetchJupiterQuote).
+  // Derived from the quote's own mints so it can never disagree with the quote.
+  const feeAccount = quoteRaw?.platformFee
+    ? jupiterFeeAccountFor(quoteRaw?.inputMint, quoteRaw?.outputMint)
+    : null;
   const swapResp = await fetch(`${JUP_SWAP}/swap`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -647,6 +681,7 @@ export async function executeJupiterSwap(
       userPublicKey,
       wrapAndUnwrapSol: true,
       dynamicComputeUnitLimit: true,
+      ...(feeAccount ? { feeAccount } : {}),
       // Bounded priority fee (max 0.001 SOL) so the total cost of a swap is
       // predictable; "auto" could spend an uncapped estimate during congestion.
       prioritizationFeeLamports: {

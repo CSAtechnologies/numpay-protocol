@@ -34,6 +34,7 @@
     "https://aggregator-api.kyberswap.com/*",
     "https://*.paraswap.io/*",
     "https://li.quest/*",
+    "https://*.relay.link/*",
     "https://*.jup.ag/*",
     "https://*.coingecko.com/*",
     "https://*.dexscreener.com/*",
