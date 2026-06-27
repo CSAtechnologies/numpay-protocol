@@ -171,7 +171,9 @@ export function useWallet(): WalletState {
   const refresh = useCallback(async () => {
     if (!wallet) return;
     setLoading(true);
-    const provider = new ethers.JsonRpcProvider(network.rpcUrl);
+    // staticNetwork: skip the eth_chainId auto-detect round-trip — we already know
+    // the chain id, so there's no reason to ask the RPC for it on every provider.
+    const provider = new ethers.JsonRpcProvider(network.rpcUrl, network.chainId, { staticNetwork: true });
 
     try {
       const bal = await provider.getBalance(wallet.address);
@@ -244,18 +246,18 @@ export function useWallet(): WalletState {
 
     const allChainIds = [...AGGREGATE_CHAINS, ...customChainList.map((c) => c.id)];
 
-    // Live prices (15-min cached). On failure fall back to the static table so
-    // the sweep still completes offline.
-    let liveRates: Rates | null = null;
-    try { liveRates = await fetchRates(); } catch {}
-    const priceFor = (symbol: string) =>
-      (liveRates ? getUsdPrice(symbol, liveRates) : 0) || NATIVE_USD_PRICES[symbol] || 0;
+    // Kick off live prices (15-min cached) IN PARALLEL with the balance sweep.
+    // Balances don't need the price to fetch — only to compute their USD value —
+    // so we apply prices once both resolve. Removes the cold-start waterfall
+    // where every balance waited behind a CoinGecko call. Falls back to the
+    // static table when rates are unavailable so the sweep still completes offline.
+    const ratesPromise: Promise<Rates | null> = fetchRates().catch(() => null);
 
     const promises = allChainIds.map(async (chainId) => {
       const net = NETWORKS[chainId] || customNetMap[chainId];
       if (!net) return null;
       try {
-        const provider = new ethers.JsonRpcProvider(net.rpcUrl);
+        const provider = new ethers.JsonRpcProvider(net.rpcUrl, net.chainId, { staticNetwork: true });
         const bal = await Promise.race([
           provider.getBalance(wallet.address),
           new Promise<never>((_, r) => setTimeout(() => r(new Error("timeout")), EVM_TIMEOUT_MS)),
@@ -264,7 +266,7 @@ export function useWallet(): WalletState {
         const num = parseFloat(formatted);
         return {
           networkId: chainId, name: net.name, symbol: net.symbol, logo: net.logo,
-          balance: formatted, balanceNum: num, usdValue: num * priceFor(net.symbol),
+          balance: formatted, balanceNum: num, usdValue: 0,
         } as ChainBalance;
       } catch {
         // Mark as failed so we can retain the last-known balance below.
@@ -275,7 +277,9 @@ export function useWallet(): WalletState {
       }
     });
 
-    const settled = await Promise.all(promises);
+    const [settled, liveRates] = await Promise.all([Promise.all(promises), ratesPromise]);
+    const priceFor = (symbol: string) =>
+      (liveRates ? getUsdPrice(symbol, liveRates) : 0) || NATIVE_USD_PRICES[symbol] || 0;
     const anySuccess = settled.some((r) => r && !(r as any).failed);
 
     const results: ChainBalance[] = [];
@@ -288,6 +292,7 @@ export function useWallet(): WalletState {
         const { failed, ...zero } = r as ChainBalance & { failed: boolean };
         results.push(prev ?? (zero as ChainBalance));
       } else {
+        r.usdValue = r.balanceNum * priceFor(r.symbol);
         results.push(r);
       }
     }

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { ICON_DATA } from "../../lib/icons/iconData";
 import { ICON_GLYPHS } from "../../lib/icons/iconGlyphs";
+import { NETWORKS } from "../../lib/networks";
 
 interface IconProps {
   size?: number;
@@ -422,6 +423,20 @@ export function chainIconUrl(chainId: string): string | null {
   return s ? CHAIN_BASE + s + "?w=64&h=64" : null;
 }
 
+// Module-level memo of logo URLs that have failed to load, shared across every
+// FramedCoin instance. Without it, two icons with the SAME candidate list (e.g.
+// the BNB-chain corner badge on two different tokens) can disagree: if the
+// primary CDN flakes for one render but not the other, one shows the CDN logo
+// and the other falls through to a different-looking source. Recording failures
+// globally makes identical inputs converge on the same source — uniform badges.
+const failedLogoUrls = new Set<string>();
+
+// First candidate index that isn't already known to have failed.
+function firstViableIdx(srcs: string[]): number {
+  for (let i = 0; i < srcs.length; i++) if (!failedLogoUrls.has(srcs[i])) return i;
+  return srcs.length;
+}
+
 // ── FramedCoin — house disc + ring, walks candidate logo URLs then the SVG ─────
 function FramedCoin({
   sources,
@@ -436,9 +451,11 @@ function FramedCoin({
 }) {
   const srcs = sources.filter(Boolean);
   const listKey = srcs.join("|");
-  const [idx, setIdx] = useState(0);
+  const [idx, setIdx] = useState(() => firstViableIdx(srcs));
 
-  useEffect(() => { setIdx(0); }, [listKey]);
+  // Re-evaluate the starting source whenever the candidate list changes, skipping
+  // any URL another instance has already proven dead.
+  useEffect(() => { setIdx(firstViableIdx(srcs)); }, [listKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const exhausted = idx >= srcs.length;
 
@@ -450,7 +467,14 @@ function FramedCoin({
           alt={alt}
           loading="lazy"
           referrerPolicy="no-referrer"
-          onError={() => setIdx((i) => i + 1)}
+          onError={() => {
+            failedLogoUrls.add(srcs[idx]);
+            setIdx((cur) => {
+              let n = cur + 1;
+              while (n < srcs.length && failedLogoUrls.has(srcs[n])) n++;
+              return n;
+            });
+          }}
         />
       ) : (
         <span className="coin-fb" dangerouslySetInnerHTML={{ __html: fallbackSvg }} />
@@ -458,6 +482,15 @@ function FramedCoin({
     </span>
   );
 }
+
+// Base rebranded in 2025 from the blue circle to "The Square" (official brand-kit
+// path, fill #0000FF). DefiLlama and most CDNs still serve the old circle, so we
+// render the current mark locally. The viewBox is padded so the rounded square
+// reads as a square on the circular disc instead of being cropped back to a circle.
+const BASE_SQUARE_SVG =
+  '<svg viewBox="-280 -280 1840 1840" xmlns="http://www.w3.org/2000/svg">' +
+  '<rect x="-400" y="-400" width="2080" height="2080" fill="#ffffff"/>' +
+  '<path fill="#0000FF" d="M0,101.12c0-34.64,0-51.95,6.53-65.28,6.25-12.76,16.56-23.07,29.32-29.32C49.17,0,66.48,0,101.12,0h1077.76c34.63,0,51.96,0,65.28,6.53,12.75,6.25,23.06,16.56,29.32,29.32,6.52,13.32,6.52,30.64,6.52,65.28v1077.76c0,34.63,0,51.96-6.52,65.28-6.26,12.75-16.57,23.06-29.32,29.32-13.32,6.52-30.65,6.52-65.28,6.52H101.12c-34.64,0-51.95,0-65.28-6.52-12.76-6.26-23.07-16.57-29.32-29.32-6.53-13.32-6.53-30.65-6.53-65.28V101.12Z"/></svg>';
 
 // ── ChainIcon component ────────────────────────────────────────────────────────
 // Real chain logo (DefiLlama, by slug) → app-supplied logo → drawn fallback.
@@ -470,8 +503,80 @@ export function ChainIcon({
   logo?: string;
   size?: number;
 }) {
-  const sources = [chainIconUrl(chainId) || "", logo || ""];
+  // Base: skip the stale CDN circle and render the current Square mark directly.
+  if (chainId === "base") {
+    return <FramedCoin sources={[]} fallbackSvg={BASE_SQUARE_SVG} alt="base" size={size} />;
+  }
+  // Deterministic source order keyed by chainId, so EVERY icon/badge for a chain
+  // resolves to the same logo instead of racing the CDN per render (which made
+  // same-chain corner badges disagree): the app's canonical network logo first
+  // (reliable, one URL per chain), then the DefiLlama mark, then any caller-
+  // supplied logo, then the drawn fallback. De-duped so no URL is tried twice.
+  const sources = Array.from(
+    new Set([NETWORKS[chainId]?.logo || "", chainIconUrl(chainId) || "", logo || ""].filter(Boolean)),
+  );
   return <FramedCoin sources={sources} fallbackSvg={chainFallbackSvg(chainId)} alt={chainId} size={size} />;
+}
+
+// ETH-L2 chains whose native gas token is ETH. Only for these does a native-coin
+// row swap the generic ETH diamond for the CHAIN mark (e.g. Base's Square, the
+// Arbitrum / Optimism logo), since "ETH on Arbitrum" reads more clearly as the
+// chain. Everything else keeps its own symbol logo.
+const ETH_L2_CHAINS = new Set([
+  "arbitrum", "optimism", "base", "zksync",
+  "scroll", "linea", "blast", "polygonzkevm",
+]);
+
+// ── AssetIcon ──────────────────────────────────────────────────────────────────
+// The symbol-keyed brand logo (TokenIcon) is the rule for every asset — token or
+// native coin — so each ticker shows its own logo from the icon set (override
+// file first, then the CDN fallback). The ONLY exception: a native coin on an
+// ETH-L2 (no token address + chainId in ETH_L2_CHAINS) renders that chain's mark
+// instead of the shared ETH diamond. Non-L2 native coins (BTC, SOL, BNB, mainnet
+// ETH) and all ERC-20 / SPL tokens fall through to their own symbol logo. Use
+// this everywhere a token/coin is shown so presentation is identical across
+// Dashboard, Swap, Bridge, Send, TokenDetail, etc.
+export function AssetIcon({
+  symbol,
+  logo,
+  chainId,
+  address,
+  size = 24,
+}: {
+  symbol: string;
+  logo?: string;
+  chainId?: string;
+  address?: string;
+  size?: number;
+}) {
+  if (!address && chainId && ETH_L2_CHAINS.has(chainId))
+    return <ChainIcon chainId={chainId} logo={logo} size={size} />;
+  return <TokenIcon symbol={symbol} logo={logo} size={size} />;
+}
+
+// ── ChainBadge — the small "sub" chain mark in the bottom-right corner of a token
+// icon. One uniform treatment everywhere: a fixed-size chain coin (same resolver
+// + house disc as ChainIcon) with a page-coloured ring punched around it so it
+// stays legible against the token behind. Render inside a `relative` parent,
+// right after the main AssetIcon/TokenIcon. Replaces the ad-hoc raw-<img> /
+// bare-ChainIcon corner badges that previously differed in source, size, and ring.
+export function ChainBadge({
+  chainId,
+  logo,
+  size = 14,
+}: {
+  chainId: string;
+  logo?: string;
+  size?: number;
+}) {
+  return (
+    <span
+      className="absolute -bottom-0.5 -right-0.5 rounded-full ring-1 ring-surface-0"
+      style={{ width: size, height: size }}
+    >
+      <ChainIcon chainId={chainId} logo={logo} size={size} />
+    </span>
+  );
 }
 
 // ── TokenIcon component ───────────────────────────────────────────────────────

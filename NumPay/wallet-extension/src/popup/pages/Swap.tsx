@@ -17,7 +17,7 @@ import {
 import Layout from "../components/Layout";
 import TxResultOverlay, { type TxFxStatus } from "../components/TxResultOverlay";
 import {
-  SwapIcon, ChevronDownIcon, SettingsIcon, TokenIcon, ChainIcon,
+  SwapIcon, ChevronDownIcon, SettingsIcon, ChainIcon, ChainBadge, AssetIcon,
   SearchIcon, ArrowLeftIcon, AlertIcon, ExternalLinkIcon, RefreshIcon, CheckIcon,
   LayersIcon, ShieldIcon,
 } from "../components/Icons";
@@ -1241,7 +1241,7 @@ export default function Swap() {
       return (
         <button key={key} onClick={() => selectToken(t)}
           className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-surface-1 transition-colors mb-0.5 ${isSel ? "bg-brand-500/5" : ""}`}>
-          <div className="flex-shrink-0"><TokenIcon symbol={t.symbol} logo={t.logo} size={36} /></div>
+          <div className="flex-shrink-0"><AssetIcon symbol={t.symbol} logo={t.logo} chainId={t.chainId} address={t.address} size={36} /></div>
           <div className="text-left flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <p className={`text-[13px] font-semibold truncate ${isSel ? "text-brand-400" : "text-text-primary"}`}>{t.symbol}</p>
@@ -1324,10 +1324,8 @@ export default function Swap() {
                 <div className="premium-card p-3.5">
                   <div className="flex items-center gap-3 mb-3">
                     <div className="relative flex-shrink-0">
-                      <TokenIcon symbol={importToken.symbol} logo={importToken.logo} size={40} />
-                      <div className="absolute -bottom-0.5 -right-0.5">
-                        <ChainIcon chainId={importToken.chainId} logo={NETWORKS[importToken.chainId]?.logo} size={14} />
-                      </div>
+                      <AssetIcon symbol={importToken.symbol} logo={importToken.logo} chainId={importToken.chainId} address={importToken.address} size={40} />
+                      <ChainBadge chainId={importToken.chainId} logo={NETWORKS[importToken.chainId]?.logo} />
                     </div>
                     <div>
                       <p className="text-[14px] font-bold text-text-primary">{importToken.symbol}</p>
@@ -1434,10 +1432,10 @@ export default function Swap() {
               <button onClick={() => { setPickerSearch(""); setPickerChain(null); setPickerMode("from"); }}
                 className="flex items-center gap-2 pl-2 pr-3 py-2 rounded-2xl bg-surface-2 hover:bg-surface-3 transition-colors flex-shrink-0">
                 <div className="relative">
-                  <TokenIcon symbol={fromToken.symbol} logo={fromToken.logo} size={26} />
-                  <div className="absolute -bottom-0.5 -right-0.5">
-                    <ChainIcon chainId={fromToken.chainId} logo={fromNetObj?.logo} size={13} />
-                  </div>
+                  <AssetIcon symbol={fromToken.symbol} logo={fromToken.logo} chainId={fromToken.chainId} address={fromToken.address} size={26} />
+                  {fromToken.address && (
+                    <ChainBadge chainId={fromToken.chainId} logo={fromNetObj?.logo} />
+                  )}
                 </div>
                 <div className="text-left">
                   <p className="text-[13px] font-bold text-text-primary leading-tight">{fromToken.symbol}</p>
@@ -1501,10 +1499,10 @@ export default function Swap() {
               <button onClick={() => { setPickerSearch(""); setPickerChain(null); setPickerMode("to"); }}
                 className="flex items-center gap-2 pl-2 pr-3 py-2 rounded-2xl bg-surface-2 hover:bg-surface-3 transition-colors flex-shrink-0">
                 <div className="relative">
-                  <TokenIcon symbol={toToken.symbol} logo={toToken.logo} size={26} />
-                  <div className="absolute -bottom-0.5 -right-0.5">
-                    <ChainIcon chainId={toToken.chainId} logo={toNet?.logo} size={13} />
-                  </div>
+                  <AssetIcon symbol={toToken.symbol} logo={toToken.logo} chainId={toToken.chainId} address={toToken.address} size={26} />
+                  {toToken.address && (
+                    <ChainBadge chainId={toToken.chainId} logo={toNet?.logo} />
+                  )}
                 </div>
                 <div className="text-left">
                   <p className="text-[13px] font-bold text-text-primary leading-tight">{toToken.symbol}</p>

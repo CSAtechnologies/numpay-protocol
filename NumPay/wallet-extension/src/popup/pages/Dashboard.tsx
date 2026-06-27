@@ -79,7 +79,7 @@ import Layout from "../components/Layout";
 import PasswordPrompt from "../components/PasswordPrompt";
 import {
   LockIcon, CopyIcon, ReceiveIcon, RefreshIcon,
-  ChevronDownIcon, ChevronRightIcon, ArrowUpRightIcon, ChainIcon, CheckIcon, TokenIcon,
+  ChevronDownIcon, ChevronRightIcon, ArrowUpRightIcon, ChainIcon, ChainBadge, CheckIcon, AssetIcon,
   SwapIcon, LayersIcon, HashIcon,
 } from "../components/Icons";
 
@@ -947,12 +947,9 @@ export default function Dashboard({ onLock }: Props) {
             >
               <div className="flex items-center gap-3">
                 <div className="relative flex-shrink-0">
-                  <TokenIcon symbol={token.symbol} logo={token.logo} size={36} />
-                  {!token.isNative && token.chainLogo && (
-                    <div className="absolute -bottom-0.5 -right-0.5 w-[14px] h-[14px] rounded-full overflow-hidden ring-1 ring-surface-0">
-                      <img src={token.chainLogo} alt={token.chainName} className="w-full h-full object-cover"
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                    </div>
+                  <AssetIcon symbol={token.symbol} logo={token.logo} chainId={token.chainId} address={token.address} size={36} />
+                  {!token.isNative && token.chainId && (
+                    <ChainBadge chainId={token.chainId} logo={token.chainLogo} />
                   )}
                 </div>
                 <div>
@@ -999,7 +996,7 @@ export default function Dashboard({ onLock }: Props) {
                     onClick={() => navigate("/token", { state: token })}
                   >
                     <div className="flex items-center gap-2.5">
-                      <TokenIcon symbol={token.symbol} logo={token.logo} size={28} />
+                      <AssetIcon symbol={token.symbol} logo={token.logo} chainId={token.chainId} address={token.address} size={28} />
                       <div>
                         <p className="text-xs font-medium text-text-primary">{token.symbol}</p>
                         <p className="text-[10px] text-muted">{token.chainName}</p>

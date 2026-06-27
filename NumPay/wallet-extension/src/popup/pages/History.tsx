@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useWallet } from "../hooks/useWallet";
 import Layout from "../components/Layout";
-import { SendIcon, ReceiveIcon, ExternalLinkIcon, RefreshIcon, ActivityIcon, ChainIcon } from "../components/Icons";
+import { SendIcon, ReceiveIcon, ExternalLinkIcon, RefreshIcon, ActivityIcon, ChainBadge } from "../components/Icons";
 import { NETWORKS } from "@/lib/networks";
 import {
   type TxRecord,
@@ -166,9 +166,7 @@ export default function History() {
                         its own branded per-chain fallback, so no chain falls back to
                         a bare initial. */}
                     {isAllChains && tx.chainId && (
-                      <div className="absolute -bottom-0.5 -right-0.5 w-[14px] h-[14px] rounded-full overflow-hidden ring-1 ring-surface-0">
-                        <ChainIcon chainId={tx.chainId} logo={NETWORKS[tx.chainId]?.logo} size={14} />
-                      </div>
+                      <ChainBadge chainId={tx.chainId} logo={NETWORKS[tx.chainId]?.logo} />
                     )}
                   </div>
 

@@ -3,7 +3,7 @@ import QRCode from "qrcode";
 import { useLocation } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
 import Layout from "../components/Layout";
-import { CopyIcon, CheckIcon, ChevronDownIcon } from "../components/Icons";
+import { CopyIcon, CheckIcon, ChevronDownIcon, ChainIcon } from "../components/Icons";
 import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
 
 const TW = "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains";
@@ -151,12 +151,7 @@ export default function Receive() {
             onClick={() => setShowChainPicker(!showChainPicker)}
             className="w-full premium-card px-3.5 py-2.5 text-left flex items-center gap-2.5"
           >
-            <img
-              src={selectedChain.logo}
-              alt=""
-              className="w-5 h-5 rounded-full bg-surface-3"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-            />
+            <ChainIcon chainId={selectedChainId} logo={selectedChain.logo} size={20} />
             <span className="text-[13px] font-medium text-text-primary flex-1">{chainDisplayName}</span>
             <ChevronDownIcon size={14} className={`text-muted transition-transform duration-200 ${showChainPicker ? "rotate-180" : ""}`} />
           </button>
@@ -199,12 +194,7 @@ export default function Receive() {
                         : "text-text-primary hover:bg-surface-2"
                     }`}
                   >
-                    <img
-                      src={c.logo}
-                      alt=""
-                      className="w-5 h-5 rounded-full bg-surface-3"
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                    />
+                    <ChainIcon chainId={c.id} logo={c.logo} size={20} />
                     <span className="font-medium flex-1 text-left">{c.name} ({c.symbol})</span>
                     {c.id === selectedChainId && <CheckIcon size={14} className="text-brand-400" />}
                     {isDisabled && <span className="text-[10px] text-muted">No mnemonic</span>}

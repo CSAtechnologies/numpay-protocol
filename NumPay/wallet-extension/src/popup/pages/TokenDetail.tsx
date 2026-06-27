@@ -5,10 +5,11 @@ import { useCurrency } from "../hooks/useCurrency";
 import Layout from "../components/Layout";
 import {
   ArrowLeftIcon, SendIcon, ReceiveIcon, ExternalLinkIcon,
-  TrendingUpIcon, TokenIcon, ChainIcon, RefreshIcon, SwapIcon,
+  TrendingUpIcon, AssetIcon, RefreshIcon, SwapIcon,
 } from "../components/Icons";
 import { NETWORKS } from "@/lib/networks";
 import { type TxRecord, fetchChainHistory, tokenMetaFromList } from "@/lib/txHistory";
+import { getItem, setItem } from "@/lib/storage";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -147,6 +148,28 @@ async function fetchPriceChart(coinId: string, days: number): Promise<[number, n
   }
 }
 
+// CoinGecko's free tier is slow and rate-limited, so market data + chart series
+// are cached per coin/range (stale-while-revalidate). A reopen paints instantly
+// from cache; a background refetch keeps it current once the cache goes stale.
+const MARKET_TTL = 3 * 60 * 1000; // 3 minutes
+
+// Read a fresh-or-stale cached value. Returns { value, fresh } or null on miss.
+async function readCache<T>(key: string, ttl: number): Promise<{ value: T; fresh: boolean } | null> {
+  try {
+    const raw = await getItem(key);
+    if (!raw) return null;
+    const { ts, value } = JSON.parse(raw) as { ts: number; value: T };
+    if (value == null) return null;
+    return { value, fresh: Date.now() - ts < ttl };
+  } catch {
+    return null;
+  }
+}
+
+function writeCache<T>(key: string, value: T): void {
+  setItem(key, JSON.stringify({ ts: Date.now(), value })).catch(() => {});
+}
+
 // ── Formatters ────────────────────────────────────────────────────────────────
 
 function fmtLarge(n: number): string {
@@ -190,18 +213,41 @@ export default function TokenDetail() {
     [tokensByChain, token?.chainId]
   );
 
-  // Fetch market data once
+  // Market data — cache-first, revalidate when stale
   useEffect(() => {
     if (!coinId) return;
-    setMarketLoading(true);
-    fetchMarketData(coinId).then((d) => { setMarket(d); setMarketLoading(false); });
+    let cancelled = false;
+    (async () => {
+      const key = `mktcache_${coinId}`;
+      const cached = await readCache<MarketData>(key, MARKET_TTL);
+      if (cancelled) return;
+      if (cached) { setMarket(cached.value); setMarketLoading(false); if (cached.fresh) return; }
+      else setMarketLoading(true);
+      const d = await fetchMarketData(coinId);
+      if (cancelled) return;
+      if (d) { setMarket(d); writeCache(key, d); }
+      setMarketLoading(false);
+    })();
+    return () => { cancelled = true; };
   }, [coinId]);
 
-  // Fetch chart when range changes
+  // Chart — cache-first per range, revalidate when stale
   useEffect(() => {
     if (!coinId) return;
-    setChartLoading(true);
-    fetchPriceChart(coinId, RANGES[rangeIdx].days).then((p) => { setChartPrices(p); setChartLoading(false); });
+    let cancelled = false;
+    const days = RANGES[rangeIdx].days;
+    (async () => {
+      const key = `chartcache_${coinId}_${days}`;
+      const cached = await readCache<[number, number][]>(key, MARKET_TTL);
+      if (cancelled) return;
+      if (cached) { setChartPrices(cached.value); setChartLoading(false); if (cached.fresh) return; }
+      else setChartLoading(true);
+      const p = await fetchPriceChart(coinId, days);
+      if (cancelled) return;
+      if (p.length) { setChartPrices(p); writeCache(key, p); }
+      setChartLoading(false);
+    })();
+    return () => { cancelled = true; };
   }, [coinId, rangeIdx]);
 
   // Fetch transaction history for this chain, then narrow to THIS token: native
@@ -256,7 +302,7 @@ export default function TokenDetail() {
           <ArrowLeftIcon size={15} />
         </button>
         <div className="flex items-center gap-2.5 flex-1 min-w-0">
-          <TokenIcon symbol={token.symbol} logo={token.logo} size={32} />
+          <AssetIcon symbol={token.symbol} logo={token.logo} chainId={token.chainId} address={token.address} size={32} />
           <div className="min-w-0">
             <p className="text-[14px] font-semibold text-text-primary leading-tight truncate">{token.name}</p>
             <p className="text-[11px] text-muted">{token.chainName}</p>
@@ -374,9 +420,7 @@ export default function TokenDetail() {
                 {sym}{balanceUsd.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </p>
             </div>
-            {token.chainId && (
-              <ChainIcon chainId={token.chainId} size={28} />
-            )}
+            <AssetIcon symbol={token.symbol} logo={token.logo} chainId={token.chainId} address={token.address} size={28} />
           </div>
         </div>
       </div>
