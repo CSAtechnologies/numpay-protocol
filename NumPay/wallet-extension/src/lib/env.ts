@@ -13,6 +13,10 @@ export const MORALIS_KEY = import.meta.env.VITE_MORALIS_KEY ?? "";
 // fallback to Moralis so token detection survives one provider's quota.
 // Optional: when empty, the GoldRush layer is simply skipped.
 export const GOLDRUSH_KEY = import.meta.env.VITE_GOLDRUSH_KEY ?? "";
+// Helius — preferred Solana mainnet RPC for balances + token reads. When set it
+// replaces the Alchemy Solana endpoint (see src/lib/chains/solana.ts); when
+// empty, Solana falls back to Alchemy. Optional, like the others.
+export const HELIUS_KEY = import.meta.env.VITE_HELIUS_KEY ?? "";
 
 if (import.meta.env.DEV && !ALCHEMY_KEY) {
   console.warn("[NumPay] VITE_ALCHEMY_KEY is not set — Alchemy-backed RPCs will fail. Copy .env.example to .env.");

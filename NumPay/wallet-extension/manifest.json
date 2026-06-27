@@ -27,6 +27,7 @@
     "https://*.sui.io/*",
     "https://*.rpcpool.com/*",
     "https://*.nodeinfra.com/*",
+    "https://*.helius-rpc.com/*",
     "https://xrplcluster.com/*",
     "https://*.trongrid.io/*",
     "https://blockstream.info/*",

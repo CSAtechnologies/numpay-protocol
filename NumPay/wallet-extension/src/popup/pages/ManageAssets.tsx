@@ -5,9 +5,7 @@ import { NETWORKS } from "@/lib/networks";
 import { BPAN_CHAINS } from "@/lib/networks";
 import { getCustomTokens, addCustomToken, removeCustomToken, type CustomToken } from "@/lib/customTokens";
 import { getCustomChains, saveCustomChain, removeCustomChain, type CustomChain } from "@/lib/customChains";
-import { ALCHEMY_KEY } from "@/lib/env";
-
-const SOL_RPC = `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
+import { SOL_RPC } from "@/lib/chains/solana";
 
 const ERC20_ABI = [
   "function symbol() view returns (string)",

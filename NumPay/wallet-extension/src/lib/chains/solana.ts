@@ -8,12 +8,17 @@ import bs58 from "bs58";
 import { ethers } from "ethers";
 import { sha256 } from "@noble/hashes/sha256";
 import { ed25519 } from "@noble/curves/ed25519";
-import { ALCHEMY_KEY, MORALIS_KEY } from "../env";
+import { ALCHEMY_KEY, MORALIS_KEY, HELIUS_KEY } from "../env";
 
 // Solana BIP44 derivation path
 const SOL_DERIVATION_PATH = "m/44'/501'/0'/0'";
 
-const SOL_RPC = `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
+// Prefer Helius for Solana balances + token reads when its key is set; fall back
+// to Alchemy's Solana endpoint otherwise. Single canonical endpoint for every
+// Solana JSON-RPC call below.
+export const SOL_RPC = HELIUS_KEY
+  ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`
+  : `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
 
 /**
  * Derive a Solana address from a BIP39 mnemonic.

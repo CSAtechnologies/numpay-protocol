@@ -12,6 +12,7 @@
 
 import { NETWORKS } from "@/lib/networks";
 import { ALCHEMY_KEY, MORALIS_KEY } from "@/lib/env";
+import { SOL_RPC } from "@/lib/chains/solana";
 
 export interface TxRecord {
   hash: string;
@@ -360,7 +361,7 @@ function parseSolanaTx(tx: any, address: string, sig: any, tokenMeta: TokenMeta)
 }
 
 async function fetchSolana(address: string, tokenMeta: TokenMeta): Promise<TxRecord[]> {
-  const rpc = `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
+  const rpc = SOL_RPC;
   try {
     const sigData = await fetch(rpc, {
       method: "POST", headers: { "Content-Type": "application/json" },
