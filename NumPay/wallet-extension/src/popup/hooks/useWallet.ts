@@ -60,7 +60,7 @@ export interface WalletState {
   nonEvmLoading: boolean;
   walletMetas: VaultMeta[];
   activeWalletId: string;
-  switchActiveWallet: (id: string, password: string) => Promise<void>;
+  switchActiveWallet: (id: string, password?: string) => Promise<void>;
   addWalletToSession: (wallet: WalletData, id: string, meta: VaultMeta) => Promise<void>;
   removeWalletMeta: (id: string) => void;
   setWalletAvatar: (id: string, avatar: string) => Promise<void>;
@@ -497,16 +497,31 @@ export function useWallet(): WalletState {
     return "";
   }, [activeChainId, wallet, nonEvmWallet, customChains]);
 
-  // Switching wallets decrypts the target vault on demand, because only the
-  // active wallet's keys are kept in session at a time (decrypt-only-active).
-  // The caller must supply the password; an incorrect one throws so the UI can
-  // surface it. On success the session is replaced so it holds ONLY the new
-  // active wallet.
-  const switchActiveWallet = useCallback(async (id: string, password: string) => {
+  // Switch to another wallet. With "unlock all" semantics every wallet that
+  // shares the unlock password is already decrypted in the session, so the
+  // switch is instant and needs no password: it just re-points activeId while
+  // leaving the other unlocked wallets in place. A wallet that is NOT in the
+  // session (encrypted under a different password) throws PasswordRequired so
+  // the caller can prompt; passing `password` then decrypts it on demand and
+  // adds it to the session.
+  const switchActiveWallet = useCallback(async (id: string, password?: string) => {
     if (id === activeWalletId) return;
-    const { wallet: walletData } = await unlockActiveVault(password, id);
 
-    const session: WalletSession = { activeId: id, wallets: { [id]: walletData } };
+    const raw = await getSession(SESSION_KEY);
+    const session: WalletSession = raw ? JSON.parse(raw) : { activeId: id, wallets: {} };
+
+    let walletData = session.wallets?.[id];
+    if (!walletData) {
+      if (!password) {
+        const err = new Error("PasswordRequired");
+        err.name = "PasswordRequired";
+        throw err;
+      }
+      walletData = (await unlockActiveVault(password, id)).wallet;
+      session.wallets = { ...session.wallets, [id]: walletData };
+    }
+
+    session.activeId = id;
     await setSession(SESSION_KEY, JSON.stringify(session));
     await setActiveId(id);
     await touchActivity();
@@ -524,10 +539,13 @@ export function useWallet(): WalletState {
   }, [activeWalletId]);
 
   // Adding a freshly created/imported wallet makes it active. We already hold
-  // its plaintext, so no decrypt is needed; the session is replaced to hold
-  // ONLY the new active wallet (decrypt-only-active).
+  // its plaintext, so no decrypt is needed; it is merged into the session
+  // alongside the other unlocked wallets so switching between them stays instant.
   const addWalletToSession = useCallback(async (walletData: WalletData, id: string, meta: VaultMeta) => {
-    const session: WalletSession = { activeId: id, wallets: { [id]: walletData } };
+    const raw = await getSession(SESSION_KEY);
+    const session: WalletSession = raw ? JSON.parse(raw) : { activeId: id, wallets: {} };
+    session.wallets = { ...session.wallets, [id]: walletData };
+    session.activeId = id;
     await setSession(SESSION_KEY, JSON.stringify(session));
     await setActiveId(id);
     await touchActivity();
@@ -583,4 +601,21 @@ export async function cacheWalletSession(wallet: WalletData, id: string): Promis
   await touchActivity();
   // unlock/create/import changes the exposed account (EVM + Solana)
   notifyDappState(await solAddressForNotify(wallet));
+}
+
+// Unlock-all: cache every decrypted wallet in one session blob so account
+// switching afterwards needs no password. `preferredActiveId` (the previously
+// active wallet) stays active when present, else the first decrypted wallet is.
+export async function cacheUnlockedWallets(
+  decrypted: Array<{ id: string; wallet: WalletData }>,
+  preferredActiveId?: string
+): Promise<void> {
+  const wallets: Record<string, WalletData> = {};
+  for (const { id, wallet } of decrypted) wallets[id] = wallet;
+  const activeId =
+    preferredActiveId && wallets[preferredActiveId] ? preferredActiveId : decrypted[0].id;
+  const session: WalletSession = { activeId, wallets };
+  await setSession(SESSION_KEY, JSON.stringify(session));
+  await touchActivity();
+  notifyDappState(await solAddressForNotify(wallets[activeId]));
 }

@@ -310,7 +310,13 @@ export default function Settings({ onLock, onReset }: Props) {
                     <span className="text-[10px] text-brand-400 font-medium">Active</span>
                   ) : (
                     <button
-                      onClick={() => setPendingSwitchId(meta.id)}
+                      onClick={async () => {
+                        try {
+                          await switchActiveWallet(meta.id);
+                        } catch (e) {
+                          if ((e as Error).name === "PasswordRequired") setPendingSwitchId(meta.id);
+                        }
+                      }}
                       className="text-[11px] text-brand-400 hover:text-brand-300 font-medium px-2 py-1 rounded-lg hover:bg-brand-500/10 transition-colors"
                     >
                       Switch

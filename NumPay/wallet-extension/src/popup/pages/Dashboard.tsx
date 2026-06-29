@@ -507,12 +507,18 @@ export default function Dashboard({ onLock }: Props) {
                   </span>
                 </button>
 
-                {/* Wallet name + address — click to switch (prompts for password) */}
+                {/* Wallet name + address — click to switch. Instant when the
+                    target is already unlocked; only a wallet under a different
+                    password falls back to the password prompt. */}
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (meta.id === activeWalletId) { setShowWallets(false); return; }
-                    setPendingSwitchId(meta.id);
                     setShowWallets(false);
+                    try {
+                      await switchActiveWallet(meta.id);
+                    } catch (e) {
+                      if ((e as Error).name === "PasswordRequired") setPendingSwitchId(meta.id);
+                    }
                   }}
                   className={`flex-1 flex items-center gap-2 px-2 py-2.5 text-[13px] hover:bg-surface-3 transition-colors ${
                     meta.id === activeWalletId ? "text-brand-400" : "text-text-primary"

@@ -2,7 +2,6 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { hasWallet, isLocked, touchActivity, lockWallet } from "@/lib/wallet";
 import { CurrencyProvider } from "./contexts/CurrencyContext";
-import NumPayLogo from "./components/NumPayLogo";
 
 import Welcome from "./pages/Welcome";
 import CreateWallet from "./pages/CreateWallet";
@@ -23,19 +22,9 @@ type AppState = "loading" | "onboarding" | "locked" | "unlocked";
 
 export default function App() {
   const [state, setState] = useState<AppState>("loading");
-  // One-time open splash: the logo assembles, then fades to reveal the wallet.
-  // The popup remounts every time it is opened, so this plays on each open.
-  const [splash, setSplash] = useState(true);
-  const [splashOut, setSplashOut] = useState(false);
 
   useEffect(() => {
     checkState();
-  }, []);
-
-  useEffect(() => {
-    const t1 = setTimeout(() => setSplashOut(true), 1150);
-    const t2 = setTimeout(() => setSplash(false), 1480);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
   async function checkState() {
@@ -126,16 +115,5 @@ export default function App() {
     );
   })();
 
-  return (
-    <>
-      {content}
-      {splash && (
-        <div
-          className={`fixed inset-0 z-[100] flex items-center justify-center bg-surface-0 ${splashOut ? "animate-fade-out" : "animate-fade-in"}`}
-        >
-          <NumPayLogo size={132} animate variant="filled" />
-        </div>
-      )}
-    </>
-  );
+  return content;
 }
