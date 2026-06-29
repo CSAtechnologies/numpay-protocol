@@ -277,12 +277,16 @@ const solana: SolanaProvider = {
 
 // ── Wallet Standard wallet ───────────────────────────────────────────────────────
 
+// The real NumPay brand mark (rounded tile + N body with its foot bump), traced
+// from logo.png, so dApp wallet pickers show the logo rather than a drawn glyph.
 const ICON =
   "data:image/svg+xml;base64," +
   btoa(
-    '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">' +
-      '<rect width="96" height="96" rx="22" fill="#6d28d9"/>' +
-      '<path d="M30 68V28h7l22 27V28h7v40h-7L37 41v27z" fill="#fff"/></svg>'
+    '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="6 6 88 88">' +
+      '<rect x="6" y="6" width="88" height="88" rx="13.2" fill="#786EE9"/>' +
+      '<path fill="#fff" d="M23.22 22.93 L35.14 22.93 L66.37 53.79 L66.56 23.12 L76.4 23.12 L76.4 62.68 L60.88 62.68 L33.63 35.62 L33.44 62.3 L23.22 62.3 Z"/>' +
+      '<path fill="#fff" d="M41.39 53.3 L56.72 67.98 L76.4 67.98 L76.4 77.07 L23.22 77.07 L23.22 67.98 L41.39 67.98 Z"/>' +
+      "</svg>"
   );
 
 async function standardConnect(input?: { silent?: boolean }): Promise<{ accounts: readonly WalletAccount[] }> {
