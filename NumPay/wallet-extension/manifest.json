@@ -39,6 +39,7 @@
     "https://*.jup.ag/*",
     "https://*.coingecko.com/*",
     "https://*.dexscreener.com/*",
+    "https://api.geckoterminal.com/*",
     "https://*.moralis.io/*",
     "https://*.covalenthq.com/*",
     "https://*.tronscanapi.com/*",

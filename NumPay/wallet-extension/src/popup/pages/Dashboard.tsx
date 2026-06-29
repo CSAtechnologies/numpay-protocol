@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import { fetchDexPrices } from "@/lib/tokenMarket";
 import {
   lockWallet, addEncryptedWallet,
   createWallet, importFromMnemonic, importFromPrivateKey,
@@ -248,6 +249,36 @@ export default function Dashboard({ onLock }: Props) {
     ? `${bpan.slice(0, 3)}-${bpan.slice(3, 7)}-${bpan.slice(7)}`
     : null;
 
+  // Fill in USD prices for held tokens the detector (Moralis/GoldRush) didn't
+  // price — memecoins/alts — by batch-looking them up on DexScreener by address.
+  // Without this the dashboard shows the balance but a blank value for less-popular
+  // tokens, even though the detail page already resolves them. Keyed by lowercased
+  // address; `triedPriceAddrs` stops us re-querying the same misses every render.
+  const [extraPrices, setExtraPrices] = useState<Record<string, number>>({});
+  const triedPriceAddrs = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const missing: string[] = [];
+    for (const toks of Object.values(tokensByChain)) {
+      for (const t of toks) {
+        if (!t.address || t.priceUsd != null) continue;
+        if (parseFloat(t.balance || "0") <= 0) continue;
+        if (triedPriceAddrs.current.has(t.address.toLowerCase())) continue;
+        missing.push(t.address);
+      }
+    }
+    if (!missing.length) return;
+    missing.forEach((a) => triedPriceAddrs.current.add(a.toLowerCase()));
+    let cancelled = false;
+    fetchDexPrices(missing).then((prices) => {
+      if (!cancelled && Object.keys(prices).length) setExtraPrices((prev) => ({ ...prev, ...prices }));
+    });
+    return () => { cancelled = true; };
+  }, [tokensByChain]);
+
+  const extraPriceFor = (addr?: string): number | undefined =>
+    addr ? extraPrices[addr.toLowerCase()] : undefined;
+
   // Live portfolio in selected currency — includes native + ERC-20 tokens (not SPL/unknown price)
   const livePortfolio = useMemo(() => {
     let total = 0;
@@ -270,12 +301,14 @@ export default function Dashboard({ onLock }: Props) {
         if (nativeSym && t.symbol.toUpperCase() === nativeSym) continue;
         const bal = parseFloat(t.balance || "0");
         if (bal <= 0) continue;
+        const ep = extraPriceFor(t.address);
         if (t.priceUsd != null) total += usdToCurrency(bal * t.priceUsd, currencyCode, rates);
+        else if (ep != null)    total += usdToCurrency(bal * ep, currencyCode, rates);
         else if (isEvmChain)    total += getErc20UsdValue(t.symbol, bal, currencyCode, rates);
       }
     }
     return total || portfolioUsd;
-  }, [chainBalances, nonEvmChains, tokensByChain, rates, portfolioUsd, currencyCode, customChains]);
+  }, [chainBalances, nonEvmChains, tokensByChain, rates, portfolioUsd, currencyCode, customChains, extraPrices]);
 
   // Build token list from all chains, then apply optional chain filter
   const { visibleTokens, dustTokens } = useMemo(() => {
@@ -318,9 +351,12 @@ export default function Dashboard({ onLock }: Props) {
         const bal = parseFloat(t.balance || "0");
         // Prefer a live per-token price when the fetcher resolved one (Solana/DexScreener);
         // else fall back to the known-token coingecko map (EVM). Unknown → 0 so it still shows.
+        const ep = extraPriceFor(t.address);
         const usdValue = t.priceUsd != null
           ? usdToCurrency(bal * t.priceUsd, currencyCode, rates)
-          : (isEvmChain ? getErc20UsdValue(t.symbol, bal, currencyCode, rates) : 0);
+          : ep != null
+            ? usdToCurrency(bal * ep, currencyCode, rates)
+            : (isEvmChain ? getErc20UsdValue(t.symbol, bal, currencyCode, rates) : 0);
         all.push({
           symbol: t.symbol, name: t.name, logo: t.logo,
           balance: t.balance || "0",
@@ -354,7 +390,7 @@ export default function Dashboard({ onLock }: Props) {
     visible.sort((a, b) => b.usdValue - a.usdValue);
     dust.sort((a, b) => b.usdValue - a.usdValue);
     return { visibleTokens: visible, dustTokens: dust };
-  }, [chainBalances, nonEvmChains, tokensByChain, rates, currencyCode, filterChainId]);
+  }, [chainBalances, nonEvmChains, tokensByChain, rates, currencyCode, filterChainId, extraPrices]);
 
   // When on a non-EVM chain, find that chain's balance data
   const activeNonEvmData = activeEvmNetwork

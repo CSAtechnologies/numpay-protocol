@@ -10,6 +10,13 @@ import {
 import { NETWORKS } from "@/lib/networks";
 import { type TxRecord, fetchChainHistory, tokenMetaFromList } from "@/lib/txHistory";
 import { getItem, setItem } from "@/lib/storage";
+import {
+  type MarketData,
+  resolveMarketSource,
+  marketSourceKey,
+  loadMarketData,
+  loadChart,
+} from "@/lib/tokenMarket";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -28,24 +35,7 @@ export interface TokenDetailState {
   verifiedContract?: boolean;
 }
 
-interface MarketData {
-  current_price: number;
-  price_change_percentage_24h: number;
-  market_cap: number;
-  total_volume: number;
-  circulating_supply: number;
-  ath: number;
-}
-
 // ── Constants ─────────────────────────────────────────────────────────────────
-
-const SYMBOL_TO_COINGECKO: Record<string, string> = {
-  ETH: "ethereum", BTC: "bitcoin", SOL: "solana", SUI: "sui",
-  MATIC: "matic-network", POL: "matic-network",
-  AVAX: "avalanche-2", BNB: "binancecoin", FTM: "fantom",
-  MNT: "mantle", SEI: "sei-network",
-  TRX: "tron", XRP: "ripple", LTC: "litecoin",
-};
 
 const RANGES = [
   { label: "1D", days: 1 },
@@ -117,37 +107,6 @@ function timeAgo(ms: number): string {
 
 // ── Market data ───────────────────────────────────────────────────────────────
 
-async function fetchMarketData(coinId: string): Promise<MarketData | null> {
-  try {
-    const data = await fetch(
-      `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false`
-    ).then((r) => r.json());
-    const m = data?.market_data;
-    if (!m) return null;
-    return {
-      current_price: m.current_price?.usd ?? 0,
-      price_change_percentage_24h: m.price_change_percentage_24h ?? 0,
-      market_cap: m.market_cap?.usd ?? 0,
-      total_volume: m.total_volume?.usd ?? 0,
-      circulating_supply: m.circulating_supply ?? 0,
-      ath: m.ath?.usd ?? 0,
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function fetchPriceChart(coinId: string, days: number): Promise<[number, number][]> {
-  try {
-    const data = await fetch(
-      `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=${days}`
-    ).then((r) => r.json());
-    return data?.prices ?? [];
-  } catch {
-    return [];
-  }
-}
-
 // CoinGecko's free tier is slow and rate-limited, so market data + chart series
 // are cached per coin/range (stale-while-revalidate). A reopen paints instantly
 // from cache; a background refetch keeps it current once the cache goes stale.
@@ -197,7 +156,12 @@ export default function TokenDetail() {
   const { currency } = useCurrency();
   const sym = currency?.symbol || "$";
 
-  const coinId = token ? (SYMBOL_TO_COINGECKO[token.symbol.toUpperCase()] ?? null) : null;
+  // Resolve a market-data target across the source chain (CoinGecko → GeckoTerminal
+  // → DexScreener). Covers natives, majors, and unlisted memecoins by address.
+  const src = useMemo(
+    () => (token ? resolveMarketSource(token.symbol, token.chainId, token.address) : null),
+    [token],
+  );
 
   const [rangeIdx, setRangeIdx] = useState(1); // default 7D
   const [chartPrices, setChartPrices] = useState<[number, number][]>([]);
@@ -215,40 +179,46 @@ export default function TokenDetail() {
 
   // Market data — cache-first, revalidate when stale
   useEffect(() => {
-    if (!coinId) return;
+    if (!src) return;
     let cancelled = false;
     (async () => {
-      const key = `mktcache_${coinId}`;
+      const key = `mktcache_${marketSourceKey(src)}`;
       const cached = await readCache<MarketData>(key, MARKET_TTL);
       if (cancelled) return;
       if (cached) { setMarket(cached.value); setMarketLoading(false); if (cached.fresh) return; }
       else setMarketLoading(true);
-      const d = await fetchMarketData(coinId);
+      const d = await loadMarketData(src);
       if (cancelled) return;
       if (d) { setMarket(d); writeCache(key, d); }
       setMarketLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [coinId]);
+  }, [src]);
 
   // Chart — cache-first per range, revalidate when stale
   useEffect(() => {
-    if (!coinId) return;
+    if (!src) return;
     let cancelled = false;
     const days = RANGES[rangeIdx].days;
     (async () => {
-      const key = `chartcache_${coinId}_${days}`;
+      // v2 prefix: ignore any empty/failed series the earlier build cached.
+      const key = `chartcache2_${marketSourceKey(src)}_${days}`;
       const cached = await readCache<[number, number][]>(key, MARKET_TTL);
       if (cancelled) return;
       if (cached) { setChartPrices(cached.value); setChartLoading(false); if (cached.fresh) return; }
       else setChartLoading(true);
-      const p = await fetchPriceChart(coinId, days);
+      const p = await loadChart(src, days);
       if (cancelled) return;
-      if (p.length) { setChartPrices(p); writeCache(key, p); }
+      if (p.length >= 2) {
+        setChartPrices(p);
+        writeCache(key, p);           // only ever cache a real series — never poison with an empty/failed fetch
+      } else if (!cached) {
+        setChartPrices([]);           // genuinely no chartable history; show the empty state but don't cache it
+      }                               // else: a transient empty refetch — keep the cached chart on screen
       setChartLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [coinId, rangeIdx]);
+  }, [src, rangeIdx]);
 
   // Fetch transaction history for this chain, then narrow to THIS token: native
   // coin pages show native transfers; a token page shows only that token's
@@ -359,7 +329,7 @@ export default function TokenDetail() {
             <p className="text-[32px] font-bold tracking-tight gradient-text leading-none">
               {currentPrice >= 1
                 ? `$${currentPrice.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                : `$${currentPrice.toPrecision(4)}`}
+                : `$${currentPrice.toLocaleString("en", { maximumSignificantDigits: 4 })}`}
             </p>
           )}
           {market && (
@@ -380,8 +350,14 @@ export default function TokenDetail() {
           <div className="px-3 pt-3 pb-1">
             {chartLoading ? (
               <div className="h-[110px] rounded-lg bg-surface-2 animate-pulse" />
-            ) : (
+            ) : chartPrices.length >= 2 ? (
               <PriceChart prices={chartPrices} isUp={isUp} />
+            ) : (
+              <div className="h-[110px] flex items-center justify-center">
+                <p className="text-[11px] text-muted text-center px-6">
+                  {market ? "Not enough price history yet for a chart" : "No chart available for this token"}
+                </p>
+              </div>
             )}
           </div>
 
@@ -465,7 +441,7 @@ export default function TokenDetail() {
       })()}
 
       {/* ── Market stats ── */}
-      {coinId && (
+      {src && market && (
         <div className="px-4 mb-4">
           <div className="flex items-center gap-1.5 mb-2">
             <TrendingUpIcon size={13} className="text-muted" />
@@ -477,10 +453,10 @@ export default function TokenDetail() {
             ) : market ? (
               <div className="grid grid-cols-2 divide-x divide-y divide-border/40">
                 {[
-                  { label: "Market Cap",       value: fmtLarge(market.market_cap) },
-                  { label: "24h Volume",        value: fmtLarge(market.total_volume) },
-                  { label: "Circulating Supply",value: fmtSupply(market.circulating_supply, token.symbol) },
-                  { label: "All-Time High",     value: `$${market.ath.toLocaleString("en", { maximumFractionDigits: 2 })}` },
+                  { label: "Market Cap",       value: market.market_cap > 0 ? fmtLarge(market.market_cap) : "—" },
+                  { label: "24h Volume",        value: market.total_volume > 0 ? fmtLarge(market.total_volume) : "—" },
+                  { label: "Circulating Supply",value: market.circulating_supply > 0 ? fmtSupply(market.circulating_supply, token.symbol) : "—" },
+                  { label: "All-Time High",     value: market.ath > 0 ? `$${market.ath.toLocaleString("en", { maximumFractionDigits: 2 })}` : "—" },
                 ].map((s) => (
                   <div key={s.label} className="px-3.5 py-2.5">
                     <p className="text-[10px] text-muted mb-0.5">{s.label}</p>
