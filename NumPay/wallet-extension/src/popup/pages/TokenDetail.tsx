@@ -10,6 +10,7 @@ import {
 import { NETWORKS } from "@/lib/networks";
 import { type TxRecord, fetchChainHistory, tokenMetaFromList } from "@/lib/txHistory";
 import { getItem, setItem } from "@/lib/storage";
+import { usdToDisplayCurrency } from "@/lib/currency";
 import {
   type MarketData,
   resolveMarketSource,
@@ -153,7 +154,7 @@ export default function TokenDetail() {
   const location = useLocation();
   const token = (location.state as TokenDetailState | null);
   const { wallet, activeAddress, nonEvmWallet, tokensByChain } = useWallet();
-  const { currency } = useCurrency();
+  const { currency, currencyCode, rates } = useCurrency();
   const sym = currency?.symbol || "$";
 
   // Resolve a market-data target across the source chain (CoinGecko → GeckoTerminal
@@ -256,6 +257,9 @@ export default function TokenDetail() {
   const isUp = priceChange >= 0;
   const balanceNum = parseFloat(token.balance) || 0;
   const balanceUsd = balanceNum * currentPrice;
+  // Convert the USD balance into the user's selected display currency; without
+  // this the value was shown with the currency symbol but the raw USD number.
+  const balanceFiat = usdToDisplayCurrency(balanceUsd, currencyCode, rates);
 
   const explorerBase = token.chainId && NETWORKS[token.chainId]?.explorer
     ? `${NETWORKS[token.chainId].explorer}/address/${activeAddress}`
@@ -393,7 +397,7 @@ export default function TokenDetail() {
                 <span className="text-[14px] font-medium text-muted ml-1.5">{token.symbol}</span>
               </p>
               <p className="text-[12px] text-muted mt-0.5">
-                {sym}{balanceUsd.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {sym}{balanceFiat.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </p>
             </div>
             <AssetIcon symbol={token.symbol} logo={token.logo} chainId={token.chainId} address={token.address} size={28} />
