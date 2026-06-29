@@ -113,7 +113,12 @@ export function getCurrency(code: string): Currency | undefined {
 // Rates keyed by coin id (e.g. "ethereum") -> currency code -> price
 export type Rates = Record<string, Record<string, number>>;
 
-// Fetch live rates from CoinGecko (free, no API key)
+// Fetch live rates from CoinGecko (free, no API key). Resilient by design: the
+// keyless public endpoint is frequently rate-limited (Cloudflare can reject the
+// request before a response, surfacing as "TypeError: Failed to fetch"). A
+// missing rate refresh must never throw or wipe values, so on any failure we
+// fall back to the last cached rates (even if stale), and only return an empty
+// map if there is no cache at all.
 export async function fetchRates(): Promise<Rates> {
   // Check cache first
   const cached = await getItem(RATES_KEY);
@@ -126,21 +131,43 @@ export async function fetchRates(): Promise<Rates> {
 
   const coinIds = "ethereum,bitcoin,matic-network,avalanche-2,binancecoin,fantom,mantle,sei-network,solana,sui,tron,ripple,litecoin,tether,crypto-com-chain,celo,xdai,moonbeam,klay-token,metis-token";
   const vsCurrencies = CURRENCIES.map((c) => c.code).join(",");
+  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${coinIds}&vs_currencies=${vsCurrencies}`;
 
-  const res = await fetch(
-    `https://api.coingecko.com/api/v3/simple/price?ids=${coinIds}&vs_currencies=${vsCurrencies}`
-  );
+  // One attempt with an 8s timeout; a network error or non-OK response resolves
+  // to null so the caller can retry / fall back rather than throw.
+  const attempt = async (): Promise<Rates | null> => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      return res.ok ? ((await res.json()) as Rates) : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
-  if (!res.ok) {
-    // Return cached data if available, even if stale
-    if (cached) return JSON.parse(cached);
-    throw new Error("Failed to fetch rates");
+  let data = await attempt();
+  if (!data) {
+    // Brief backoff, then a single retry — smooths over transient throttling.
+    await new Promise((r) => setTimeout(r, 1200));
+    data = await attempt();
   }
 
-  const data = await res.json();
-  await setItem(RATES_KEY, JSON.stringify(data));
-  await setItem(RATES_TS_KEY, String(Date.now()));
-  return data;
+  if (data) {
+    await setItem(RATES_KEY, JSON.stringify(data));
+    await setItem(RATES_TS_KEY, String(Date.now()));
+    return data;
+  }
+
+  // Both attempts failed — keep the last known rates instead of throwing.
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch {}
+  }
+  return {};
 }
 
 // Map network symbol to CoinGecko coin id
