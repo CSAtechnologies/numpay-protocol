@@ -365,7 +365,10 @@ async function standardSignAndSendTransaction(
 
 const wallet = {
   version: "1.0.0",
-  name: "NumPay",
+  // Distinct from the EVM EIP-6963 wallet ("NumPay") so multi-chain dApp
+  // connectors (e.g. Uniswap) list the Solana surface separately and an EVM
+  // connect never lands on the Solana account by mistake.
+  name: "NumPay (Solana)",
   icon: ICON,
   chains: [SOL_CLUSTER] as readonly string[],
   features: {

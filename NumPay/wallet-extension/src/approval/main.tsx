@@ -280,7 +280,7 @@ function SolConnectView({
       <div className="px-5 pt-6 pb-4 flex-1">
         <div className="flex flex-col items-center text-center mb-6">
           <img src="/logo.png" alt="NumPay" className="w-12 h-12 mb-3" />
-          <h1 className="text-[17px] font-bold text-text-primary">Connection request</h1>
+          <h1 className="text-[17px] font-bold text-text-primary">Solana connection request</h1>
           <p className="text-[12px] text-muted mt-1 break-all">{pending.origin}</p>
         </div>
 
