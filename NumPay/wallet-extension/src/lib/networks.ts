@@ -229,15 +229,26 @@ export function bpanChainName(networkId: string): string {
 
 // All chains supported for BPAN wallet mappings stored on Ethereum mainnet.
 // EVM chains use the network ID as chain name. Non-EVM use their own IDs.
+// Ordered by how commonly the coins are used (popular L1s first), so the Send
+// and BPAN chain pickers lead with the chains people actually reach for and the
+// long tail of EVM L2s follows. `isEVM` is per-chain, not positional, so the
+// order is free to interleave EVM and non-EVM.
 export const BPAN_CHAINS = [
-  // ── EVM chains ──────────────────────────────────────────────────────────────
+  // ── Commonly used ───────────────────────────────────────────────────────────
+  { id: "solana",      name: "Solana",         logo: twLogo("solana"),      isEVM: false },
+  { id: "bitcoin",     name: "Bitcoin",        logo: twLogo("bitcoin"),     isEVM: false },
   { id: "ethereum",    name: "Ethereum",       logo: twLogo("ethereum"),    isEVM: true  },
-  { id: "polygon",     name: "Polygon",        logo: twLogo("polygon"),     isEVM: true  },
-  { id: "arbitrum",    name: "Arbitrum One",   logo: twLogo("arbitrum"),    isEVM: true  },
-  { id: "optimism",    name: "Optimism",       logo: twLogo("optimism"),    isEVM: true  },
-  { id: "base",        name: "Base",           logo: twLogo("base"),        isEVM: true  },
-  { id: "avalanche",   name: "Avalanche",      logo: twLogo("avalanchec"),  isEVM: true  },
+  { id: "tron",        name: "Tron",           logo: twLogo("tron"),        isEVM: false },
   { id: "bsc",         name: "BNB Chain",      logo: twLogo("smartchain"),  isEVM: true  },
+  { id: "sui",         name: "Sui",            logo: twLogo("sui"),         isEVM: false },
+  { id: "xrp",         name: "XRP Ledger",     logo: twLogo("ripple"),      isEVM: false },
+  { id: "base",        name: "Base",           logo: twLogo("base"),        isEVM: true  },
+  { id: "arbitrum",    name: "Arbitrum One",   logo: twLogo("arbitrum"),    isEVM: true  },
+  { id: "polygon",     name: "Polygon",        logo: twLogo("polygon"),     isEVM: true  },
+  { id: "avalanche",   name: "Avalanche",      logo: twLogo("avalanchec"),  isEVM: true  },
+  { id: "optimism",    name: "Optimism",       logo: twLogo("optimism"),    isEVM: true  },
+  { id: "litecoin",    name: "Litecoin",       logo: twLogo("litecoin"),    isEVM: false },
+  // ── Long-tail EVM L2s / others ──────────────────────────────────────────────
   { id: "zksync",      name: "zkSync Era",     logo: twLogo("zksync"),      isEVM: true  },
   { id: "scroll",      name: "Scroll",         logo: twLogo("scroll"),      isEVM: true  },
   { id: "linea",       name: "Linea",          logo: twLogo("linea"),       isEVM: true  },
@@ -253,13 +264,6 @@ export const BPAN_CHAINS = [
   { id: "sei",         name: "Sei",            logo: twLogo("sei"),         isEVM: true  },
   { id: "klaytn",      name: "Klaytn",         logo: twLogo("klaytn"),      isEVM: true  },
   { id: "metis",       name: "Metis",          logo: twLogo("metis"),       isEVM: true  },
-  // ── Non-EVM chains ──────────────────────────────────────────────────────────
-  { id: "solana",      name: "Solana",         logo: twLogo("solana"),      isEVM: false },
-  { id: "bitcoin",     name: "Bitcoin",        logo: twLogo("bitcoin"),     isEVM: false },
-  { id: "tron",        name: "Tron",           logo: twLogo("tron"),        isEVM: false },
-  { id: "xrp",         name: "XRP Ledger",     logo: twLogo("ripple"),      isEVM: false },
-  { id: "sui",         name: "Sui",            logo: twLogo("sui"),         isEVM: false },
-  { id: "litecoin",    name: "Litecoin",       logo: twLogo("litecoin"),    isEVM: false },
 ] as const;
 
 export type BPANChainId = typeof BPAN_CHAINS[number]["id"];
