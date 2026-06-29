@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import ReactDOM from "react-dom/client";
 import { ethers } from "ethers";
 import { NETWORKS, type Network } from "@/lib/networks";
@@ -81,7 +81,10 @@ function App() {
   const [pending, setPending] = useState<DappPending | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [locked, setLocked] = useState(true);
-  const [decided, setDecided] = useState(false);
+  // A ref, not state: decide() closes the window synchronously, before a state
+  // update could propagate, so the beforeunload guard below must read a value
+  // that is already current at close time.
+  const decidedRef = useRef(false);
 
   useEffect(() => {
     (async () => {
@@ -97,16 +100,19 @@ function App() {
   // settles instead of hanging.
   useEffect(() => {
     const onUnload = () => {
-      if (!decided) {
+      // Only auto-reject when the user closed the window WITHOUT deciding. A
+      // spurious reject here would race the real decision and could beat it to
+      // the page, settling the dApp promise as "user rejected" after an approve.
+      if (!decidedRef.current) {
         try { chrome.runtime.sendMessage({ type: MSG_DAPP_DECISION, requestId, approved: false }); } catch {}
       }
     };
     window.addEventListener("beforeunload", onUnload);
     return () => window.removeEventListener("beforeunload", onUnload);
-  }, [decided, requestId]);
+  }, [requestId]);
 
   function decide(approved: boolean, result?: string) {
-    setDecided(true);
+    decidedRef.current = true;
     try {
       chrome.runtime.sendMessage({ type: MSG_DAPP_DECISION, requestId, approved, result });
     } catch {}
