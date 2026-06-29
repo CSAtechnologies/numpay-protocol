@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { ICON_DATA } from "../../lib/icons/iconData";
 import { ICON_GLYPHS } from "../../lib/icons/iconGlyphs";
+import { VENDORED_TOKENS, VENDORED_CHAINS } from "../../lib/icons/vendoredLogos";
 import { NETWORKS } from "../../lib/networks";
 
 interface IconProps {
@@ -412,10 +413,18 @@ function assetUrl(p: string): string {
 
 export function tokenIconUrl(symbol: string): string {
   const canon = (ICON_DATA.aliases[symbol.toUpperCase()] || symbol).toUpperCase();
+  const slug = canon.toLowerCase().replace(/[^a-z0-9]/g, "");
+  // Vendored local asset wins — instant, no CDN round-trip. Covers the curated
+  // override logos (blast/scroll/usdc/pol/ton) too, since those were vendored.
+  if (VENDORED_TOKENS.has(slug)) return assetUrl(`token-logos/${slug}.png`);
   const ov = ICON_DATA.logoOverrides[canon];
   if (ov) return assetUrl(ov);
-  const slug = canon.toLowerCase().replace(/[^a-z0-9]/g, "");
   return TOK_BASE + slug + "@2x.png";
+}
+
+// Local vendored chain logo (instant) or null when not vendored.
+export function chainLogoLocal(chainId: string): string | null {
+  return VENDORED_CHAINS.has(chainId) ? assetUrl(`chain-logos/${chainId}.png`) : null;
 }
 
 export function chainIconUrl(chainId: string): string | null {
@@ -509,11 +518,16 @@ export function ChainIcon({
   }
   // Deterministic source order keyed by chainId, so EVERY icon/badge for a chain
   // resolves to the same logo instead of racing the CDN per render (which made
-  // same-chain corner badges disagree): the app's canonical network logo first
-  // (reliable, one URL per chain), then the DefiLlama mark, then any caller-
-  // supplied logo, then the drawn fallback. De-duped so no URL is tried twice.
+  // same-chain corner badges disagree): the vendored local logo first (instant,
+  // one file per chain), then the app's canonical network logo, then the
+  // DefiLlama mark, then any caller-supplied logo, then the drawn fallback.
+  // De-duped so no URL is tried twice.
   const sources = Array.from(
-    new Set([NETWORKS[chainId]?.logo || "", chainIconUrl(chainId) || "", logo || ""].filter(Boolean)),
+    new Set(
+      [chainLogoLocal(chainId) || "", NETWORKS[chainId]?.logo || "", chainIconUrl(chainId) || "", logo || ""].filter(
+        Boolean,
+      ),
+    ),
   );
   return <FramedCoin sources={sources} fallbackSvg={chainFallbackSvg(chainId)} alt={chainId} size={size} />;
 }
