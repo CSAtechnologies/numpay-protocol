@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import AnimatedLogo from "../components/AnimatedLogo";
 
 export default function Welcome() {
   const navigate = useNavigate();
@@ -22,15 +23,9 @@ export default function Welcome() {
           <div className="logo-ring" style={{ animationDelay: "1s" }} />
           <div className="logo-ring" style={{ animationDelay: "2s" }} />
 
-          {/* Logo centred inside rings */}
+          {/* Animated NumPay mark centred inside rings (same as Unlock / onboarding) */}
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="logo-bevel">
-              <img
-                src="/logo.png"
-                alt="NumPay"
-                className="w-[88px] h-[88px] object-contain"
-              />
-            </div>
+            <AnimatedLogo size={88} />
           </div>
         </div>
 

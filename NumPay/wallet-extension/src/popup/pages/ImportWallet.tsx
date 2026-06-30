@@ -3,10 +3,19 @@ import { useNavigate } from "react-router-dom";
 import { importFromMnemonic, importFromPrivateKey, encryptAndSave } from "@/lib/wallet";
 import { cacheWalletSession } from "../hooks/useWallet";
 import { ArrowLeftIcon } from "../components/Icons";
+import AnimatedLogo from "../components/AnimatedLogo";
 
 interface Props {
   onComplete: () => void;
 }
+
+// Same gradient wordmark treatment as Welcome / Unlock.
+const titleGradient: React.CSSProperties = {
+  background: "linear-gradient(160deg, #f0efff 20%, rgba(196,181,253,0.85) 100%)",
+  WebkitBackgroundClip: "text",
+  backgroundClip: "text",
+  WebkitTextFillColor: "transparent",
+};
 
 export default function ImportWallet({ onComplete }: Props) {
   const navigate = useNavigate();
@@ -49,74 +58,119 @@ export default function ImportWallet({ onComplete }: Props) {
   }
 
   return (
-    <div className="flex flex-col h-full bg-surface-0 px-5 py-4 animate-fade-in">
-      <button onClick={() => navigate(-1)} className="text-muted hover:text-text-primary mb-5 self-start transition-colors">
+    <div className="auth-bg h-full flex flex-col animate-fade-in">
+      {/* Animated gradient orbs */}
+      <div className="auth-orb auth-orb-top" />
+      <div className="auth-orb auth-orb-right" />
+      <div className="auth-orb auth-orb-left" />
+
+      {/* Back */}
+      <button
+        onClick={() => navigate(-1)}
+        className="absolute top-4 left-4 z-20 text-text-secondary hover:text-text-primary transition-colors"
+        aria-label="Back"
+      >
         <ArrowLeftIcon size={18} />
       </button>
 
-      <h2 className="text-lg font-bold text-text-primary mb-5">Import Wallet</h2>
+      <div className="flex-1 flex flex-col px-5 pt-10 pb-7 relative z-10 animate-slide-up">
+        {/* Compact animated header */}
+        <div className="flex flex-col items-center mb-4">
+          <div
+            className="relative flex items-center justify-center mb-3 animate-float"
+            style={{ width: 76, height: 76 }}
+          >
+            <div className="logo-ring" style={{ animationDelay: "0s" }} />
+            <div className="logo-ring" style={{ animationDelay: "1.2s" }} />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <AnimatedLogo size={48} />
+            </div>
+          </div>
+          <h1 className="font-bold tracking-tight mb-1" style={{ fontSize: 22, ...titleGradient }}>
+            Import Wallet
+          </h1>
+          <p className="text-text-secondary text-[13px] text-center max-w-[230px]">
+            Restore an existing wallet with your recovery phrase or private key.
+          </p>
+        </div>
 
-      {/* Tabs */}
-      <div className="flex bg-surface-1 rounded-xl p-1 mb-5 border border-border">
-        <button
-          onClick={() => { setTab("mnemonic"); setError(""); }}
-          className={`flex-1 py-2 text-[13px] rounded-lg font-medium transition-all duration-150 ${
-            tab === "mnemonic" ? "bg-brand-500 text-white" : "text-muted hover:text-text-secondary"
-          }`}
-        >
-          Recovery Phrase
-        </button>
-        <button
-          onClick={() => { setTab("privateKey"); setError(""); }}
-          className={`flex-1 py-2 text-[13px] rounded-lg font-medium transition-all duration-150 ${
-            tab === "privateKey" ? "bg-brand-500 text-white" : "text-muted hover:text-text-secondary"
-          }`}
-        >
-          Private Key
-        </button>
+        {/* Form card */}
+        <div className="auth-card mt-auto">
+          {/* Tabs */}
+          <div className="flex bg-surface-1 rounded-xl p-1 mb-4 border border-border">
+            <button
+              onClick={() => { setTab("mnemonic"); setError(""); }}
+              className={`flex-1 py-2 text-[13px] rounded-lg font-medium transition-all duration-150 ${
+                tab === "mnemonic" ? "bg-brand-500 text-white" : "text-muted hover:text-text-secondary"
+              }`}
+            >
+              Recovery Phrase
+            </button>
+            <button
+              onClick={() => { setTab("privateKey"); setError(""); }}
+              className={`flex-1 py-2 text-[13px] rounded-lg font-medium transition-all duration-150 ${
+                tab === "privateKey" ? "bg-brand-500 text-white" : "text-muted hover:text-text-secondary"
+              }`}
+            >
+              Private Key
+            </button>
+          </div>
+
+          {tab === "mnemonic" ? (
+            <textarea
+              value={input}
+              onChange={(e) => { setInput(e.target.value); setError(""); }}
+              placeholder="Enter your 12-word recovery phrase..."
+              rows={3}
+              className="input-field mb-3 resize-none"
+            />
+          ) : (
+            <input
+              type="password"
+              value={input}
+              onChange={(e) => { setInput(e.target.value); setError(""); }}
+              placeholder="Enter your private key (0x...)"
+              className="input-field mb-3"
+            />
+          )}
+
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => { setPassword(e.target.value); setError(""); }}
+            placeholder="Password (at least 8 characters)"
+            className="input-field mb-3"
+          />
+          <input
+            type="password"
+            value={confirmPw}
+            onChange={(e) => { setConfirmPw(e.target.value); setError(""); }}
+            onKeyDown={(e) => e.key === "Enter" && handleImport()}
+            placeholder="Confirm password"
+            className="input-field mb-3"
+          />
+
+          {error && (
+            <p className="text-[12px] mb-3 animate-fade-in" style={{ color: "#ef4444" }}>
+              {error}
+            </p>
+          )}
+
+          <button onClick={handleImport} disabled={loading} className="btn-primary-premium">
+            {loading ? (
+              <>
+                <span
+                  className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"
+                  style={{ display: "inline-block" }}
+                />
+                Importing…
+              </>
+            ) : (
+              "Import Wallet"
+            )}
+          </button>
+        </div>
       </div>
-
-      {tab === "mnemonic" ? (
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Enter your 12-word recovery phrase..."
-          rows={3}
-          className="input-field mb-3 resize-none"
-        />
-      ) : (
-        <input
-          type="password"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Enter your private key (0x...)"
-          className="input-field mb-3"
-        />
-      )}
-
-      <label className="text-xs text-text-secondary mb-1.5 block font-medium">Password</label>
-      <input
-        type="password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        placeholder="At least 8 characters"
-        className="input-field mb-3"
-      />
-
-      <label className="text-xs text-text-secondary mb-1.5 block font-medium">Confirm Password</label>
-      <input
-        type="password"
-        value={confirmPw}
-        onChange={(e) => setConfirmPw(e.target.value)}
-        placeholder="Re-enter password"
-        className="input-field mb-3"
-      />
-
-      {error && <p className="text-accent-red text-xs mb-3 animate-fade-in">{error}</p>}
-
-      <button onClick={handleImport} disabled={loading} className="btn-primary mt-auto">
-        {loading ? "Importing..." : "Import Wallet"}
-      </button>
     </div>
   );
 }
