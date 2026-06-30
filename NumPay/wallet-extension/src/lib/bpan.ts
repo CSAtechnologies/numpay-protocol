@@ -115,10 +115,29 @@ export class BPANConsensusError extends Error {
   }
 }
 
+// Raised when fewer than two independent providers AGREE on the result (an
+// address, or a confirmed "no mapping"). A single provider must never be able to
+// determine a payment destination, so callers treat this as "could not verify,
+// try again" rather than offering a send target (TRUST-1, hardened).
+export class BPANInsufficientConfirmationError extends Error {
+  constructor(
+    public readonly sourcesQueried: number,
+    public readonly sourcesAgreed: number,
+  ) {
+    super("BPAN resolution could not reach two-provider agreement");
+    this.name = "BPANInsufficientConfirmationError";
+  }
+}
+
 export interface BPANResolution {
   /** Agreed address, or null when the BPAN has no mapping for the chain. */
   address: string | null;
-  /** "high" = >=2 independent providers agreed; "low" = only one responded. */
+  /**
+   * Always "high" on a successful return: resolution now requires >=2 providers
+   * to agree, and throws BPANInsufficientConfirmationError otherwise, so a
+   * "low"-confidence result is never surfaced as a send target. The field is
+   * retained for back-compat with existing callers.
+   */
   confidence: "high" | "low";
   /** True when the agreed address differs from the last one seen (TOFU). */
   changed: boolean;
@@ -155,10 +174,13 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
  * independent-provider agreement and a trust-on-first-use pin (TRUST-1).
  *
  * The mapping is queried from every endpoint in BPAN_MAINNET_READ_RPCS at the
- * "finalized" block tag. The result is only trusted when the responders agree:
- *  - two or more agree  → confidence "high"
- *  - only one responded → confidence "low" (surfaced to the user)
+ * "finalized" block tag. A result is only returned when a QUORUM agrees:
+ *  - two or more agree on the same answer → returned (confidence "high")
+ *  - fewer than two agree                 → BPANInsufficientConfirmationError
  *  - responders return different non-empty addresses → BPANConsensusError
+ *
+ * The quorum applies to a "no mapping" answer too, so a single provider can
+ * never determine (or deny) a payment destination.
  *
  * ALWAYS queries Ethereum mainnet regardless of the caller's current network.
  */
@@ -199,27 +221,57 @@ export async function resolveBPANChecked(
     if (votes > agreed) { agreed = votes; chosen = a; }
   }
 
+  // QUORUM (TRUST-1, hardened): a funds-determining result — an address OR a
+  // confirmed "no mapping" — must be backed by at least two independent
+  // providers that agree. This means a single provider (the others unreachable,
+  // or one node disagreeing with the quorum) can never determine a payment
+  // destination. It also subsumes the empty/non-empty disagreement case: a lone
+  // non-empty answer against a lone empty answer yields a top group of one and
+  // fails here rather than being silently accepted as either result.
+  if (agreed < 2) {
+    throw new BPANInsufficientConfirmationError(sourcesQueried, agreed);
+  }
+
   const address = chosen.length > 0 ? chosen : null;
-  const confidence: "high" | "low" = agreed >= 2 ? "high" : "low";
 
   // Trust-on-first-use pin. Compare the agreed address to the last one we saw
-  // for this (number, chain); flag a change so the UI can warn that a mapping
-  // moved (legitimate re-mapping OR an attacker). Only advance the pin on a
-  // high-confidence, non-empty result so a degraded single-source read can never
-  // overwrite a trusted pin.
+  // for this (number, chain). On FIRST use we trust and store it. On a CHANGE we
+  // flag it but DO NOT advance the pin: the stored pin stays the
+  // previously-trusted address until the user explicitly accepts the new mapping
+  // via acceptBPANChange(). This stops the change warning from being cleared
+  // just by reopening the flow, so a moved mapping is promoted to "trusted" by a
+  // deliberate security decision, never by a silent re-lookup (H-03).
   let pinnedBefore: string | null = null;
   let changed = false;
   try {
     pinnedBefore = await getItem(pinKey(number, chain));
     if (address) {
-      if (pinnedBefore && !sameAddress(pinnedBefore, address)) changed = true;
-      if (confidence === "high" && (!pinnedBefore || changed)) {
-        await setItem(pinKey(number, chain), address);
+      if (pinnedBefore && !sameAddress(pinnedBefore, address)) {
+        changed = true; // keep the old pin; require explicit acceptance
+      } else if (!pinnedBefore) {
+        await setItem(pinKey(number, chain), address); // first use: trust it
       }
     }
   } catch { /* storage unavailable — pin is best-effort, not a hard dependency */ }
 
-  return { address, confidence, changed, pinnedBefore, sourcesAgreed: agreed, sourcesQueried };
+  return { address, confidence: "high", changed, pinnedBefore, sourcesAgreed: agreed, sourcesQueried };
+}
+
+/**
+ * Record the user's explicit acceptance of a CHANGED BPAN mapping. Call this
+ * ONLY after the user has reviewed the full previous and new addresses and
+ * confirmed the change out-of-band with the recipient. It advances the
+ * trust-on-first-use pin to the new address, so the change warning is cleared by
+ * a deliberate decision rather than a silent re-lookup (H-03).
+ */
+export async function acceptBPANChange(
+  number: string,
+  chain: string,
+  address: string,
+): Promise<void> {
+  try {
+    await setItem(pinKey(number, chain), address);
+  } catch { /* best-effort: pin storage is not a hard dependency */ }
 }
 
 /**

@@ -3,7 +3,7 @@
   "name": "NumPay",
   "version": "0.1.0",
   "description": "Multi-chain crypto wallet with BPAN support. Send crypto using simple account numbers.",
-  "permissions": ["storage", "activeTab", "alarms"],
+  "permissions": ["storage", "alarms"],
   "host_permissions": [
     "https://*.g.alchemy.com/*",
     "https://*.drpc.org/*",
@@ -70,13 +70,13 @@
   "optional_host_permissions": ["https://*/*"],
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
+      "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
       "js": ["inpage.js"],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["http://*/*", "https://*/*"],
+      "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
       "js": ["content.js"],
       "run_at": "document_start",
       "world": "ISOLATED"

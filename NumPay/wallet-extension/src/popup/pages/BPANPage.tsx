@@ -12,7 +12,7 @@ import {
   BPAN_MAINNET_CONTRACT, BPAN_SEPOLIA_CONTRACT,
   BPAN_MAINNET_RPC, NETWORKS, BPAN_CHAINS,
 } from "@/lib/networks";
-import { getSigner } from "@/lib/wallet";
+import { getSigner, isLocked } from "@/lib/wallet";
 import { isValidChainAddress } from "@/lib/addressValidation";
 import Layout from "../components/Layout";
 import {
@@ -513,6 +513,10 @@ function RegisterSection({
   async function handleRegister() {
     if (!wallet || !isOnEthereum) return;
     if (!isValidBPAN(number)) { setError("Enter a valid 11-digit number"); return; }
+    // Authoritative lock check before any key is used: auto-lock clears the
+    // session, but an open popup can still hold this wallet in memory until it
+    // re-renders as locked, so the signing paths must re-check (H-06).
+    if (await isLocked()) { setError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
     setError(""); setLoading(true); setTxHash("");
     try {
       const signer = getSigner(wallet.privateKey, contractRPC);
@@ -708,6 +712,9 @@ function MappingSection({
         return;
       }
     }
+
+    // Authoritative lock check before any key is used (H-06): see handleRegister.
+    if (await isLocked()) { setError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
 
     setError(""); setLoading(true); setTxHashes([]);
     setProgress({ current: 0, total: chains.length, chain: "" });

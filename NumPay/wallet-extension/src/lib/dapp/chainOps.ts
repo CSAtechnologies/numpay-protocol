@@ -79,6 +79,12 @@ export interface AddChainCandidate {
 // exists as a custom network is reported as a no-op (alreadyExists).
 export async function buildAddChainCandidate(param: unknown): Promise<AddChainCandidate> {
   if (!param || typeof param !== "object") throw rpcErr(ERR.invalidParams.code, "Invalid parameters");
+
+  // Cap the overall request so a hostile site cannot push a huge payload into
+  // persistent storage through this approved path (M-07).
+  const size = (() => { try { return JSON.stringify(param).length; } catch { return Infinity; } })();
+  if (size > 8192) throw rpcErr(ERR.invalidParams.code, "Add-chain request too large");
+
   const p = param as Record<string, any>;
 
   const chainId = parseChainId(p.chainId);
@@ -90,16 +96,40 @@ export async function buildAddChainCandidate(param: unknown): Promise<AddChainCa
   const existing = (await getCustomChains()).find((c) => c.chainId === chainId);
   if (existing) return { chain: existing, alreadyExists: true };
 
+  // Bound every dApp-supplied field: these are persisted and used in formatting
+  // math, so an unbounded name/symbol, an absurd `decimals` (drives
+  // 10**decimals in balance display), or a non-https explorer is a storage/UI
+  // denial-of-service or a way to persist an attacker-controlled scheme (M-07).
+  const MAX_NAME = 50;
+  const MAX_SYMBOL = 11;
+
   const rpcUrl = validateHttpsRpc(Array.isArray(p.rpcUrls) ? p.rpcUrls[0] : undefined);
-  const name =
-    typeof p.chainName === "string" && p.chainName.trim() ? p.chainName.trim() : `Chain ${chainId}`;
+
+  const rawName = typeof p.chainName === "string" ? p.chainName.trim() : "";
+  const name = rawName ? rawName.slice(0, MAX_NAME) : `Chain ${chainId}`;
+
   const cur = p.nativeCurrency || {};
-  const symbol = typeof cur.symbol === "string" && cur.symbol ? cur.symbol : "ETH";
-  const decimals = Number.isInteger(cur.decimals) ? cur.decimals : 18;
-  const explorer =
-    Array.isArray(p.blockExplorerUrls) && typeof p.blockExplorerUrls[0] === "string"
-      ? p.blockExplorerUrls[0]
-      : "";
+  const rawSymbol = typeof cur.symbol === "string" ? cur.symbol.trim() : "";
+  const symbol = rawSymbol ? rawSymbol.slice(0, MAX_SYMBOL) : "ETH";
+
+  let decimals = 18;
+  if (cur.decimals !== undefined && cur.decimals !== null) {
+    if (!Number.isInteger(cur.decimals) || cur.decimals < 0 || cur.decimals > 36) {
+      throw rpcErr(ERR.invalidParams.code, "nativeCurrency.decimals must be an integer between 0 and 36");
+    }
+    decimals = cur.decimals;
+  }
+
+  // Explorer is optional and cosmetic: keep it only if it is a valid https URL,
+  // otherwise drop it rather than persist an attacker-controlled value.
+  let explorer = "";
+  const rawExplorer = Array.isArray(p.blockExplorerUrls) ? p.blockExplorerUrls[0] : undefined;
+  if (typeof rawExplorer === "string" && rawExplorer.trim()) {
+    try {
+      const u = new URL(rawExplorer.trim());
+      if (u.protocol === "https:") explorer = u.toString().slice(0, 200);
+    } catch { /* invalid URL: drop it */ }
+  }
 
   const chain: CustomChain = {
     id: `custom_${chainId}_${Date.now()}`,

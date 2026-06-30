@@ -349,6 +349,14 @@ async function handleDecision(
   // connect: re-read live account/chain at approval time (TOCTOU): the user may
   // have switched wallet/network while the approval window was open.
   const account = (await getActiveAccount()) ?? p.account;
+  // L-01: the approval window displayed p.account. If the active wallet changed
+  // while the window was open, granting the now-current account would connect a
+  // different address than the user reviewed. Reject instead; the dApp can
+  // re-request and the next approval shows the correct account.
+  if (!eqAddr(account, p.account)) {
+    respondToOrigin(p.origin, { id: p.id, channel: p.channel, error: ERR.userRejected });
+    return;
+  }
   const chainId = evmChainIdNumber(await getActiveChainId());
   await grant(p.origin, account, chainId);
   respondToOrigin(p.origin, { id: p.id, channel: p.channel, result: [account] });

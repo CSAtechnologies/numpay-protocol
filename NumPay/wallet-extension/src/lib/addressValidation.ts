@@ -60,24 +60,48 @@ function xrpBase58Decode(str: string): Uint8Array | null {
 
 // Bech32 / Bech32m segwit validation for a given human-readable prefix.
 // v0 (P2WPKH/P2WSH) uses bech32 with a 20- or 32-byte program; v1+ (e.g.
-// taproot) uses bech32m. The checksum is verified by the decoder itself.
+// taproot) uses bech32m (BIP-350). The encoding variant is NOT interchangeable:
+// a v0 address must use bech32 and a v1-16 address must use bech32m, so this
+// reads the witness version and then requires the matching variant rather than
+// accepting either (M-02). Mixed-case input is rejected outright per BIP-173.
 function isValidSegwit(addr: string, hrp: string): boolean {
-  const attempt = (decode: typeof bech32.decode): boolean => {
+  // BIP-173: an address must be entirely lowercase OR entirely uppercase. The
+  // decoders below normalize case, so a mixed-case string would otherwise be
+  // silently accepted; reject it here first.
+  if (addr !== addr.toLowerCase() && addr !== addr.toUpperCase()) return false;
+  const lower = addr.toLowerCase();
+
+  const tryDecode = (decode: typeof bech32.decode): number[] | null => {
     try {
-      const { prefix, words } = decode(addr.toLowerCase(), 90);
-      if (prefix !== hrp || words.length < 1) return false;
-      const witver = words[0];
-      if (witver < 0 || witver > 16) return false;
-      const program = bech32.fromWords(words.slice(1));
-      if (witver === 0) return program.length === 20 || program.length === 32;
-      return program.length >= 2 && program.length <= 40;
+      const { prefix, words } = decode(lower, 90);
+      if (prefix !== hrp || words.length < 1) return null;
+      return words;
     } catch {
-      return false;
+      return null;
     }
   };
-  // v0 must validate under bech32, v1+ under bech32m; accept either with the
-  // correct prefix + checksum.
-  return attempt(bech32.decode) || attempt(bech32m.decode);
+
+  // Learn the witness version (words[0] is variant-independent; only the
+  // checksum differs between bech32 and bech32m).
+  const words = tryDecode(bech32.decode) ?? tryDecode(bech32m.decode);
+  if (!words) return false;
+  const witver = words[0];
+  if (witver < 0 || witver > 16) return false;
+
+  // Re-decode under the REQUIRED variant for this version and confirm it passes
+  // that checksum. This rejects a v0 program re-encoded with bech32m, and a
+  // v1-16 program re-encoded with bech32.
+  const confirmed = tryDecode(witver === 0 ? bech32.decode : bech32m.decode);
+  if (!confirmed) return false;
+
+  let program: number[];
+  try {
+    program = bech32.fromWords(confirmed.slice(1));
+  } catch {
+    return false;
+  }
+  if (witver === 0) return program.length === 20 || program.length === 32;
+  return program.length >= 2 && program.length <= 40;
 }
 
 export function isValidNonEvmAddress(addr: string, chainId: string): boolean {

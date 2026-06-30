@@ -4,7 +4,10 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { ethers } from "ethers";
 import { useLocation } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
-import { isBPANInput, isValidBPAN, resolveBPANChecked, BPANConsensusError, formatBPAN } from "@/lib/bpan";
+import {
+  isBPANInput, isValidBPAN, resolveBPANChecked, acceptBPANChange,
+  BPANConsensusError, BPANInsufficientConfirmationError, formatBPAN,
+} from "@/lib/bpan";
 import { BPAN_CHAINS, DEFAULT_NETWORK, NETWORKS, type BPANChainId, type Network } from "@/lib/networks";
 import { getSigner, isLocked } from "@/lib/wallet";
 import { sendToken, type Token } from "@/lib/tokens";
@@ -18,7 +21,7 @@ import Layout from "../components/Layout";
 import TxResultOverlay, { type TxFxStatus } from "../components/TxResultOverlay";
 import {
   CheckIcon, ExternalLinkIcon, HashIcon, ChevronDownIcon,
-  TokenIcon, AlertIcon,
+  ChainIcon, AssetIcon, AlertIcon,
 } from "../components/Icons";
 
 // Symbol + decimals for non-EVM chains (BPAN_CHAINS has no symbol field)
@@ -76,7 +79,13 @@ export default function Send() {
   const [resolving, setResolving] = useState(false);
   // TRUST-1: non-blocking caution about how the BPAN mapping was verified
   // (single-source read, or the mapping changed since last seen).
-  const [bpanTrust, setBpanTrust] = useState<string | null>(null);
+  // When a BPAN mapping has CHANGED since last use, the user must explicitly
+  // confirm the new address before a send is allowed (H-03). Holds the change
+  // context; null when there is nothing pending acceptance.
+  const [bpanChange, setBpanChange] = useState<
+    { number: string; chain: string; oldAddr: string; newAddr: string } | null
+  >(null);
+  const [bpanChangeAck, setBpanChangeAck] = useState(false);
   const [sending, setSending] = useState(false);
   const [txHash, setTxHash] = useState("");
   const [error, setError] = useState("");
@@ -140,7 +149,8 @@ export default function Send() {
   function handleChainChange(id: BPANChainId) {
     setSelectedChainId(id);
     switchChain(id);
-    setTo(""); setResolvedAddr(""); setResolvedBPAN(""); setBpanTrust(null);
+    setTo(""); setResolvedAddr(""); setResolvedBPAN("");
+    setBpanChange(null); setBpanChangeAck(false);
     setError(""); setAmount(""); setSelectedToken(null); setTxHash("");
     setShowTokenPicker(false); setShowHiddenTokens(false);
     chainSynced.current = true;
@@ -157,7 +167,8 @@ export default function Send() {
 
   async function handleToChange(value: string) {
     setTo(value);
-    setResolvedAddr(""); setResolvedBPAN(""); setError(""); setBpanTrust(null);
+    setResolvedAddr(""); setResolvedBPAN(""); setError("");
+    setBpanChange(null); setBpanChangeAck(false);
 
     const clean = value.trim().replace(/\D/g, "");
     if (isBPANInput(value) && isValidBPAN(clean)) {
@@ -186,15 +197,15 @@ export default function Send() {
           setResolvedAddr(addr.trim());
           setResolvedBPAN(clean);
           if (res.changed) {
-            setBpanTrust(
-              `This BPAN's ${chainInfo.name} address has changed since you last used it. ` +
-              `Confirm with the recipient before sending.`
-            );
-          } else if (res.confidence === "low") {
-            setBpanTrust(
-              `Only one network provider confirmed this mapping (others were unreachable). ` +
-              `Double-check the address before sending a large amount.`
-            );
+            // The mapping moved since we last pinned it. Require an explicit,
+            // out-of-band confirmation before this address can be used (H-03).
+            setBpanChange({
+              number: clean,
+              chain: selectedChainId,
+              oldAddr: (res.pinnedBefore ?? "").trim(),
+              newAddr: addr.trim(),
+            });
+            setBpanChangeAck(false);
           }
         } else {
           setError(
@@ -210,6 +221,13 @@ export default function Send() {
           setError(
             `Could not safely verify BPAN ${formatBPAN(clean)}: network providers returned ` +
             `conflicting addresses. Do not send. Try again later or contact the recipient.`
+          );
+        } else if (e instanceof BPANInsufficientConfirmationError) {
+          // Fewer than two independent providers agreed, so the result is not
+          // safe to use as a payment destination (TRUST-1). Block, do not warn.
+          setError(
+            `Could not verify BPAN ${formatBPAN(clean)} with enough independent providers. ` +
+            `For your safety the address was not loaded. Check your connection and try again.`
           );
         } else {
           setError("BPAN lookup failed. Check your connection and try again.");
@@ -228,10 +246,17 @@ export default function Send() {
 
   async function handleEvmSend() {
     if (!wallet) return;
+    if (bpanChange && !bpanChangeAck) {
+      setError("This BPAN's address changed. Confirm you have verified the new address before sending.");
+      return;
+    }
     if (!destinationAddress) { setError("Enter a valid address or 11-digit BPAN"); return; }
     if (!amount || parseFloat(amount) <= 0) { setError("Enter an amount greater than zero"); return; }
     if (parseFloat(amount) > sendBalance) { setError("Insufficient balance"); return; }
     if (await isLocked()) { setError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
+    // User has acknowledged the changed mapping above: advance the trust pin so
+    // it is treated as trusted from here on (deliberate acceptance, H-03).
+    if (bpanChange) await acceptBPANChange(bpanChange.number, bpanChange.chain, bpanChange.newAddr);
     setSending(true); setError(""); setTxHash(""); setTxFx("pending");
     try {
       const signer = getSigner(wallet.privateKey, sendNetwork.rpcUrl);
@@ -266,10 +291,17 @@ export default function Send() {
 
   async function handleNonEvmSend() {
     if (!nonEvmWallet) { setError("Wallet not loaded"); return; }
+    if (bpanChange && !bpanChangeAck) {
+      setError("This BPAN's address changed. Confirm you have verified the new address before sending.");
+      return;
+    }
     if (!destinationAddress) { setError("Enter a valid address or 11-digit BPAN"); return; }
     if (!amount || parseFloat(amount) <= 0) { setError("Enter an amount greater than zero"); return; }
     if (parseFloat(amount) > sendBalance) { setError("Insufficient balance"); return; }
     if (await isLocked()) { setError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
+    // User has acknowledged the changed mapping above: advance the trust pin so
+    // it is treated as trusted from here on (deliberate acceptance, H-03).
+    if (bpanChange) await acceptBPANChange(bpanChange.number, bpanChange.chain, bpanChange.newAddr);
     setSending(true); setError(""); setTxHash(""); setTxFx("pending");
     try {
       if (selectedChainId === "solana") {
@@ -346,12 +378,7 @@ export default function Send() {
                     : "border-border bg-surface-1 text-muted hover:border-brand-500/40 hover:text-text-secondary"
                 }`}
               >
-                <img
-                  src={chain.logo}
-                  alt={chain.name}
-                  className="w-4 h-4 rounded-full"
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                />
+                <ChainIcon chainId={chain.id} logo={chain.logo} size={16} />
                 {chain.name}
               </button>
             ))}
@@ -397,10 +424,36 @@ export default function Send() {
             </div>
           )}
 
-          {bpanTrust && (
-            <div className="mb-3 px-3 py-2.5 rounded-xl bg-amber/5 border border-amber/20 flex items-start gap-2 animate-fade-in">
-              <AlertIcon size={13} className="mt-0.5 flex-shrink-0" style={{ color: "var(--amber)" }} />
-              <p className="text-[11px] leading-relaxed" style={{ color: "var(--amber)" }}>{bpanTrust}</p>
+          {bpanChange && (
+            <div className="mb-3 px-3 py-2.5 rounded-xl bg-amber/5 border border-amber/20 animate-fade-in">
+              <div className="flex items-start gap-2">
+                <AlertIcon size={13} className="mt-0.5 flex-shrink-0" style={{ color: "var(--amber)" }} />
+                <div className="min-w-0">
+                  <p className="text-[11px] leading-relaxed font-medium" style={{ color: "var(--amber)" }}>
+                    This BPAN's {chainInfo?.name} address changed since you last sent to it. Verify with the
+                    recipient before sending.
+                  </p>
+                  {bpanChange.oldAddr && (
+                    <p className="mt-1.5 text-[10px] text-text-secondary font-mono break-all">
+                      Was: {bpanChange.oldAddr}
+                    </p>
+                  )}
+                  <p className="text-[10px] text-text-secondary font-mono break-all">
+                    Now: {bpanChange.newAddr}
+                  </p>
+                </div>
+              </div>
+              <label className="mt-2 flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 flex-shrink-0"
+                  checked={bpanChangeAck}
+                  onChange={(e) => setBpanChangeAck(e.target.checked)}
+                />
+                <span className="text-[11px] leading-relaxed" style={{ color: "var(--amber)" }}>
+                  I have verified this new address with the recipient.
+                </span>
+              </label>
             </div>
           )}
 
@@ -415,7 +468,7 @@ export default function Send() {
                 className="w-full input-field mb-1.5 text-left flex items-center justify-between"
               >
                 <div className="flex items-center gap-2">
-                  <TokenIcon symbol={sendSymbol} logo={selectedToken?.logo} size={20} />
+                  <AssetIcon symbol={sendSymbol} logo={selectedToken?.logo} chainId={selectedChainId} address={selectedToken?.address} size={20} />
                   <span className="text-[13px] text-text-primary font-medium">{sendSymbol}</span>
                 </div>
                 <ChevronDownIcon
@@ -430,7 +483,7 @@ export default function Send() {
                     onClick={() => { setSelectedToken(null); setShowTokenPicker(false); setAmount(""); }}
                     className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] hover:bg-surface-2 transition-colors ${!selectedToken ? "text-brand-400" : "text-text-primary"}`}
                   >
-                    <TokenIcon symbol={sendNetwork.symbol} size={22} />
+                    <AssetIcon symbol={sendNetwork.symbol} chainId={selectedChainId} size={22} />
                     <div className="flex-1 text-left">
                       <span className="font-medium">{sendNetwork.symbol}</span>
                       <span className="text-[11px] text-muted ml-2">{parseFloat(balance).toFixed(4)}</span>
@@ -443,7 +496,7 @@ export default function Send() {
                       onClick={() => { setSelectedToken(t); setShowTokenPicker(false); setAmount(""); }}
                       className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] hover:bg-surface-2 transition-colors ${selectedToken?.address === t.address ? "text-brand-400" : "text-text-primary"}`}
                     >
-                      <TokenIcon symbol={t.symbol} logo={t.logo} size={22} />
+                      <AssetIcon symbol={t.symbol} logo={t.logo} chainId={selectedChainId} address={t.address} size={22} />
                       <div className="flex-1 text-left">
                         <span className="font-medium">{t.symbol}</span>
                         <span className="text-[11px] text-muted ml-2">{parseFloat(t.balance || "0").toFixed(4)}</span>
@@ -502,7 +555,7 @@ export default function Send() {
                     className="w-full input-field mb-1.5 text-left flex items-center justify-between"
                   >
                     <div className="flex items-center gap-2">
-                      <TokenIcon symbol={sendSymbol} logo={selectedToken?.logo} size={20} />
+                      <AssetIcon symbol={sendSymbol} logo={selectedToken?.logo} chainId={selectedChainId} address={selectedToken?.address} size={20} />
                       <span className="text-[13px] text-text-primary font-medium">{sendSymbol}</span>
                     </div>
                     <ChevronDownIcon
@@ -518,7 +571,7 @@ export default function Send() {
                         onClick={() => { setSelectedToken(null); setShowTokenPicker(false); setAmount(""); }}
                         className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] hover:bg-surface-2 transition-colors ${!selectedToken ? "text-brand-400" : "text-text-primary"}`}
                       >
-                        <TokenIcon symbol={nativeSymbol} size={22} />
+                        <AssetIcon symbol={nativeSymbol} chainId={selectedChainId} size={22} />
                         <div className="flex-1 text-left">
                           <span className="font-medium">{nativeSymbol}</span>
                           <span className="text-[11px] text-muted ml-2">{(activeNonEvmChain?.balance ?? 0).toFixed(4)}</span>
@@ -533,7 +586,7 @@ export default function Send() {
                           onClick={() => { setSelectedToken(t); setShowTokenPicker(false); setAmount(""); }}
                           className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] hover:bg-surface-2 transition-colors ${selectedToken?.address === t.address ? "text-brand-400" : "text-text-primary"}`}
                         >
-                          <TokenIcon symbol={t.symbol} logo={t.logo} size={22} />
+                          <AssetIcon symbol={t.symbol} logo={t.logo} chainId={selectedChainId} address={t.address} size={22} />
                           <div className="flex-1 text-left">
                             <span className="font-medium">{t.symbol}</span>
                             <span className="text-[11px] text-muted ml-2">{parseFloat(t.balance || "0").toFixed(4)}</span>
@@ -560,7 +613,7 @@ export default function Send() {
                               onClick={() => { setSelectedToken(t); setShowTokenPicker(false); setAmount(""); }}
                               className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] hover:bg-surface-2 transition-colors opacity-60 ${selectedToken?.address === t.address ? "text-brand-400" : "text-text-primary"}`}
                             >
-                              <TokenIcon symbol={t.symbol} logo={t.logo} size={22} />
+                              <AssetIcon symbol={t.symbol} logo={t.logo} chainId={selectedChainId} address={t.address} size={22} />
                               <div className="flex-1 text-left">
                                 <span className="font-medium">{t.symbol}</span>
                                 <span className="text-[11px] text-muted ml-2">{parseFloat(t.balance || "0").toFixed(4)}</span>
