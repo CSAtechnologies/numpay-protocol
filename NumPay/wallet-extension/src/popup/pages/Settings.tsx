@@ -293,12 +293,18 @@ export default function Settings({ onLock, onReset }: Props) {
                   meta.id === activeWalletId ? "border border-brand-500/30" : ""
                 }`}
               >
-                <div
-                  className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0"
-                  style={{ background: "linear-gradient(135deg, var(--brand-500), var(--brand-600))" }}
-                >
-                  {meta.name.charAt(0).toUpperCase()}
-                </div>
+                {meta.avatar ? (
+                  <span className="w-7 h-7 flex items-center justify-center text-[18px] flex-shrink-0">
+                    {meta.avatar}
+                  </span>
+                ) : (
+                  <div
+                    className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0"
+                    style={{ background: "linear-gradient(135deg, var(--brand-500), var(--brand-600))" }}
+                  >
+                    {meta.name.charAt(0).toUpperCase()}
+                  </div>
+                )}
                 <div className="flex-1 min-w-0">
                   <p className="text-[13px] font-medium text-text-primary truncate">{meta.name}</p>
                   <p className="text-[10px] text-muted font-mono">
