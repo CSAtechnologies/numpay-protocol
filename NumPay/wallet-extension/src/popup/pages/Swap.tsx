@@ -1660,7 +1660,7 @@ export default function Swap() {
               </div>
             );
             return (
-              <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3"
+              <div className="fixed inset-0 z-[110] flex items-end justify-center bg-black/60 p-3"
                    onClick={() => setShowConfirm(false)}>
                 <div className="w-full premium-card p-4" onClick={(e) => e.stopPropagation()}>
                   <p className="text-[14px] font-bold text-text-primary mb-3">
