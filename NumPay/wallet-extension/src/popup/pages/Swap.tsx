@@ -1011,8 +1011,9 @@ export default function Swap() {
         assertNativeValue(isNativeSwap, value, srcAmountBn);
 
         if (fromToken.address && route.priceRoute?.tokenTransferProxy) {
-          // Approval spender is chain-constant — gate it hard. Exact amount only.
-          assertTrustedSpender("paraswap", route.priceRoute.tokenTransferProxy);
+          // Gate the approval to ParaSwap's proxy for THIS chain (Base differs
+          // from the others). Exact amount only.
+          assertTrustedSpender("paraswap", route.priceRoute.tokenTransferProxy, net.chainId);
           await approveErc20Exact(signer, fromToken.address, wallet.address, route.priceRoute.tokenTransferProxy, srcAmount);
         }
         await simulateOrThrow(signer, { to: txData.to, data: txData.data, value });
