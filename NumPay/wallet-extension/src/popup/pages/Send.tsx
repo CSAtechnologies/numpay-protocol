@@ -11,6 +11,7 @@ import {
 import { BPAN_CHAINS, DEFAULT_NETWORK, NETWORKS, type BPANChainId, type Network } from "@/lib/networks";
 import { getSigner, isLocked } from "@/lib/wallet";
 import { sendToken, type Token } from "@/lib/tokens";
+import { markBalancesDirty } from "@/lib/balanceBus";
 import {
   sendSolanaTransfer, sendTronTransfer, sendSuiTransfer,
   sendSolanaTokenTransfer, sendTronTokenTransfer, sendSuiTokenTransfer,
@@ -36,6 +37,28 @@ const NON_EVM_META: Record<string, { symbol: string; decimals: number; explorer:
 
 // Chains with native sending wired up. The rest fall back to "copy the address".
 const CAN_SEND_NATIVE: Record<string, boolean> = { solana: true, tron: true, sui: true };
+
+// Native-coin headroom to leave for the network fee on a percentage/MAX send.
+// A native transfer pays its gas out of the same balance, so sending 100% leaves
+// nothing for the fee and the tx fails. These are conservative heuristic buffers
+// in native units (not a live gas estimate): erring slightly large just sends a
+// hair under the true max, and the node still validates the final amount. Keyed by
+// chain because the same symbol (ETH) spans pricey L1 and cheap L2s.
+const NATIVE_FEE_RESERVE: Record<string, number> = {
+  ethereum: 0.003,
+  polygon: 0.2, avalanche: 0.02, bsc: 0.002, fantom: 0.5, cronos: 0.5,
+  celo: 0.05, gnosis: 0.02, moonbeam: 0.05, klaytn: 0.5, sei: 0.1,
+  mantle: 0.5, metis: 0.005,
+  solana: 0.01, tron: 5, sui: 0.05,
+};
+// ETH L2s (arbitrum, optimism, base, zksync, scroll, linea, blast, ...) and any
+// custom/unknown chain: gas is cheap, so a tiny buffer is enough. A too-small
+// default only means MAX still fails and the user lowers the amount, as today.
+const DEFAULT_FEE_RESERVE = 0.0005;
+
+function nativeFeeReserve(chainId: string): number {
+  return NATIVE_FEE_RESERVE[chainId] ?? DEFAULT_FEE_RESERVE;
+}
 
 // Parse a decimal amount string into an integer base-unit bigint without
 // floating point, rejecting more fraction digits than the chain supports.
@@ -157,7 +180,12 @@ export default function Send() {
   }
 
   function setPercent(pct: number) {
-    const val = sendBalance * pct;
+    // Native-coin sends pay gas out of this same balance, so a MAX (100%) send with
+    // no headroom always fails. Reserve a small fee buffer for native sends; tokens
+    // pay gas from the native coin, so a token's own balance needs no reserve.
+    const reserve = selectedToken ? 0 : nativeFeeReserve(selectedChainId);
+    const cap = Math.max(0, sendBalance - reserve);
+    const val = Math.min(sendBalance * pct, cap);
     setAmount(val > 0 ? val.toFixed(Math.min(sendDecimals, 8)) : "0");
   }
 
@@ -280,7 +308,7 @@ export default function Send() {
         });
         setTxHash(tx.hash);
       }
-      setTxFx("success");
+      markBalancesDirty(); setTxFx("success");
     } catch (e: any) {
       setError(e.reason || e.message || "Transaction failed");
       setTxFx("error");
@@ -347,7 +375,7 @@ export default function Send() {
       } else {
         throw new Error(`Native ${selectedChainId} sending is not available yet`);
       }
-      setTxFx("success");
+      markBalancesDirty(); setTxFx("success");
     } catch (e: any) {
       setError(e.message || "Transaction failed");
       setTxFx("error");

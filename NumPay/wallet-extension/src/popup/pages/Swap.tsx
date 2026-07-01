@@ -6,6 +6,7 @@ import { useCurrency } from "../hooks/useCurrency";
 import { usdToDisplayCurrency } from "@/lib/currency";
 import { NETWORKS } from "@/lib/networks";
 import { DEFAULT_TOKENS } from "@/lib/tokens";
+import { markBalancesDirty } from "@/lib/balanceBus";
 import { type NonEvmChain } from "@/lib/chains";
 import { fetchJupiterQuote, executeJupiterSwap, resolveSolanaToken, hasTokenAccount, WSOL_MINT, SOLANA_SWAP_TOKENS } from "@/lib/chains/solana";
 import { getSigner, isLocked } from "@/lib/wallet";
@@ -953,7 +954,7 @@ export default function Swap() {
           quoteToUse,
         );
         setTxHash(txid);
-        setTxFx("success");
+        markBalancesDirty(); setTxFx("success");
       } catch (e: any) {
         setSwapError(e.message || "Swap failed");
         setTxFx("error");
@@ -1087,7 +1088,7 @@ export default function Swap() {
         const tx = await signer.sendTransaction({ to: routerAddress, data, value });
         setTxHash(tx.hash);
       }
-      setTxFx("success");
+      markBalancesDirty(); setTxFx("success");
     } catch (e: any) { setSwapError(e.message || "Swap failed"); setTxFx("error"); }
     finally { setSwapping(false); }
   }
@@ -1151,7 +1152,7 @@ export default function Swap() {
         gasLimit: txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined,
       });
       setBridgeTxHash(tx.hash);
-      setTxFx("success");
+      markBalancesDirty(); setTxFx("success");
     } catch (e: any) { setBridgeError(e.message || "Bridge failed"); setTxFx("error"); }
     finally { setBridging(false); }
   }
@@ -1162,11 +1163,14 @@ export default function Swap() {
     if (!fromToken.address) {
       const cb = chainBalances.find((c) => c.networkId === fromToken.chainId);
       const multiChainBal = parseFloat(cb?.balance || "0");
-      // When the from-token is on the currently active network, also check the
-      // direct single-network balance (fetched without a race timeout), and use
-      // whichever is larger — avoids showing 0 when multiChain fetch timed out.
+      // For the active network we also have the direct single-network balance from
+      // refresh() (a live read with no race timeout). Prefer it when present: it is
+      // the freshest authoritative figure, so MAX can't overshoot on a stale-high
+      // cached multichain value. Fall back to the cached multichain balance only
+      // when the direct read is unavailable (a different network, or the live fetch
+      // timed out to 0).
       const directBal = fromToken.chainId === network.id ? parseFloat(balance) : 0;
-      return Math.max(multiChainBal, directBal) || parseFloat(fromToken.balance) || 0;
+      return (directBal > 0 ? directBal : multiChainBal) || parseFloat(fromToken.balance) || 0;
     }
     return parseFloat(fromToken.balance) || 0;
   }, [fromToken, chainBalances, network.id, balance]);

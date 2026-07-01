@@ -4,6 +4,7 @@ import { type WalletData, type VaultMeta, listVaultMeta, getActiveId, setActiveI
 import { notifyDappState } from "@/lib/dapp/notify";
 import { deriveSolanaAddress } from "@/lib/chains/solana";
 import { getItem, setItem, getSession, setSession } from "@/lib/storage";
+import { balancesDirty, subscribeBalanceBus } from "@/lib/balanceBus";
 import { NETWORKS, DEFAULT_NETWORK, type Network } from "@/lib/networks";
 import { DEFAULT_TOKENS, getTokenBalance, type Token } from "@/lib/tokens";
 import {
@@ -454,17 +455,27 @@ export function useWallet(): WalletState {
     finally { setNonEvmLoading(false); }
   }, [nonEvmWallet, wallet?.address]);
 
-  // Background refresh every 60s so balances stay current while the popup is open.
-  // Each refresher is stale-while-revalidate, so this never blanks displayed data —
-  // it only updates values in place (and shows a brief "syncing…" hint).
+  // Keep balances current while the popup is open. Idle cadence is 25s; after a
+  // send/swap marks balances dirty (balanceBus) we refresh at once and poll fast
+  // (6s) for a short window, so the new balance appears within seconds instead of
+  // lingering until the next tick. Each refresher is stale-while-revalidate, so
+  // this never blanks displayed data — it only updates values in place.
   useEffect(() => {
     if (!wallet) return;
-    const id = setInterval(() => {
-      refreshMultiChain();
-      refreshAutoTokens();
-      refreshNonEvm();
-    }, 60_000);
-    return () => clearInterval(id);
+    let timer: ReturnType<typeof setTimeout>;
+    const runAll = () => { refreshMultiChain(); refreshAutoTokens(); refreshNonEvm(); };
+    const tick = () => {
+      runAll();
+      timer = setTimeout(tick, balancesDirty() ? 6_000 : 25_000);
+    };
+    timer = setTimeout(tick, balancesDirty() ? 6_000 : 25_000);
+    // A broadcast tx wakes us immediately and drops us into the fast cadence.
+    const unsub = subscribeBalanceBus(() => {
+      runAll();
+      clearTimeout(timer);
+      timer = setTimeout(tick, 6_000);
+    });
+    return () => { clearTimeout(timer); unsub(); };
   }, [wallet, refreshMultiChain, refreshAutoTokens, refreshNonEvm]);
 
   function switchNetwork(id: string) {
