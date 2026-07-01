@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { fetchDexPrices } from "@/lib/tokenMarket";
+import { fetchDexPrices, fetchTokenLogos } from "@/lib/tokenMarket";
+import { getTokenLogo } from "@/lib/logoCache";
 import {
   lockWallet, addEncryptedWallet,
   createWallet, importFromMnemonic, importFromPrivateKey,
@@ -256,23 +257,40 @@ export default function Dashboard({ onLock }: Props) {
   // address; `triedPriceAddrs` stops us re-querying the same misses every render.
   const [extraPrices, setExtraPrices] = useState<Record<string, number>>({});
   const triedPriceAddrs = useRef<Set<string>>(new Set());
+  const triedLogoAddrs  = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    const missing: string[] = [];
-    for (const toks of Object.values(tokensByChain)) {
+    const lookup = new Set<string>();                 // → DexScreener (price + logo, cross-chain)
+    const logoByChain: Record<string, string[]> = {}; // logo-missing, grouped for the GeckoTerminal pass
+    for (const [chainId, toks] of Object.entries(tokensByChain)) {
       for (const t of toks) {
-        if (!t.address || t.priceUsd != null) continue;
+        if (!t.address) continue;
         if (parseFloat(t.balance || "0") <= 0) continue;
-        if (triedPriceAddrs.current.has(t.address.toLowerCase())) continue;
-        missing.push(t.address);
+        const key = t.address.toLowerCase();
+        const needsPrice = t.priceUsd == null && !triedPriceAddrs.current.has(key);
+        const needsLogo  = !t.logo && !getTokenLogo(t.address) && !triedLogoAddrs.current.has(key);
+        if (needsPrice) { lookup.add(t.address); triedPriceAddrs.current.add(key); }
+        if (needsLogo)  { lookup.add(t.address); (logoByChain[chainId] ||= []).push(t.address); triedLogoAddrs.current.add(key); }
       }
     }
-    if (!missing.length) return;
-    missing.forEach((a) => triedPriceAddrs.current.add(a.toLowerCase()));
+    if (!lookup.size) return;
+
     let cancelled = false;
-    fetchDexPrices(missing).then((prices) => {
+    (async () => {
+      // 1) DexScreener — prices for the value column, plus a logo where it has one.
+      //    Cross-chain by address, so it also covers chains GeckoTerminal's map lacks.
+      const prices = await fetchDexPrices([...lookup]);
       if (!cancelled && Object.keys(prices).length) setExtraPrices((prev) => ({ ...prev, ...prices }));
-    });
+      // 2) GeckoTerminal (CoinGecko logo set) for tokens DexScreener didn't picture —
+      //    covers listed tokens with no DexScreener upload (ARB, QUICK, majors…).
+      if (cancelled) return;
+      const stillMissing: Record<string, string[]> = {};
+      for (const [chainId, addrs] of Object.entries(logoByChain)) {
+        const rest = addrs.filter((a) => !getTokenLogo(a));
+        if (rest.length) stillMissing[chainId] = rest;
+      }
+      if (Object.keys(stillMissing).length) await fetchTokenLogos(stillMissing);
+    })();
     return () => { cancelled = true; };
   }, [tokensByChain]);
 

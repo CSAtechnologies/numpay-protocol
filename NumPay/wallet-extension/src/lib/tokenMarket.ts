@@ -15,6 +15,8 @@
  * history" state when the chart comes back empty but a price exists.
  */
 
+import { setTokenLogo } from "./logoCache";
+
 export interface MarketData {
   current_price: number;
   price_change_percentage_24h: number;
@@ -196,6 +198,7 @@ async function dsMarket(address: string): Promise<MarketData | null> {
   const p = pairs.slice().sort((a, b) => num(b.liquidity?.usd) - num(a.liquidity?.usd))[0];
   const price = num(p.priceUsd);
   if (!price) return null;
+  setTokenLogo(address, p?.info?.imageUrl); // capture the logo for the detail-page path too
   const mcap = num(p.marketCap) || num(p.fdv);
   return {
     current_price: price,
@@ -229,9 +232,39 @@ export async function fetchDexPrices(addresses: string[]): Promise<Record<string
       const liq = num(p?.liquidity?.usd);
       if (!addr || !price) continue;
       if (liq >= (bestLiq[addr] ?? -1)) { bestLiq[addr] = liq; out[addr] = price; }
+      // The same response carries the token's logo — stash it so icons can use a
+      // real image for memecoins the indexers/coincap have no logo for.
+      setTokenLogo(addr, p?.info?.imageUrl);
     }
   }
   return out;
+}
+
+// Address-keyed logo backfill via GeckoTerminal's multi-token endpoint, which
+// serves CoinGecko's broad logo set — covering tokens DexScreener has no uploaded
+// image for (e.g. ARB, QUICK). GeckoTerminal endpoints are per-network, so callers
+// pass tokens grouped by our chain id; each chain is batched 30 addresses per call.
+// Only chains in CHAIN_TO_GT_NETWORK are attempted; the rest are skipped silently.
+// Populates the shared logo cache as a side effect.
+export async function fetchTokenLogos(byChain: Record<string, string[]>): Promise<void> {
+  for (const [chainId, addrs] of Object.entries(byChain)) {
+    const network = CHAIN_TO_GT_NETWORK[chainId];
+    if (!network) continue;
+    const uniq = [...new Set(addrs.filter(Boolean))];
+    for (let i = 0; i < uniq.length; i += 30) {
+      const batch = uniq.slice(i, i + 30);
+      const j = await fetchJson(
+        `https://api.geckoterminal.com/api/v2/networks/${network}/tokens/multi/${batch.join(",")}`,
+      );
+      const list = j?.data as any[] | undefined;
+      if (!list) continue;
+      for (const t of list) {
+        const a = t?.attributes;
+        const img = a?.image_url as string | undefined;
+        if (a?.address && img && img !== "missing.png") setTokenLogo(a.address, img);
+      }
+    }
+  }
 }
 
 // ── Public loaders (walk the fallback chain) ─────────────────────────────────────

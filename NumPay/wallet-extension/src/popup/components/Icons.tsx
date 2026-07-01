@@ -1,8 +1,15 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useSyncExternalStore } from "react";
 import { ICON_DATA } from "../../lib/icons/iconData";
 import { ICON_GLYPHS } from "../../lib/icons/iconGlyphs";
 import { VENDORED_TOKENS, VENDORED_CHAINS } from "../../lib/icons/vendoredLogos";
 import { NETWORKS } from "../../lib/networks";
+import { subscribeLogos, getTokenLogo } from "../../lib/logoCache";
+
+// Live-read the shared logo cache: an address whose logo resolves later (from a
+// DexScreener price/market fetch) re-renders the icon so the real logo appears.
+function useTokenLogo(address?: string): string | undefined {
+  return useSyncExternalStore(subscribeLogos, () => getTokenLogo(address));
+}
 
 interface IconProps {
   size?: number;
@@ -565,7 +572,7 @@ export function AssetIcon({
 }) {
   if (!address && chainId && ETH_L2_CHAINS.has(chainId))
     return <ChainIcon chainId={chainId} logo={logo} size={size} />;
-  return <TokenIcon symbol={symbol} logo={logo} size={size} />;
+  return <TokenIcon symbol={symbol} logo={logo} chainId={chainId} tokenAddress={address} size={size} />;
 }
 
 // ── ChainBadge — the small "sub" chain mark in the bottom-right corner of a token
@@ -595,11 +602,13 @@ export function ChainBadge({
 
 // ── TokenIcon component ───────────────────────────────────────────────────────
 // Symbol-keyed: pinned override / coincap (by symbol) → app-streamed logo →
-// drawn coin. Identical icon for a ticker on every chain. `chainId`/`tokenAddress`
-// are accepted for call-site compatibility but intentionally not used for art.
+// address-keyed DexScreener logo (memecoins the symbol sources have no art for) →
+// drawn coin. Identical icon for a ticker on every chain. `chainId` is accepted
+// for call-site compatibility but not used for art.
 export function TokenIcon({
   symbol,
   logo,
+  tokenAddress,
   size = 32,
 }: {
   symbol: string;
@@ -608,6 +617,7 @@ export function TokenIcon({
   tokenAddress?: string;
   size?: number;
 }) {
-  const sources = [tokenIconUrl(symbol), logo || ""];
+  const cached = useTokenLogo(tokenAddress);
+  const sources = [tokenIconUrl(symbol), logo || "", cached || ""];
   return <FramedCoin sources={sources} fallbackSvg={tokenFallbackSvg(symbol)} alt={symbol} size={size} />;
 }
