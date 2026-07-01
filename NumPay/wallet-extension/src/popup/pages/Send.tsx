@@ -74,13 +74,17 @@ function toBaseUnits(amount: string, decimals: number): bigint {
 
 export default function Send() {
   const {
-    wallet, network, balance, tokens, tokensByChain,
+    wallet, network, balance, tokens, tokensByChain, chainBalances,
     activeChainId, nonEvmWallet, nonEvmChains, nonEvmLoading,
     switchChain, customChains,
   } = useWallet();
 
   const location = useLocation();
-  const navChainId = (location.state as { prefillChain?: string } | null)?.prefillChain as BPANChainId | undefined;
+  const navState = location.state as
+    { prefillChain?: string; prefillSymbol?: string; prefillAddress?: string } | null;
+  const navChainId = navState?.prefillChain as BPANChainId | undefined;
+  const prefillSymbol = navState?.prefillSymbol;
+  const prefillAddress = navState?.prefillAddress;
 
   // Seed from navigation state (e.g. coming from TokenDetail) or fall back to global chain.
   const [selectedChainId, setSelectedChainId] = useState<BPANChainId>(
@@ -155,6 +159,21 @@ export default function Send() {
   const visibleNonEvmTokens = nonEvmTokens.filter((t) => !classifyToken(t).hidden);
   const hiddenNonEvmTokens  = nonEvmTokens.filter((t) =>  classifyToken(t).hidden);
 
+  // EVM token list + native balance follow the CHAIN picked here (selectedChainId),
+  // not the global wallet network. The global `tokens`/`balance` lag behind until
+  // switchChain + refresh finish, which showed the previous chain's tokens and
+  // dropped auto-detected balances. tokensByChain carries the per-chain swept
+  // tokens (incl. memecoins like BNKR); chainBalances carries the natives.
+  const evmTokenList = useMemo<Token[]>(() => {
+    if (!isEvmChain) return [];
+    const swept = tokensByChain[selectedChainId];
+    if (swept && swept.length) return swept;
+    return selectedChainId === network.id ? tokens : [];
+  }, [isEvmChain, tokensByChain, selectedChainId, network.id, tokens]);
+  const evmNativeBalance = selectedChainId === network.id
+    ? parseFloat(balance)
+    : (chainBalances.find((c) => c.networkId === selectedChainId)?.balanceNum ?? 0);
+
   // Unified send values — respect a selected token on either EVM or non-EVM,
   // otherwise fall back to the chain's native coin.
   const sendSymbol = selectedToken
@@ -162,12 +181,30 @@ export default function Send() {
     : nativeSymbol;
   const sendBalance = selectedToken
     ? parseFloat(selectedToken.balance || "0")
-    : isEvmChain ? parseFloat(balance) : (activeNonEvmChain?.balance ?? 0);
+    : isEvmChain ? evmNativeBalance : (activeNonEvmChain?.balance ?? 0);
   const sendDecimals = selectedToken
     ? selectedToken.decimals
     : isEvmChain ? sendNetwork.decimals : (nonEvmMeta?.decimals ?? 9);
 
   const canSendNative = !isEvmChain && !!CAN_SEND_NATIVE[selectedChainId];
+
+  // Preselect the token when arriving from a token's detail page (Send button):
+  // TokenDetail passes prefillChain (already seeded into selectedChainId) plus the
+  // token's address/symbol. Match it once the chain's token list has loaded; a
+  // native coin has no address, so it stays as the default (selectedToken null).
+  const tokenPrefillApplied = useRef(false);
+  useEffect(() => {
+    if (tokenPrefillApplied.current || selectedToken) return;
+    if (!prefillAddress && !prefillSymbol) { tokenPrefillApplied.current = true; return; }
+    const addrL = prefillAddress?.toLowerCase();
+    if (!addrL && prefillSymbol === nativeSymbol) { tokenPrefillApplied.current = true; return; }
+    const list = isEvmChain ? evmTokenList : (tokensByChain[selectedChainId] ?? []);
+    if (!list.length) return; // wait for the chain's tokens to load, then match
+    const match = list.find((t) =>
+      addrL ? t.address?.toLowerCase() === addrL
+            : (prefillSymbol ? t.symbol === prefillSymbol : false));
+    if (match) { setSelectedToken(match); tokenPrefillApplied.current = true; }
+  }, [prefillAddress, prefillSymbol, isEvmChain, evmTokenList, tokensByChain, selectedChainId, nativeSymbol, selectedToken]);
 
   function handleChainChange(id: BPANChainId) {
     setSelectedChainId(id);
@@ -514,11 +551,11 @@ export default function Send() {
                     <AssetIcon symbol={sendNetwork.symbol} chainId={selectedChainId} size={22} />
                     <div className="flex-1 text-left">
                       <span className="font-medium">{sendNetwork.symbol}</span>
-                      <span className="text-[11px] text-muted ml-2">{parseFloat(balance).toFixed(4)}</span>
+                      <span className="text-[11px] text-muted ml-2">{evmNativeBalance.toFixed(4)}</span>
                     </div>
                     {!selectedToken && <CheckIcon size={14} className="text-brand-400" />}
                   </button>
-                  {tokens.map((t) => (
+                  {evmTokenList.map((t) => (
                     <button
                       key={t.address}
                       onClick={() => { setSelectedToken(t); setShowTokenPicker(false); setAmount(""); }}
