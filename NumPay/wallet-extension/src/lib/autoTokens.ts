@@ -423,16 +423,28 @@ async function sweepTokensByRPC(
 export const AUTOTOK_CACHE_PFX = "numpay_autotok6_";
 const CACHE_PFX = AUTOTOK_CACHE_PFX;
 const CACHE_TTL = 3 * 60 * 1000; // 3 minutes
+// A forced sweep (manual refresh button) may bypass the TTL at most this
+// often, so button-mashing can't burn the indexer quotas.
+const FORCE_MIN_INTERVAL = 15 * 1000;
+let lastForcedSweep = 0;
 
 /**
  * Sweep every supported EVM chain for ERC-20 tokens.
  * Serves stale cache immediately, then re-fetches in the background.
+ * `force` skips the freshness gate (user explicitly asked for truth) but is
+ * itself rate-limited to one bypass per FORCE_MIN_INTERVAL.
  */
 export async function sweepAllChainTokens(
   address: string,
   onUpdate: (chainId: string, tokens: AutoToken[]) => void,
+  force = false,
 ): Promise<void> {
   const cacheKey = CACHE_PFX + address.toLowerCase();
+
+  if (force) {
+    if (Date.now() - lastForcedSweep < FORCE_MIN_INTERVAL) force = false;
+    else lastForcedSweep = Date.now();
+  }
 
   // Serve cache immediately (stale-while-revalidate). Keep it around as the
   // enrichment source for the re-sweep below: a source that is over quota
@@ -451,7 +463,7 @@ export async function sweepAllChainTokens(
     }
   } catch {}
 
-  if (cacheIsFresh) return;
+  if (cacheIsFresh && !force) return;
 
   const freshData: Record<string, AutoToken[]> = {};
 

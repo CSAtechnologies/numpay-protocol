@@ -135,7 +135,7 @@ interface DisplayToken {
 export default function Dashboard({ onLock }: Props) {
   const navigate = useNavigate();
   const {
-    wallet, network, tokens, tokensByChain, loading, switchNetwork, refresh, refreshNonEvm,
+    wallet, network, tokens, tokensByChain, loading, switchNetwork, refresh, refreshNonEvm, forceRefreshAll,
     activeChainId, activeAddress, switchChain, filterChainId, setAssetFilter,
     portfolioUsd, chainBalances, multiChainLoading,
     nonEvmChains, nonEvmLoading,
@@ -985,7 +985,7 @@ export default function Dashboard({ onLock }: Props) {
               </svg>
             </button>
             <button
-              onClick={() => { refresh(); refreshNonEvm(true); }}
+              onClick={forceRefreshAll}
               className="p-1.5 rounded-lg text-muted hover:text-brand-400 transition-colors"
             >
               <RefreshIcon size={14} />

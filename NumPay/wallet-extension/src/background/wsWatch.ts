@@ -45,6 +45,24 @@ const TOKEN_DEBOUNCE_MS = 2_000;
 // keccak256("Transfer(address,address,uint256)")
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
+// Chains with no Alchemy app coverage: public WSS endpoints, ERC-20 Transfer
+// logs only. Native deposits on these chains ride the existing 50s native
+// sweep, because vanilla eth_subscribe has no per-address transaction filter
+// (alchemy_minedTransactions is Alchemy-specific). Endpoints verified to
+// accept eth_subscribe("logs"); the list rotates on reconnect strikes.
+const PUBLIC_WS_CHAINS: Record<string, string[]> = {
+  bsc: ["wss://bsc-rpc.publicnode.com", "wss://bsc.publicnode.com", "wss://bsc.drpc.org"],
+};
+
+// SPL token programs. programSubscribe filtered on the owner field (offset 32
+// of the token-account layout) fires for ANY token account owned by the
+// watched wallet - including a brand-new ATA on a first-ever deposit, which
+// accountSubscribe on the owner never sees. Classic accounts are exactly 165
+// bytes; Token-2022 accounts carry extensions, so that one filters on owner
+// only (a false positive just costs one refresh).
+const SPL_TOKEN_PROGRAM  = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const SPL_TOKEN22_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+
 const ERC20_META_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function decimals() view returns (uint8)",
@@ -77,7 +95,14 @@ async function ensure(): Promise<void> {
   watch = w;
 
   if (ALCHEMY_KEY) {
-    for (const chainId of Object.keys(ALCHEMY_CHAINS)) openEvm(chainId, w.evm);
+    for (const [chainId, sub] of Object.entries(ALCHEMY_CHAINS)) {
+      openEvm(chainId, w.evm, `wss://${sub}.g.alchemy.com/v2/${ALCHEMY_KEY}`, true);
+    }
+  }
+  for (const [chainId, urls] of Object.entries(PUBLIC_WS_CHAINS)) {
+    // Rotate through the endpoint list as strikes accumulate.
+    const url = urls[(strikes.get(chainId) ?? 0) % urls.length];
+    openEvm(chainId, w.evm, url, false);
   }
   if (w.solana) openSolana(w.solana);
 
@@ -103,14 +128,12 @@ function noteClosed(key: string): void {
   // Reconnection happens on the next ensure tick (1-min alarm).
 }
 
-function openEvm(chainId: string, address: string): void {
+function openEvm(chainId: string, address: string, url: string, alchemyNativeSub: boolean): void {
   if (!canOpen(chainId)) return;
-  const sub = ALCHEMY_CHAINS[chainId];
-  if (!sub) return;
 
   let ws: WebSocket;
   try {
-    ws = new WebSocket(`wss://${sub}.g.alchemy.com/v2/${ALCHEMY_KEY}`);
+    ws = new WebSocket(url);
   } catch {
     noteClosed(chainId);
     return;
@@ -120,13 +143,15 @@ function openEvm(chainId: string, address: string): void {
   ws.onopen = () => {
     strikes.set(chainId, 0);
     // Native deposits: mined txs TO the watched address (hashes only — the
-    // payload is a wake signal, the sweep fetches truth).
-    ws.send(JSON.stringify({
-      jsonrpc: "2.0", id: 1, method: "eth_subscribe",
-      params: ["alchemy_minedTransactions", {
-        addresses: [{ to: address }], includeRemoved: false, hashesOnly: true,
-      }],
-    }));
+    // payload is a wake signal, the sweep fetches truth). Alchemy-only method.
+    if (alchemyNativeSub) {
+      ws.send(JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "eth_subscribe",
+        params: ["alchemy_minedTransactions", {
+          addresses: [{ to: address }], includeRemoved: false, hashesOnly: true,
+        }],
+      }));
+    }
     // ERC-20 deposits: any Transfer whose `to` topic is the watched address.
     ws.send(JSON.stringify({
       jsonrpc: "2.0", id: 2, method: "eth_subscribe",
@@ -158,15 +183,34 @@ function openSolana(owner: string): void {
 
   ws.onopen = () => {
     strikes.set("solana", 0);
+    // Native SOL: lamport changes on the owner account.
     ws.send(JSON.stringify({
       jsonrpc: "2.0", id: 1, method: "accountSubscribe",
       params: [owner, { commitment: "confirmed" }],
+    }));
+    // SPL deposits: any token account owned by us changes (covers brand-new
+    // ATAs on first-ever deposits). Owner sits at offset 32 of the layout.
+    ws.send(JSON.stringify({
+      jsonrpc: "2.0", id: 2, method: "programSubscribe",
+      params: [SPL_TOKEN_PROGRAM, {
+        commitment: "confirmed", encoding: "base64",
+        filters: [{ dataSize: 165 }, { memcmp: { offset: 32, bytes: owner } }],
+      }],
+    }));
+    ws.send(JSON.stringify({
+      jsonrpc: "2.0", id: 3, method: "programSubscribe",
+      params: [SPL_TOKEN22_PROGRAM, {
+        commitment: "confirmed", encoding: "base64",
+        filters: [{ memcmp: { offset: 32, bytes: owner } }],
+      }],
     }));
   };
   ws.onmessage = (ev) => {
     let msg: any;
     try { msg = JSON.parse(String(ev.data)); } catch { return; }
-    if (msg?.method === "accountNotification") queueSolRefresh();
+    if (msg?.method === "accountNotification" || msg?.method === "programNotification") {
+      queueSolRefresh();
+    }
   };
   ws.onerror = () => { try { ws.close(); } catch {} };
   ws.onclose = () => noteClosed("solana");

@@ -45,6 +45,8 @@ export interface WalletState {
   setAssetFilter: (id: string | null) => void;
   refresh: () => void;
   refreshNonEvm: (showLoading?: boolean) => Promise<void>;
+  /** Manual refresh: run every fetcher, token sweep bypasses its TTL gate. */
+  forceRefreshAll: () => void;
   portfolioUsd: number;
   chainBalances: ChainBalance[];
   multiChainLoading: boolean;
@@ -257,8 +259,9 @@ export function useWallet(): WalletState {
 
   useEffect(() => { refreshMultiChain(); }, [refreshMultiChain]);
 
-  // Auto-sweep all EVM chains for ERC-20 tokens (memecoins, alts, anything)
-  const refreshAutoTokens = useCallback(async () => {
+  // Auto-sweep all EVM chains for ERC-20 tokens (memecoins, alts, anything).
+  // `force` (manual refresh) bypasses the sweep's freshness gate.
+  const refreshAutoTokens = useCallback(async (force = false) => {
     if (!wallet) return;
     await sweepAllChainTokens(wallet.address, (chainId, autoTokens) => {
       setTokensByChain((prev) => {
@@ -289,7 +292,7 @@ export function useWallet(): WalletState {
         if (JSON.stringify(merged) === JSON.stringify(existing)) return prev;
         return { ...prev, [chainId]: merged };
       });
-    });
+    }, force);
   }, [wallet]);
 
   useEffect(() => { refreshAutoTokens(); }, [refreshAutoTokens]);
@@ -440,6 +443,18 @@ export function useWallet(): WalletState {
     } catch {}
     finally { setNonEvmLoading(false); }
   }, [nonEvmWallet, wallet?.address]);
+
+  // Manual refresh: the user asked for truth NOW, so every fetcher runs and
+  // the token sweep bypasses its freshness gate (itself rate-limited). The
+  // old button only refreshed the active chain + non-EVM, which made a fresh
+  // deposit invisible until the 3-min sweep TTL expired no matter how often
+  // the user pressed it.
+  const forceRefreshAll = useCallback(() => {
+    refresh();
+    refreshMultiChain();
+    refreshAutoTokens(true);
+    void refreshNonEvm(true);
+  }, [refresh, refreshMultiChain, refreshAutoTokens, refreshNonEvm]);
 
   // Keep balances current while the popup is open. Idle cadence is 25s; after a
   // send/swap marks balances dirty (balanceBus) we refresh at once and poll fast
@@ -646,7 +661,7 @@ export function useWallet(): WalletState {
   return {
     wallet, network, balance, tokens, tokensByChain: displayTokensByChain, loading, switchNetwork,
     activeChainId, activeAddress, switchChain, filterChainId, setAssetFilter,
-    refresh, refreshNonEvm, portfolioUsd: displayPortfolioUsd, chainBalances: displayChainBalances, multiChainLoading,
+    refresh, refreshNonEvm, forceRefreshAll, portfolioUsd: displayPortfolioUsd, chainBalances: displayChainBalances, multiChainLoading,
     nonEvmWallet, nonEvmChains: displayNonEvmChains, nonEvmLoading,
     walletMetas, activeWalletId, switchActiveWallet, addWalletToSession, removeWalletMeta,
     setWalletAvatar, customChains,
