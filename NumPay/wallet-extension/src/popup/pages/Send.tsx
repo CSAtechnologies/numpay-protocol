@@ -335,17 +335,22 @@ export default function Send() {
         );
       }
 
+      let tx;
       if (selectedToken) {
-        const tx = await sendToken(selectedToken.address, destinationAddress, amount, selectedToken.decimals, signer);
-        setTxHash(tx.hash);
+        tx = await sendToken(selectedToken.address, destinationAddress, amount, selectedToken.decimals, signer);
       } else {
-        const tx = await signer.sendTransaction({
+        tx = await signer.sendTransaction({
           to: destinationAddress,
           value: ethers.parseUnits(amount, sendNetwork.decimals),
         });
-        setTxHash(tx.hash);
       }
-      markBalancesDirty(); setTxFx("success");
+      setTxHash(tx.hash);
+      // Overlay the spend on the displayed balance immediately (gas settles on
+      // reconciliation), and refresh the moment the receipt lands instead of
+      // waiting out the fast-poll cadence.
+      markBalancesDirty([{ chainId: sendNetwork.id, tokenAddress: selectedToken?.address, delta: -parseFloat(amount) }]);
+      void tx.wait().then(() => markBalancesDirty()).catch(() => {});
+      setTxFx("success");
     } catch (e: any) {
       setError(e.reason || e.message || "Transaction failed");
       setTxFx("error");
@@ -412,7 +417,10 @@ export default function Send() {
       } else {
         throw new Error(`Native ${selectedChainId} sending is not available yet`);
       }
-      markBalancesDirty(); setTxFx("success");
+      // Overlay the spend immediately; the 6s fast poll reconciles (non-EVM
+      // chains confirm fast, so no receipt hook is needed here).
+      markBalancesDirty([{ chainId: selectedChainId, tokenAddress: selectedToken?.address, delta: -parseFloat(amount) }]);
+      setTxFx("success");
     } catch (e: any) {
       setError(e.message || "Transaction failed");
       setTxFx("error");

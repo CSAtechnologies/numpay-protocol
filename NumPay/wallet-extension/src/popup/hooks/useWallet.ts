@@ -1,10 +1,12 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useSyncExternalStore } from "react";
 import { ethers } from "ethers";
 import { type WalletData, type VaultMeta, setActiveId, updateWalletAvatar, touchActivity, unlockActiveVault, SESSION_KEY } from "@/lib/wallet";
 import { notifyDappState } from "@/lib/dapp/notify";
 import { deriveSolanaAddress } from "@/lib/chains/solana";
 import { getItem, setItem, getSession, setSession } from "@/lib/storage";
-import { balancesDirty, subscribeBalanceBus } from "@/lib/balanceBus";
+import {
+  balancesDirty, subscribeBalanceBus, overlayVersion, hasPendingOverlays, pendingDeltaFor,
+} from "@/lib/balanceBus";
 import { NETWORKS, DEFAULT_NETWORK, type Network } from "@/lib/networks";
 import { DEFAULT_TOKENS, getTokenBalance, type Token } from "@/lib/tokens";
 import {
@@ -457,7 +459,13 @@ export function useWallet(): WalletState {
   useEffect(() => {
     if (!wallet) return;
     let timer: ReturnType<typeof setTimeout>;
-    const runAll = () => { refreshMultiChain(); refreshAutoTokens(); refreshNonEvm(); };
+    // During the post-tx dirty window also re-read the active network's native
+    // balance + token list (refresh) — they otherwise only load on mount/network
+    // change, which would leave the Send/Swap MAX figures stale after a send.
+    const runAll = () => {
+      refreshMultiChain(); refreshAutoTokens(); refreshNonEvm();
+      if (balancesDirty()) refresh();
+    };
     const tick = () => {
       runAll();
       timer = setTimeout(tick, balancesDirty() ? 6_000 : 25_000);
@@ -470,7 +478,7 @@ export function useWallet(): WalletState {
       timer = setTimeout(tick, 6_000);
     });
     return () => { clearTimeout(timer); unsub(); };
-  }, [wallet, refreshMultiChain, refreshAutoTokens, refreshNonEvm]);
+  }, [wallet, refreshMultiChain, refreshAutoTokens, refreshNonEvm, refresh]);
 
   function switchNetwork(id: string) {
     if (NETWORKS[id]) { setNetworkId(id); setItem(NETWORK_KEY, id); }
@@ -577,11 +585,65 @@ export function useWallet(): WalletState {
     setWalletMetas((prev) => prev.map((m) => m.id === id ? { ...m, avatar: avatar || undefined } : m));
   }, []);
 
+  // ── Optimistic balance overlay ────────────────────────────────────────────
+  // A just-broadcast send/swap registers its expected deltas on the balance bus;
+  // these memos apply them on top of the fetched state so the displayed numbers
+  // move the instant the tx is sent. pendingDeltaFor also advances the entry
+  // lifecycle: once the fetched value moves (the chain caught up) the delta
+  // stops being applied and truth takes over. Each asset lives in exactly one
+  // of the three structures, so an entry's baseline is pinned to one source.
+  const overlayVer = useSyncExternalStore(subscribeBalanceBus, overlayVersion);
+
+  const fmtBal = (n: number) => {
+    const s = n.toFixed(8).replace(/\.?0+$/, "");
+    return s === "" || s === "-" ? "0" : s;
+  };
+
+  const [displayChainBalances, displayPortfolioUsd] = useMemo((): [ChainBalance[], number] => {
+    if (!hasPendingOverlays()) return [chainBalances, portfolioUsd];
+    let usdShift = 0;
+    const list = chainBalances.map((cb) => {
+      const d = pendingDeltaFor(cb.networkId, undefined, cb.balanceNum);
+      if (!d) return cb;
+      const price = cb.balanceNum > 0 ? cb.usdValue / cb.balanceNum : 0;
+      const num = Math.max(0, cb.balanceNum + d);
+      const usd = num * price;
+      usdShift += usd - cb.usdValue;
+      return { ...cb, balanceNum: num, balance: fmtBal(num), usdValue: usd };
+    });
+    return [list, Math.max(0, portfolioUsd + usdShift)];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chainBalances, portfolioUsd, overlayVer]);
+
+  const displayNonEvmChains = useMemo(() => {
+    if (!hasPendingOverlays()) return nonEvmChains;
+    return nonEvmChains.map((c) => {
+      const d = pendingDeltaFor(c.id, undefined, c.balance);
+      return d ? { ...c, balance: Math.max(0, c.balance + d) } : c;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nonEvmChains, overlayVer]);
+
+  const displayTokensByChain = useMemo(() => {
+    if (!hasPendingOverlays()) return tokensByChain;
+    const out: Record<string, Token[]> = {};
+    for (const [chainId, list] of Object.entries(tokensByChain)) {
+      out[chainId] = list.map((t) => {
+        if (!t.address) return t;
+        const bal = parseFloat(t.balance || "0");
+        const d = pendingDeltaFor(chainId, t.address, bal);
+        return d ? { ...t, balance: fmtBal(Math.max(0, bal + d)) } : t;
+      });
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tokensByChain, overlayVer]);
+
   return {
-    wallet, network, balance, tokens, tokensByChain, loading, switchNetwork,
+    wallet, network, balance, tokens, tokensByChain: displayTokensByChain, loading, switchNetwork,
     activeChainId, activeAddress, switchChain, filterChainId, setAssetFilter,
-    refresh, refreshNonEvm, portfolioUsd, chainBalances, multiChainLoading,
-    nonEvmWallet, nonEvmChains, nonEvmLoading,
+    refresh, refreshNonEvm, portfolioUsd: displayPortfolioUsd, chainBalances: displayChainBalances, multiChainLoading,
+    nonEvmWallet, nonEvmChains: displayNonEvmChains, nonEvmLoading,
     walletMetas, activeWalletId, switchActiveWallet, addWalletToSession, removeWalletMeta,
     setWalletAvatar, customChains,
   };

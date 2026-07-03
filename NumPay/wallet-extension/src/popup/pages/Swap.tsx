@@ -954,7 +954,10 @@ export default function Swap() {
           quoteToUse,
         );
         setTxHash(txid);
-        markBalancesDirty(); setTxFx("success");
+        // Overlay the spent side immediately; the received side shows up on the
+        // fast-poll reconciliation (Solana confirms in ~1s).
+        markBalancesDirty([{ chainId: "solana", tokenAddress: fromToken.address || undefined, delta: -parseFloat(fromAmount) }]);
+        setTxFx("success");
       } catch (e: any) {
         setSwapError(e.message || "Swap failed");
         setTxFx("error");
@@ -1023,6 +1026,9 @@ export default function Swap() {
           gasLimit: txData.gas ? BigInt(txData.gas) : undefined,
         });
         setTxHash(tx.hash);
+        // Refresh the instant the receipt lands so the received token appears
+        // without waiting out the poll cadence.
+        void tx.wait().then(() => markBalancesDirty()).catch(() => {});
       } else if (route.provider === "relay") {
         // Relay returns ready-to-sign steps (an approval step for ERC-20 input,
         // then the swap/deposit step). Its router/spender is dynamic per quote,
@@ -1087,8 +1093,12 @@ export default function Swap() {
         await simulateOrThrow(signer, { to: routerAddress, data, value });
         const tx = await signer.sendTransaction({ to: routerAddress, data, value });
         setTxHash(tx.hash);
+        void tx.wait().then(() => markBalancesDirty()).catch(() => {});
       }
-      markBalancesDirty(); setTxFx("success");
+      // Overlay the spent side immediately (relay already waited for its
+      // receipts above; paraswap/kyber refresh again when theirs land).
+      markBalancesDirty([{ chainId: fromToken.chainId, tokenAddress: fromToken.address || undefined, delta: -parseFloat(fromAmount) }]);
+      setTxFx("success");
     } catch (e: any) { setSwapError(e.message || "Swap failed"); setTxFx("error"); }
     finally { setSwapping(false); }
   }
@@ -1152,7 +1162,11 @@ export default function Swap() {
         gasLimit: txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined,
       });
       setBridgeTxHash(tx.hash);
-      markBalancesDirty(); setTxFx("success");
+      // Overlay the spent side; the destination-chain arrival is minutes away
+      // (bridge latency), so only the source side is shown as spent.
+      markBalancesDirty([{ chainId: fromToken.chainId, tokenAddress: fromToken.address || undefined, delta: -parseFloat(fromAmount) }]);
+      void tx.wait().then(() => markBalancesDirty()).catch(() => {});
+      setTxFx("success");
     } catch (e: any) { setBridgeError(e.message || "Bridge failed"); setTxFx("error"); }
     finally { setBridging(false); }
   }
