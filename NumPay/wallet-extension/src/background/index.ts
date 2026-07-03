@@ -9,6 +9,7 @@
 
 import { initDappRouter, broadcastDappLock } from "./dappRouter";
 import { initBalanceRefresher, noteBalancePopupPort } from "./balanceRefresher";
+import { initWsWatch } from "./wsWatch";
 
 const AUTO_LOCK_MINUTES = 15;
 const SESSION_KEY  = "numpay_session";
@@ -26,6 +27,11 @@ initDappRouter();
 
 // Keep balance caches warm while the popup is closed (public addresses only).
 initBalanceRefresher();
+
+// Incoming-funds WebSocket subscriptions (public addresses only): deposits
+// trigger a cache refresh + popup wake within seconds instead of on the next
+// poll/alarm tick.
+initWsWatch();
 
 // Use chrome.alarms, not setTimeout. MV3 suspends the idle service worker
 // (~30s) and destroys any pending setTimeout, so the old timer never fired while

@@ -45,6 +45,20 @@ export function noteBalancePopupPort(port: chrome.runtime.Port): void {
   port.onDisconnect.addListener(() => { popupPorts = Math.max(0, popupPorts - 1); });
 }
 
+/** True while a popup is connected (wsWatch defers fetching to it then). */
+export function hasPopupOpen(): boolean {
+  return popupPorts > 0;
+}
+
+// Event-driven entry points for the incoming-funds watcher: same sweeps, but
+// bypassing the staleness gates — a WS event IS the evidence they are stale.
+export async function forceRefreshEvm(evmAddress: string): Promise<void> {
+  return refreshEvm(evmAddress, true);
+}
+export async function forceRefreshNonEvm(evmAddress: string, addrs: NonEvmAddressMap): Promise<void> {
+  return refreshNonEvm(evmAddress, addrs, true);
+}
+
 async function cacheTs(key: string): Promise<number> {
   try {
     const raw = await getItem(key);
@@ -56,10 +70,10 @@ async function cacheTs(key: string): Promise<number> {
   }
 }
 
-async function refreshEvm(evmAddress: string): Promise<void> {
+async function refreshEvm(evmAddress: string, force = false): Promise<void> {
   const cacheKey = EVM_CACHE_PFX + evmAddress;
   const age = Date.now() - (await cacheTs(cacheKey));
-  if (age < NATIVE_STALE_MS) return;
+  if (!force && age < NATIVE_STALE_MS) return;
 
   // Last-known balances so a failed RPC keeps its row (same rule as the popup).
   const prevByChain = new Map<string, ChainBalance>();
@@ -94,10 +108,10 @@ async function refreshEvm(evmAddress: string): Promise<void> {
   }
 }
 
-async function refreshNonEvm(evmAddress: string, addrs: NonEvmAddressMap): Promise<void> {
+async function refreshNonEvm(evmAddress: string, addrs: NonEvmAddressMap, force = false): Promise<void> {
   const cacheKey = NONEVMCACHE_PFX + evmAddress;
   const age = Date.now() - (await cacheTs(cacheKey));
-  if (age < NATIVE_STALE_MS) return;
+  if (!force && age < NATIVE_STALE_MS) return;
 
   // Last-known tokens + chain rows, kept when a fetch fails (same rule as the
   // popup); the chain rows feed fetchNonEvmBalancesByAddress' retention so a

@@ -467,7 +467,21 @@ export function useWallet(): WalletState {
       clearTimeout(timer);
       timer = setTimeout(tick, 6_000);
     });
-    return () => { clearTimeout(timer); unsub(); };
+    // Incoming-funds event from the background WS watcher (wsWatch.ts): a
+    // deposit landed, refresh now instead of waiting out the idle cadence.
+    // Only the background sends this (sender has our id and no tab).
+    const onFunds = (msg: unknown, sender: chrome.runtime.MessageSender) => {
+      if ((msg as { type?: string })?.type !== "NUMPAY_FUNDS_EVENT") return;
+      if (sender.id !== chrome.runtime.id || sender.tab) return;
+      runAll();
+    };
+    const hasRuntime = typeof chrome !== "undefined" && !!chrome.runtime?.onMessage;
+    if (hasRuntime) chrome.runtime.onMessage.addListener(onFunds);
+    return () => {
+      clearTimeout(timer);
+      unsub();
+      if (hasRuntime) chrome.runtime.onMessage.removeListener(onFunds);
+    };
   }, [wallet, refreshMultiChain, refreshAutoTokens, refreshNonEvm, refresh]);
 
   function switchNetwork(id: string) {
