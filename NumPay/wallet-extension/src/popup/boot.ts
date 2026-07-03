@@ -17,13 +17,14 @@ import { hasWallet, isLocked, listVaultMeta, getActiveId, SESSION_KEY, type Vaul
 import { getItem, getSession } from "@/lib/storage";
 import { getCustomChains, type CustomChain } from "@/lib/customChains";
 
-// Popup settings + per-address cache keys. Owned here so the preload and
-// useWallet can never disagree on a key.
+// Popup settings keys, owned here; the per-address cache keys live in
+// lib/balanceSweep (shared with the background refresher) and are re-exported
+// so useWallet keeps a single import site.
+import { EVM_CACHE_PFX, NONEVMCACHE_PFX } from "@/lib/balanceSweep";
+export { EVM_CACHE_PFX, NONEVMCACHE_PFX };
 export const NETWORK_KEY      = "numpay_network";
 export const ACTIVE_CHAIN_KEY = "numpay_active_chain";
 export const ASSET_FILTER_KEY = "numpay_asset_filter";
-export const EVM_CACHE_PFX    = "numpay_balcache_";
-export const NONEVMCACHE_PFX  = "numpay_nonevmcache_";
 
 export interface BootData {
   walletExists: boolean;

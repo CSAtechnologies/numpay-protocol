@@ -8,6 +8,7 @@
 // session storage so no plaintext key material survives the timeout.
 
 import { initDappRouter, broadcastDappLock } from "./dappRouter";
+import { initBalanceRefresher, noteBalancePopupPort } from "./balanceRefresher";
 
 const AUTO_LOCK_MINUTES = 15;
 const SESSION_KEY  = "numpay_session";
@@ -23,6 +24,9 @@ async function lockNow() {
 // Route dApp (window.ethereum) traffic from content bridges.
 initDappRouter();
 
+// Keep balance caches warm while the popup is closed (public addresses only).
+initBalanceRefresher();
+
 // Use chrome.alarms, not setTimeout. MV3 suspends the idle service worker
 // (~30s) and destroys any pending setTimeout, so the old timer never fired while
 // the popup was closed, leaving the decrypted session in place past the timeout
@@ -37,9 +41,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) void lockNow();
 });
 
-// Popup opens a long-lived port on mount; treat that as activity.
+// Popup opens a long-lived port on mount; treat that as activity, and let the
+// balance refresher yield to the live popup while it's connected.
 chrome.runtime.onConnect.addListener((port) => {
   resetLockTimer();
+  if (port.name === "popup") noteBalancePopupPort(port);
   port.onDisconnect.addListener(() => { /* popup closed; alarm keeps running */ });
 });
 

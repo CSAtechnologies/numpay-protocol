@@ -406,7 +406,9 @@ async function sweepTokensByRPC(
   );
 }
 
-const CACHE_PFX = "numpay_autotok6_";
+// Exported so the background refresher can gate on the cache's age.
+export const AUTOTOK_CACHE_PFX = "numpay_autotok6_";
+const CACHE_PFX = AUTOTOK_CACHE_PFX;
 const CACHE_TTL = 3 * 60 * 1000; // 3 minutes
 
 /**

@@ -52,58 +52,75 @@ export async function deriveNonEvmAddresses(mnemonic: string): Promise<NonEvmWal
   };
 }
 
-/** Fetch balances for all non-EVM chains. */
-export async function fetchNonEvmBalances(wallet: NonEvmWallet): Promise<NonEvmChain[]> {
+/** Public receive addresses for every non-EVM chain — no key material. */
+export type NonEvmAddressMap = {
+  bitcoin: string; solana: string; sui: string; tron: string; xrp: string; litecoin: string;
+};
+
+/**
+ * Fetch balances for all non-EVM chains from public addresses only. Used by
+ * the popup (via fetchNonEvmBalances) and by the background refresher, which
+ * has no unlocked wallet — just the watch-address registry.
+ */
+export async function fetchNonEvmBalancesByAddress(a: NonEvmAddressMap): Promise<NonEvmChain[]> {
   const timeout = (ms: number) =>
     new Promise<number>((_, r) => setTimeout(() => r(0), ms));
 
   const [btcBal, solBal, suiBal, trxBal, xrpBal, ltcBal] = await Promise.all([
-    Promise.race([fetchBitcoinBalance(wallet.bitcoin.address),   timeout(5000)]).catch(() => 0),
-    Promise.race([fetchSolanaBalance(wallet.solana.address),     timeout(5000)]).catch(() => 0),
-    Promise.race([fetchSuiBalance(wallet.sui.address),           timeout(5000)]).catch(() => 0),
-    Promise.race([fetchTronBalance(wallet.tron.address),         timeout(5000)]).catch(() => 0),
-    Promise.race([fetchXrpBalance(wallet.xrp.address),           timeout(5000)]).catch(() => 0),
-    Promise.race([fetchLitecoinBalance(wallet.litecoin.address), timeout(5000)]).catch(() => 0),
+    Promise.race([fetchBitcoinBalance(a.bitcoin),   timeout(5000)]).catch(() => 0),
+    Promise.race([fetchSolanaBalance(a.solana),     timeout(5000)]).catch(() => 0),
+    Promise.race([fetchSuiBalance(a.sui),           timeout(5000)]).catch(() => 0),
+    Promise.race([fetchTronBalance(a.tron),         timeout(5000)]).catch(() => 0),
+    Promise.race([fetchXrpBalance(a.xrp),           timeout(5000)]).catch(() => 0),
+    Promise.race([fetchLitecoinBalance(a.litecoin), timeout(5000)]).catch(() => 0),
   ]);
 
   return [
     {
       id: "bitcoin",  name: "Bitcoin",    symbol: "BTC", decimals: 8,
       icon: "B", logo: chainLogoAsset("bitcoin"),
-      address: wallet.bitcoin.address,  balance: btcBal as number,
+      address: a.bitcoin,  balance: btcBal as number,
       explorer: "https://blockstream.info",
     },
     {
       id: "solana",   name: "Solana",     symbol: "SOL", decimals: 9,
       icon: "S", logo: chainLogoAsset("solana"),
-      address: wallet.solana.address,   balance: solBal as number,
+      address: a.solana,   balance: solBal as number,
       explorer: "https://solscan.io",
     },
     {
       id: "sui",      name: "Sui",        symbol: "SUI", decimals: 9,
       icon: "S", logo: chainLogoAsset("sui"),
-      address: wallet.sui.address,      balance: suiBal as number,
+      address: a.sui,      balance: suiBal as number,
       explorer: "https://suiscan.xyz",
     },
     {
       id: "tron",     name: "Tron",       symbol: "TRX", decimals: 6,
       icon: "T", logo: chainLogoAsset("tron"),
-      address: wallet.tron.address,     balance: trxBal as number,
+      address: a.tron,     balance: trxBal as number,
       explorer: "https://tronscan.org/#/transaction",
     },
     {
       id: "xrp",      name: "XRP Ledger", symbol: "XRP", decimals: 6,
       icon: "X", logo: chainLogoAsset("xrp"),
-      address: wallet.xrp.address,      balance: xrpBal as number,
+      address: a.xrp,      balance: xrpBal as number,
       explorer: "https://xrpscan.com/tx",
     },
     {
       id: "litecoin", name: "Litecoin",   symbol: "LTC", decimals: 8,
       icon: "L", logo: chainLogoAsset("litecoin"),
-      address: wallet.litecoin.address, balance: ltcBal as number,
+      address: a.litecoin, balance: ltcBal as number,
       explorer: "https://litecoinspace.org/tx",
     },
   ];
+}
+
+/** Fetch balances for all non-EVM chains. */
+export async function fetchNonEvmBalances(wallet: NonEvmWallet): Promise<NonEvmChain[]> {
+  return fetchNonEvmBalancesByAddress({
+    bitcoin: wallet.bitcoin.address, solana: wallet.solana.address, sui: wallet.sui.address,
+    tron: wallet.tron.address, xrp: wallet.xrp.address, litecoin: wallet.litecoin.address,
+  });
 }
 
 export { deriveBitcoinAddress,  fetchBitcoinBalance  } from "./bitcoin";

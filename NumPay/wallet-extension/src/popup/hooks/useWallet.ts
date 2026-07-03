@@ -19,25 +19,16 @@ import {
   type NonEvmChain,
 } from "@/lib/chains";
 import { getCustomTokens } from "@/lib/customTokens";
-import { fetchRates, getUsdPrice, type Rates } from "@/lib/currency";
 import { getCustomChains, type CustomChain } from "@/lib/customChains";
+import { sweepEvmNativeBalances, type ChainBalance } from "@/lib/balanceSweep";
+import { updateWatchAddresses } from "@/lib/watchAddresses";
 import { sweepAllChainTokens } from "@/lib/autoTokens";
 import {
   bootData, takeBootBalanceCache, takeBootNonEvmCache,
   NETWORK_KEY, ACTIVE_CHAIN_KEY, ASSET_FILTER_KEY, EVM_CACHE_PFX, NONEVMCACHE_PFX,
 } from "../boot";
 
-const EVM_TIMEOUT_MS = 5000;
-
-export interface ChainBalance {
-  networkId: string;
-  name: string;
-  symbol: string;
-  logo: string;
-  balance: string;
-  balanceNum: number;
-  usdValue: number;
-}
+export type { ChainBalance };
 
 export interface WalletState {
   wallet: WalletData | null;
@@ -68,21 +59,6 @@ export interface WalletState {
   setWalletAvatar: (id: string, avatar: string) => Promise<void>;
   customChains: CustomChain[];
 }
-
-// Last-resort price table, used only when the live CoinGecko rates (15-min
-// cached via fetchRates) are unavailable. Dashboard overlays live rates for
-// display; these values mostly affect chain sorting and the offline fallback.
-const NATIVE_USD_PRICES: Record<string, number> = {
-  ETH: 1800, BTC: 65000, SOL: 140, SUI: 1.2, POL: 0.45,
-  AVAX: 25, BNB: 300, FTM: 0.35, MNT: 0.55, SEI: 0.35,
-  TRX: 0.12, XRP: 0.50, LTC: 80,
-};
-
-const AGGREGATE_CHAINS = [
-  "ethereum", "polygon", "arbitrum", "optimism", "base",
-  "avalanche", "bsc", "zksync", "scroll", "linea",
-  "mantle", "blast", "polygonzkevm", "fantom", "sei",
-];
 
 interface WalletSession {
   activeId: string;
@@ -240,60 +216,9 @@ export function useWallet(): WalletState {
       };
     }
 
-    const allChainIds = [...AGGREGATE_CHAINS, ...customChainList.map((c) => c.id)];
-
-    // Kick off live prices (15-min cached) IN PARALLEL with the balance sweep.
-    // Balances don't need the price to fetch — only to compute their USD value —
-    // so we apply prices once both resolve. Removes the cold-start waterfall
-    // where every balance waited behind a CoinGecko call. Falls back to the
-    // static table when rates are unavailable so the sweep still completes offline.
-    const ratesPromise: Promise<Rates | null> = fetchRates().catch(() => null);
-
-    const promises = allChainIds.map(async (chainId) => {
-      const net = NETWORKS[chainId] || customNetMap[chainId];
-      if (!net) return null;
-      try {
-        const provider = new ethers.JsonRpcProvider(net.rpcUrl, net.chainId, { staticNetwork: true });
-        const bal = await Promise.race([
-          provider.getBalance(wallet.address),
-          new Promise<never>((_, r) => setTimeout(() => r(new Error("timeout")), EVM_TIMEOUT_MS)),
-        ]) as bigint;
-        const formatted = ethers.formatUnits(bal, net.decimals);
-        const num = parseFloat(formatted);
-        return {
-          networkId: chainId, name: net.name, symbol: net.symbol, logo: net.logo,
-          balance: formatted, balanceNum: num, usdValue: 0,
-        } as ChainBalance;
-      } catch {
-        // Mark as failed so we can retain the last-known balance below.
-        return {
-          networkId: chainId, name: net.name, symbol: net.symbol, logo: net.logo,
-          balance: "0", balanceNum: 0, usdValue: 0, failed: true,
-        } as ChainBalance & { failed: boolean };
-      }
-    });
-
-    const [settled, liveRates] = await Promise.all([Promise.all(promises), ratesPromise]);
-    const priceFor = (symbol: string) =>
-      (liveRates ? getUsdPrice(symbol, liveRates) : 0) || NATIVE_USD_PRICES[symbol] || 0;
-    const anySuccess = settled.some((r) => r && !(r as any).failed);
-
-    const results: ChainBalance[] = [];
-    for (const r of settled) {
-      if (!r) continue;
-      if ((r as any).failed) {
-        // RPC failed (offline / flaky): keep the last-known balance if we have one,
-        // otherwise fall back to the zero placeholder so the row still resolves.
-        const prev = prevByChain.get(r.networkId);
-        const { failed, ...zero } = r as ChainBalance & { failed: boolean };
-        results.push(prev ?? (zero as ChainBalance));
-      } else {
-        r.usdValue = r.balanceNum * priceFor(r.symbol);
-        results.push(r);
-      }
-    }
-    results.sort((a, b) => b.usdValue - a.usdValue);
-    const total = results.reduce((s, c) => s + c.usdValue, 0);
+    // Shared with the background refresher — one sweep implementation.
+    const { results, portfolioUsd: total, anySuccess } =
+      await sweepEvmNativeBalances(wallet.address, customNetMap, prevByChain);
 
     setChainBalances(results);
     setPortfolioUsd(total);
@@ -329,9 +254,15 @@ export function useWallet(): WalletState {
 
   useEffect(() => { refreshAutoTokens(); }, [refreshAutoTokens]);
 
-  // Non-EVM chain derivation + SPL token fetch — stale-while-revalidate
+  // Non-EVM chain derivation + SPL token fetch — stale-while-revalidate.
+  // Also the single writer of the watch-address registry the background
+  // refresher reads (public addresses only).
   useEffect(() => {
-    if (!wallet?.mnemonic) { setNonEvmLoading(false); return; }
+    if (!wallet?.mnemonic) {
+      setNonEvmLoading(false);
+      if (wallet?.address) void updateWatchAddresses({ evm: wallet.address });
+      return;
+    }
     const mnemonic = wallet.mnemonic;
     const address  = wallet.address;
     (async () => {
@@ -371,6 +302,11 @@ export function useWallet(): WalletState {
       try {
         const nev = await deriveNonEvmAddresses(mnemonic);
         setNonEvmWallet(nev);
+        void updateWatchAddresses({
+          evm: address,
+          solana: nev.solana.address, tron: nev.tron.address, sui: nev.sui.address,
+          bitcoin: nev.bitcoin.address, xrp: nev.xrp.address, litecoin: nev.litecoin.address,
+        });
 
         // Fetch native balances + SPL + TRC-20 + Sui tokens in parallel
         const [chains, splTokens, trc20Tokens, suiCoins] = await Promise.all([
