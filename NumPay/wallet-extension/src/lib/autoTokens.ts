@@ -113,9 +113,13 @@ const ERC20_META_ABI = [
   "function decimals() view returns (uint8)",
 ];
 
-async function fetchAlchemyERC20s(chainId: string, address: string): Promise<AutoToken[]> {
+// Fetchers return null when the SOURCE failed (unavailable, over quota, network
+// error) and an array when it answered — an empty array means the address
+// verifiably holds nothing there. The distinction drives cache retention below:
+// only an answering source may remove a token from the cache.
+async function fetchAlchemyERC20s(chainId: string, address: string): Promise<AutoToken[] | null> {
   const sub = ALCHEMY_CHAINS[chainId];
-  if (!sub) return [];
+  if (!sub) return null;
   const url = `https://${sub}.g.alchemy.com/v2/${ALCHEMY_KEY}`;
 
   try {
@@ -130,9 +134,9 @@ async function fetchAlchemyERC20s(chainId: string, address: string): Promise<Aut
     });
     // 403 here is expected for networks not enabled in our Alchemy app —
     // Layer 2 covers DEFAULT_TOKENS for those chains, so fail quietly.
-    if (!balResp.ok) return [];
+    if (!balResp.ok) return null;
     const balData = await balResp.json();
-    if (balData.error) return [];
+    if (balData.error) return null;
     const balances: Array<{ contractAddress: string; tokenBalance: string }> =
       balData.result?.tokenBalances ?? [];
 
@@ -202,7 +206,7 @@ async function fetchAlchemyERC20s(chainId: string, address: string): Promise<Aut
     return results.filter((t): t is AutoToken => t !== null);
   } catch (e) {
     console.warn(`[NumPay] Alchemy ${chainId}: token fetch failed`, e);
-    return [];
+    return null;
   }
 }
 
@@ -210,15 +214,15 @@ async function fetchAlchemyERC20s(chainId: string, address: string): Promise<Aut
  * Fetch all held ERC-20 tokens for one chain via Moralis, with USD price.
  * Covers arbitrary memecoins (no hardcoded list) on every supported chain.
  */
-async function fetchMoralisERC20s(chainId: string, address: string): Promise<AutoToken[]> {
+async function fetchMoralisERC20s(chainId: string, address: string): Promise<AutoToken[] | null> {
   const chainHex = MORALIS_CHAINS[chainId];
-  if (!chainHex || !MORALIS_KEY) return [];
+  if (!chainHex || !MORALIS_KEY) return null;
   try {
     const resp = await fetch(
       `https://deep-index.moralis.io/api/v2.2/wallets/${address}/tokens?chain=${chainHex}`,
       { headers: { "X-API-Key": MORALIS_KEY, Accept: "application/json" } },
     );
-    if (!resp.ok) return [];
+    if (!resp.ok) return null;
     const data = await resp.json();
     const result: any[] = data.result ?? [];
     const out: AutoToken[] = [];
@@ -244,7 +248,7 @@ async function fetchMoralisERC20s(chainId: string, address: string): Promise<Aut
     return out;
   } catch (e) {
     console.warn(`[NumPay] Moralis ${chainId}: token fetch failed`, e);
-    return [];
+    return null;
   }
 }
 
@@ -253,15 +257,15 @@ async function fetchMoralisERC20s(chainId: string, address: string): Promise<Aut
  * price. Fallback to Moralis: when Moralis is over its daily quota this still
  * returns the held tokens. No-op when GOLDRUSH_KEY is unset.
  */
-async function fetchGoldRushERC20s(chainId: string, address: string): Promise<AutoToken[]> {
+async function fetchGoldRushERC20s(chainId: string, address: string): Promise<AutoToken[] | null> {
   const cvChain = GOLDRUSH_CHAINS[chainId];
-  if (!cvChain || !GOLDRUSH_KEY) return [];
+  if (!cvChain || !GOLDRUSH_KEY) return null;
   try {
     const resp = await fetch(
       `https://api.covalenthq.com/v1/${cvChain}/address/${address}/balances_v2/?no-nft-fetch=true&key=${GOLDRUSH_KEY}`,
       { headers: { Accept: "application/json" } },
     );
-    if (!resp.ok) return [];
+    if (!resp.ok) return null;
     const json = await resp.json();
     const items: any[] = json?.data?.items ?? [];
     const out: AutoToken[] = [];
@@ -289,7 +293,7 @@ async function fetchGoldRushERC20s(chainId: string, address: string): Promise<Au
     return out;
   } catch (e) {
     console.warn(`[NumPay] GoldRush ${chainId}: token fetch failed`, e);
-    return [];
+    return null;
   }
 }
 
@@ -315,12 +319,15 @@ function buildChainRpcMap(): Record<string, { rpc: string; tokens: typeof DEFAUL
 /**
  * Check DEFAULT_TOKENS balances via Multicall3 for every chain with known tokens.
  * Falls back to individual balanceOf calls if Multicall3 is unavailable.
+ * Returns the chains whose reads actually resolved: for those, a DEFAULT_TOKEN
+ * absent from the result verifiably has a zero balance.
  */
 async function sweepTokensByRPC(
   address: string,
   onUpdate: (chainId: string, tokens: AutoToken[]) => void,
-): Promise<void> {
+): Promise<Set<string>> {
   const chainMap = buildChainRpcMap();
+  const resolvedChains = new Set<string>();
 
   await Promise.all(
     Object.entries(chainMap).map(async ([networkId, { rpc, tokens, mc3 }]) => {
@@ -370,12 +377,14 @@ async function sweepTokensByRPC(
           }
 
           multicallOk = true;
+          resolvedChains.add(networkId);
         } catch {
           // Multicall3 unavailable on this RPC — fall through to individual calls
         }
 
         // Fallback: individual balanceOf calls if multicall3 unavailable
         if (!multicallOk) {
+          let allResolved = true;
           const results = await Promise.all(
             tokens.map(async (token) => {
               try {
@@ -392,10 +401,13 @@ async function sweepTokensByRPC(
                   balance,
                   logo:     token.logo,
                 } as AutoToken;
-              } catch { return null; }
+              } catch { allResolved = false; return null; }
             }),
           );
           for (const t of results) if (t) found.push(t);
+          // Any failed call could have been a held token — only a clean pass
+          // proves that the tokens missing from `found` really sit at zero.
+          if (allResolved) resolvedChains.add(networkId);
         }
 
         if (found.length > 0) onUpdate(networkId, found);
@@ -404,6 +416,7 @@ async function sweepTokensByRPC(
       }
     }),
   );
+  return resolvedChains;
 }
 
 // Exported so the background refresher can gate on the cache's age.
@@ -487,11 +500,18 @@ export async function sweepAllChainTokens(
 
   const alchemyChains = Object.keys(ALCHEMY_CHAINS);
 
-  await Promise.all([
+  // Chains where a full-enumeration indexer (Alchemy/Moralis/GoldRush) answered:
+  // there, a cached token missing from the fresh result was verifiably sold or
+  // transferred away and may be dropped from the cache.
+  const fullEnumOk = new Set<string>();
+
+  const [, rpcResolved] = await Promise.all([
     // Layer 1: Alchemy full auto-detect (only enabled networks return data)
     Promise.all(
       alchemyChains.map(async (chainId) => {
         const tokens = await fetchAlchemyERC20s(chainId, address);
+        if (!tokens) return;
+        fullEnumOk.add(chainId);
         merge(chainId, tokens);
       }),
     ),
@@ -501,6 +521,8 @@ export async function sweepAllChainTokens(
     Promise.all(
       Object.keys(MORALIS_CHAINS).map(async (chainId) => {
         const tokens = await fetchMoralisERC20s(chainId, address);
+        if (!tokens) return;
+        fullEnumOk.add(chainId);
         merge(chainId, tokens);
       }),
     ),
@@ -509,12 +531,44 @@ export async function sweepAllChainTokens(
     Promise.all(
       Object.keys(GOLDRUSH_CHAINS).map(async (chainId) => {
         const tokens = await fetchGoldRushERC20s(chainId, address);
+        if (!tokens) return;
+        fullEnumOk.add(chainId);
         merge(chainId, tokens);
       }),
     ),
   ]);
 
+  // A sweep where every source failed (offline, quotas everywhere) proves
+  // nothing — leave the existing cache untouched, including its timestamp.
+  if (fullEnumOk.size === 0 && rpcResolved.size === 0) return;
+
+  // Retain cached tokens this sweep could not rule out. Without this, one
+  // lean sweep (Moralis 402, Alchemy 403) erased previously discovered tokens
+  // from the cache — the popup and the background refresher both write here —
+  // so holdings vanished for whole sessions and popped back later.
+  for (const [chainId, cachedMap] of cachedByChain) {
+    if (fullEnumOk.has(chainId)) continue;
+    const have = new Set((freshData[chainId] ?? []).map((t) => t.address.toLowerCase()));
+    // A resolved RPC sweep proves zero balance, but only for that chain's
+    // DEFAULT_TOKENS — the only addresses it queries.
+    const provenZero = rpcResolved.has(chainId) ? defaultTokenAddrs(chainId) : null;
+    const keep: AutoToken[] = [];
+    for (const [addr, t] of cachedMap) {
+      if (have.has(addr)) continue;
+      if (provenZero?.has(addr)) continue;
+      keep.push(t);
+    }
+    if (keep.length) freshData[chainId] = [...(freshData[chainId] ?? []), ...keep];
+  }
+
   try {
     await setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: freshData }));
   } catch {}
+}
+
+/** Lowercased DEFAULT_TOKENS addresses for a networkId (the RPC sweep's scope). */
+function defaultTokenAddrs(networkId: string): Set<string> {
+  const net = NETWORKS[networkId];
+  const toks = net ? DEFAULT_TOKENS[net.chainId] ?? [] : [];
+  return new Set(toks.map((t) => t.address.toLowerCase()));
 }

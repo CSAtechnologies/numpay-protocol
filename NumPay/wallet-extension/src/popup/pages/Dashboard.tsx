@@ -319,6 +319,14 @@ export default function Dashboard({ onLock }: Props) {
         if (nativeSym && t.symbol.toUpperCase() === nativeSym) continue;
         const bal = parseFloat(t.balance || "0");
         if (bal <= 0) continue;
+        // Spam-classified tokens are hidden from the asset list; keep them out
+        // of the total too, or their (often fake) pricing shifts the headline
+        // number by amounts the visible rows can't account for.
+        if (classifyToken({
+          balance: t.balance, priceUsd: t.priceUsd,
+          liquidityUsd: t.liquidityUsd, marketCapUsd: t.marketCapUsd,
+          possibleSpam: t.possibleSpam,
+        }).hidden) continue;
         const ep = extraPriceFor(t.address);
         if (t.priceUsd != null) total += usdToCurrency(bal * t.priceUsd, currencyCode, rates);
         else if (ep != null)    total += usdToCurrency(bal * ep, currencyCode, rates);

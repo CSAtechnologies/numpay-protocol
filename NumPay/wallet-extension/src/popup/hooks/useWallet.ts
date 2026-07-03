@@ -162,17 +162,19 @@ export function useWallet(): WalletState {
 
     const allTokens = [...chainTokens, ...customForChain];
 
+    // `failed` marks a balanceOf that threw (public RPCs throttle under the
+    // parallel load of this + the sweeps) — a failure is NOT a zero balance.
     const withBalances = await Promise.all(
       allTokens.map(async (t) => {
         try {
           const b = await getTokenBalance(t.address, wallet.address, provider);
-          return { ...t, balance: b };
+          return { ...t, balance: b, failed: false };
         } catch {
-          return { ...t, balance: "0" };
+          return { ...t, balance: "0", failed: true };
         }
       })
     );
-    setTokens(withBalances);
+    setTokens(withBalances.map(({ failed, ...t }) => t));
     // Merge into the chain's token list instead of replacing it: replacement
     // dropped every auto-detected token and stripped priceUsd/spam metadata
     // off the defaults until the next sweep re-merged them, which made the
@@ -181,9 +183,14 @@ export function useWallet(): WalletState {
     setTokensByChain((prev) => {
       const existing = prev[network.id] ?? [];
       const existingByAddr = new Map(existing.map((t) => [t.address.toLowerCase(), t]));
-      const withMeta = withBalances.map((t) => {
+      const withMeta = withBalances.map(({ failed, ...t }) => {
         const old = existingByAddr.get(t.address.toLowerCase());
-        return old ? { ...old, ...t, logo: t.logo ?? old.logo } : t;
+        if (!old) return t;
+        // A failed read keeps the last-known balance instead of zeroing the
+        // row — zeroing made held tokens (SHIB etc.) vanish for a poll cycle
+        // and swing the portfolio total.
+        const balance = failed ? (old.balance ?? t.balance) : t.balance;
+        return { ...old, ...t, balance, logo: t.logo ?? old.logo };
       });
       const covered = new Set(withBalances.map((t) => t.address.toLowerCase()));
       const rest = existing.filter((t) => !covered.has(t.address.toLowerCase()));
@@ -301,10 +308,12 @@ export function useWallet(): WalletState {
     (async () => {
       const cacheKey = NONEVMCACHE_PFX + address;
       let hasCache = false;
-      // Last-known tokens, kept so a failed/offline fetch doesn't drop them.
+      // Last-known tokens + chain rows, kept so a failed/offline fetch doesn't
+      // drop them (chain rows feed fetchNonEvmBalances' per-chain retention).
       let prevSol: any[] = [];
       let prevTrx: any[] = [];
       let prevSui: any[] = [];
+      let prevChains: NonEvmChain[] = [];
       try {
         // Same boot-preload consumption as the multi-chain cache above.
         const raw = (await takeBootNonEvmCache(address)) ?? await getItem(cacheKey);
@@ -314,6 +323,7 @@ export function useWallet(): WalletState {
           if (Array.isArray(parsed.tronTokens))   prevTrx = parsed.tronTokens;
           if (Array.isArray(parsed.suiTokens))    prevSui = parsed.suiTokens;
           if (Array.isArray(parsed.chains)) {
+            prevChains = parsed.chains;
             setNonEvmChains(parsed.chains);
             // Restore cached SPL/TRC-20/Sui tokens so they show instantly / when offline
             if (prevSol.length || prevTrx.length || prevSui.length) {
@@ -343,7 +353,7 @@ export function useWallet(): WalletState {
 
         // Fetch native balances + SPL + TRC-20 + Sui tokens in parallel
         const [chains, splTokens, trc20Tokens, suiCoins] = await Promise.all([
-          fetchNonEvmBalances(nev),
+          fetchNonEvmBalances(nev, prevChains),
           fetchSolanaTokens(nev.solana.address).catch(() => []),
           fetchTronTokens(nev.tron.address).catch(() => []),
           fetchSuiTokens(nev.sui.address).catch(() => []),
@@ -385,23 +395,31 @@ export function useWallet(): WalletState {
     if (!nonEvmWallet) return;
     if (showLoading) setNonEvmLoading(true);
     try {
+      // Read last-known values (tokens AND chain rows) from cache BEFORE the
+      // fetch: the chain rows feed fetchNonEvmBalances' per-chain retention so
+      // a rate-limited RPC never zeroes a native balance (TRX flapping).
+      const addr = wallet?.address;
+      const cacheKey = addr ? NONEVMCACHE_PFX + addr : null;
+      let prevSol: any[] = [], prevTrx: any[] = [], prevSui: any[] = [];
+      let prevChains: NonEvmChain[] = [];
+      if (cacheKey) {
+        try {
+          const raw = await getItem(cacheKey);
+          if (raw) {
+            const p = JSON.parse(raw);
+            prevSol = p.solanaTokens ?? []; prevTrx = p.tronTokens ?? []; prevSui = p.suiTokens ?? [];
+            if (Array.isArray(p.chains)) prevChains = p.chains;
+          }
+        } catch {}
+      }
+
       const [chains, splTokens, trc20Tokens, suiCoins] = await Promise.all([
-        fetchNonEvmBalances(nonEvmWallet),
+        fetchNonEvmBalances(nonEvmWallet, prevChains),
         fetchSolanaTokens(nonEvmWallet.solana.address).catch(() => []),
         fetchTronTokens(nonEvmWallet.tron.address).catch(() => []),
         fetchSuiTokens(nonEvmWallet.sui.address).catch(() => []),
       ]);
 
-      // Preserve last-known tokens (from cache) when a fetch returns empty.
-      const addr = wallet?.address;
-      const cacheKey = addr ? NONEVMCACHE_PFX + addr : null;
-      let prevSol: any[] = [], prevTrx: any[] = [], prevSui: any[] = [];
-      if (cacheKey) {
-        try {
-          const raw = await getItem(cacheKey);
-          if (raw) { const p = JSON.parse(raw); prevSol = p.solanaTokens ?? []; prevTrx = p.tronTokens ?? []; prevSui = p.suiTokens ?? []; }
-        } catch {}
-      }
       const sol = splTokens.length  ? splTokens  : prevSol;
       const trx = trc20Tokens.length ? trc20Tokens : prevTrx;
       const sui = suiCoins.length ? suiCoins : prevSui;

@@ -23,7 +23,7 @@
 import { sweepEvmNativeBalances, EVM_CACHE_PFX, NONEVMCACHE_PFX, type ChainBalance } from "../lib/balanceSweep";
 import {
   fetchNonEvmBalancesByAddress, fetchSolanaTokens, fetchTronTokens, fetchSuiTokens,
-  type NonEvmAddressMap,
+  type NonEvmAddressMap, type NonEvmChain,
 } from "../lib/chains";
 import { sweepAllChainTokens, AUTOTOK_CACHE_PFX } from "../lib/autoTokens";
 import { fetchRates } from "../lib/currency";
@@ -99,8 +99,11 @@ async function refreshNonEvm(evmAddress: string, addrs: NonEvmAddressMap): Promi
   const age = Date.now() - (await cacheTs(cacheKey));
   if (age < NATIVE_STALE_MS) return;
 
-  // Last-known tokens, kept when a fetch comes back empty (same rule as the popup).
+  // Last-known tokens + chain rows, kept when a fetch fails (same rule as the
+  // popup); the chain rows feed fetchNonEvmBalancesByAddress' retention so a
+  // rate-limited RPC never writes a zeroed native balance into the cache.
   let prevSol: unknown[] = [], prevTrx: unknown[] = [], prevSui: unknown[] = [];
+  let prevChains: NonEvmChain[] = [];
   try {
     const raw = await getItem(cacheKey);
     if (raw) {
@@ -108,11 +111,12 @@ async function refreshNonEvm(evmAddress: string, addrs: NonEvmAddressMap): Promi
       prevSol = Array.isArray(p.solanaTokens) ? p.solanaTokens : [];
       prevTrx = Array.isArray(p.tronTokens)   ? p.tronTokens   : [];
       prevSui = Array.isArray(p.suiTokens)    ? p.suiTokens    : [];
+      if (Array.isArray(p.chains)) prevChains = p.chains;
     }
   } catch {}
 
   const [chains, splTokens, trc20Tokens, suiCoins] = await Promise.all([
-    fetchNonEvmBalancesByAddress(addrs),
+    fetchNonEvmBalancesByAddress(addrs, prevChains),
     fetchSolanaTokens(addrs.solana).catch(() => []),
     fetchTronTokens(addrs.tron).catch(() => []),
     fetchSuiTokens(addrs.sui).catch(() => []),
