@@ -8,6 +8,7 @@ import { deriveSuiAddress,      fetchSuiBalance      } from "./sui";
 import { deriveTronAddress,     fetchTronBalance      } from "./tron";
 import { deriveXrpAddress,      fetchXrpBalance       } from "./xrp";
 import { deriveLitecoinAddress, fetchLitecoinBalance  } from "./litecoin";
+import { chainLogoAsset } from "../icons/assets";
 
 export interface NonEvmChain {
   id: string;
@@ -29,8 +30,6 @@ export interface NonEvmWallet {
   xrp:      { address: string; privateKey: string };
   litecoin: { address: string; privateKey: string };
 }
-
-const CG = "https://assets.coingecko.com/coins/images";
 
 /** Derive all non-EVM addresses from a mnemonic. */
 export async function deriveNonEvmAddresses(mnemonic: string): Promise<NonEvmWallet> {
@@ -70,37 +69,37 @@ export async function fetchNonEvmBalances(wallet: NonEvmWallet): Promise<NonEvmC
   return [
     {
       id: "bitcoin",  name: "Bitcoin",    symbol: "BTC", decimals: 8,
-      icon: "B", logo: `${CG}/1/small/bitcoin.png`,
+      icon: "B", logo: chainLogoAsset("bitcoin"),
       address: wallet.bitcoin.address,  balance: btcBal as number,
       explorer: "https://blockstream.info",
     },
     {
       id: "solana",   name: "Solana",     symbol: "SOL", decimals: 9,
-      icon: "S", logo: `${CG}/4128/small/solana.png`,
+      icon: "S", logo: chainLogoAsset("solana"),
       address: wallet.solana.address,   balance: solBal as number,
       explorer: "https://solscan.io",
     },
     {
       id: "sui",      name: "Sui",        symbol: "SUI", decimals: 9,
-      icon: "S", logo: `${CG}/26375/small/sui-ocean-square.png`,
+      icon: "S", logo: chainLogoAsset("sui"),
       address: wallet.sui.address,      balance: suiBal as number,
       explorer: "https://suiscan.xyz",
     },
     {
       id: "tron",     name: "Tron",       symbol: "TRX", decimals: 6,
-      icon: "T", logo: `${CG}/1094/small/tron-logo.png`,
+      icon: "T", logo: chainLogoAsset("tron"),
       address: wallet.tron.address,     balance: trxBal as number,
       explorer: "https://tronscan.org/#/transaction",
     },
     {
       id: "xrp",      name: "XRP Ledger", symbol: "XRP", decimals: 6,
-      icon: "X", logo: `${CG}/44/small/xrp-symbol-white-128.png`,
+      icon: "X", logo: chainLogoAsset("xrp"),
       address: wallet.xrp.address,      balance: xrpBal as number,
       explorer: "https://xrpscan.com/tx",
     },
     {
       id: "litecoin", name: "Litecoin",   symbol: "LTC", decimals: 8,
-      icon: "L", logo: `${CG}/2/small/litecoin.png`,
+      icon: "L", logo: chainLogoAsset("litecoin"),
       address: wallet.litecoin.address, balance: ltcBal as number,
       explorer: "https://litecoinspace.org/tx",
     },

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { ethers } from "ethers";
-import { type WalletData, type VaultMeta, listVaultMeta, getActiveId, setActiveId, updateWalletAvatar, touchActivity, unlockActiveVault, SESSION_KEY } from "@/lib/wallet";
+import { type WalletData, type VaultMeta, setActiveId, updateWalletAvatar, touchActivity, unlockActiveVault, SESSION_KEY } from "@/lib/wallet";
 import { notifyDappState } from "@/lib/dapp/notify";
 import { deriveSolanaAddress } from "@/lib/chains/solana";
 import { getItem, setItem, getSession, setSession } from "@/lib/storage";
@@ -20,13 +20,12 @@ import { getCustomTokens } from "@/lib/customTokens";
 import { fetchRates, getUsdPrice, type Rates } from "@/lib/currency";
 import { getCustomChains, type CustomChain } from "@/lib/customChains";
 import { sweepAllChainTokens } from "@/lib/autoTokens";
+import {
+  bootData, takeBootBalanceCache, takeBootNonEvmCache,
+  NETWORK_KEY, ACTIVE_CHAIN_KEY, ASSET_FILTER_KEY, EVM_CACHE_PFX, NONEVMCACHE_PFX,
+} from "../boot";
 
-const NETWORK_KEY      = "numpay_network";
-const ACTIVE_CHAIN_KEY = "numpay_active_chain";
-const ASSET_FILTER_KEY = "numpay_asset_filter";
-const EVM_TIMEOUT_MS   = 5000;
-const EVM_CACHE_PFX    = "numpay_balcache_";
-const NONEVMCACHE_PFX  = "numpay_nonevmcache_";
+const EVM_TIMEOUT_MS = 5000;
 
 export interface ChainBalance {
   networkId: string;
@@ -125,25 +124,21 @@ export function useWallet(): WalletState {
     return NETWORKS[DEFAULT_NETWORK];
   }, [networkId, customChains]);
 
-  // Load wallet and settings from storage on mount
+  // Load wallet and settings from storage on mount. The boot preload already
+  // read everything in parallel at import time, so this usually resolves with
+  // zero additional storage round-trips.
   useEffect(() => {
     (async () => {
-      const saved = await getItem(NETWORK_KEY);
-      if (saved) setNetworkId(saved);
+      const boot = await bootData;
+      if (boot.networkId) setNetworkId(boot.networkId);
+      if (boot.activeChainId) setActiveChainId(boot.activeChainId);
+      if (boot.assetFilter && boot.assetFilter !== "all") setFilterChainIdState(boot.assetFilter);
+      setCustomChains(boot.customChains);
 
-      const savedChain = await getItem(ACTIVE_CHAIN_KEY);
-      if (savedChain) setActiveChainId(savedChain);
-
-      const savedFilter = await getItem(ASSET_FILTER_KEY);
-      if (savedFilter && savedFilter !== "all") setFilterChainIdState(savedFilter);
-
-      // Load custom chains early so network resolution works correctly
-      try {
-        const chains = await getCustomChains();
-        setCustomChains(chains);
-      } catch {}
-
-      const cached = await getSession(SESSION_KEY);
+      // The boot session is a snapshot from popup-open: present when the popup
+      // opened unlocked, null when it opened locked (the unlock flow wrote the
+      // session after the snapshot) — so fall back to a fresh read.
+      const cached = boot.sessionRaw ?? await getSession(SESSION_KEY);
       if (cached) {
         try {
           const parsed = JSON.parse(cached);
@@ -159,12 +154,8 @@ export function useWallet(): WalletState {
         } catch {}
       }
 
-      try {
-        const metas = await listVaultMeta();
-        setWalletMetas(metas);
-        const savedActiveId = await getActiveId();
-        if (savedActiveId) setActiveWalletId((prev) => prev || savedActiveId);
-      } catch {}
+      setWalletMetas(boot.vaultMetas);
+      if (boot.activeId) setActiveWalletId((prev) => prev || boot.activeId!);
     })();
   }, []);
 
@@ -219,7 +210,9 @@ export function useWallet(): WalletState {
     // Last-known balances, kept so a failed/offline fetch doesn't zero them out.
     const prevByChain = new Map<string, ChainBalance>();
     try {
-      const raw = await getItem(cacheKey);
+      // First run consumes the boot-preloaded snapshot (already in memory);
+      // later runs read storage fresh.
+      const raw = (await takeBootBalanceCache(wallet.address)) ?? await getItem(cacheKey);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed.chainBalances) && typeof parsed.portfolioUsd === "number") {
@@ -347,7 +340,8 @@ export function useWallet(): WalletState {
       let prevTrx: any[] = [];
       let prevSui: any[] = [];
       try {
-        const raw = await getItem(cacheKey);
+        // Same boot-preload consumption as the multi-chain cache above.
+        const raw = (await takeBootNonEvmCache(address)) ?? await getItem(cacheKey);
         if (raw) {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed.solanaTokens)) prevSol = parsed.solanaTokens;

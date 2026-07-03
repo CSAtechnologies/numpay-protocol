@@ -812,12 +812,7 @@ export default function Dashboard({ onLock }: Props) {
                   filterChainId === c.id ? "text-brand-400" : "text-text-primary"
                 }`}
               >
-                <img
-                  src={c.logo}
-                  alt={c.name}
-                  className="w-[18px] h-[18px] rounded-full flex-shrink-0"
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                />
+                <ChainIcon chainId={c.id} logo={c.logo} size={18} />
                 <span className="font-medium">{c.name}</span>
                 {filterChainId === c.id && <CheckIcon size={14} className="ml-auto text-brand-400" />}
               </button>

@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { hasWallet, isLocked, touchActivity, lockWallet } from "@/lib/wallet";
+import { isLocked, touchActivity, lockWallet } from "@/lib/wallet";
+import { bootData } from "./boot";
 import { CurrencyProvider } from "./contexts/CurrencyContext";
 
 import Welcome from "./pages/Welcome";
@@ -23,19 +24,14 @@ type AppState = "loading" | "onboarding" | "locked" | "unlocked";
 export default function App() {
   const [state, setState] = useState<AppState>("loading");
 
+  // hasWallet/isLocked were already read in parallel by the boot preload, so
+  // this resolves ~immediately instead of issuing two serial storage reads.
   useEffect(() => {
-    checkState();
+    bootData.then((b) => {
+      if (!b.walletExists) setState("onboarding");
+      else setState(b.locked ? "locked" : "unlocked");
+    });
   }, []);
-
-  async function checkState() {
-    const exists = await hasWallet();
-    if (!exists) {
-      setState("onboarding");
-      return;
-    }
-    const locked = await isLocked();
-    setState(locked ? "locked" : "unlocked");
-  }
 
   // Auto-lock plumbing: open a port so the background worker arms its timer,
   // record user activity (throttled), and re-lock on inactivity even while the
@@ -74,9 +70,31 @@ export default function App() {
 
   const content = (() => {
     if (state === "loading") {
+      // Neutral dashboard-shaped skeleton instead of a spinner: the frame is on
+      // screen with the first paint, and boot resolves within a few ms, so this
+      // reads as the app appearing instantly rather than "loading".
       return (
-        <div className="flex items-center justify-center h-full bg-surface-0">
-          <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+        <div className="h-full bg-surface-0 px-4 pt-4 animate-pulse" aria-hidden="true">
+          <div className="flex items-center justify-between mb-6">
+            <div className="w-8 h-8 rounded-full bg-surface-2" />
+            <div className="w-24 h-4 rounded bg-surface-2" />
+            <div className="w-8 h-8 rounded-full bg-surface-2" />
+          </div>
+          <div className="w-40 h-9 rounded-lg bg-surface-2 mb-2" />
+          <div className="w-24 h-4 rounded bg-surface-2 mb-6" />
+          <div className="flex gap-3 mb-6">
+            {[0, 1, 2, 3].map((i) => <div key={i} className="flex-1 h-14 rounded-2xl bg-surface-2" />)}
+          </div>
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="flex items-center gap-3 py-3">
+              <div className="w-9 h-9 rounded-full bg-surface-2" />
+              <div className="flex-1 space-y-1.5">
+                <div className="w-20 h-3.5 rounded bg-surface-2" />
+                <div className="w-14 h-3 rounded bg-surface-2" />
+              </div>
+              <div className="w-16 h-3.5 rounded bg-surface-2" />
+            </div>
+          ))}
         </div>
       );
     }

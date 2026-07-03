@@ -1,4 +1,5 @@
 import { getItem, setItem } from "./storage";
+import { tokenLogoAsset } from "./icons/assets";
 
 export interface Currency {
   code: string;
@@ -8,13 +9,11 @@ export interface Currency {
   logo?: string;
 }
 
-const TW = "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains";
-
 // Comprehensive list: crypto + all major fiat currencies
 export const CURRENCIES: Currency[] = [
-  // Crypto
-  { code: "btc", name: "Bitcoin",  symbol: "BTC", logo: `${TW}/bitcoin/info/logo.png` },
-  { code: "eth", name: "Ethereum", symbol: "ETH", logo: `${TW}/ethereum/info/logo.png` },
+  // Crypto (logos vendored in public/token-logos — no CDN round-trip)
+  { code: "btc", name: "Bitcoin",  symbol: "BTC", logo: tokenLogoAsset("btc") },
+  { code: "eth", name: "Ethereum", symbol: "ETH", logo: tokenLogoAsset("eth") },
 
   // Major fiat
   { code: "usd", name: "US Dollar", symbol: "$", flag: "🇺🇸" },

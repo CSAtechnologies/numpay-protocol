@@ -1,3 +1,6 @@
+// First import on purpose: kicks off the parallel storage preload (session,
+// settings, balance caches) while the rest of the bundle is still evaluating.
+import "./boot";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";

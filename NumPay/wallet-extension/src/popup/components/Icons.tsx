@@ -2,6 +2,7 @@ import React, { useState, useEffect, useSyncExternalStore } from "react";
 import { ICON_DATA } from "../../lib/icons/iconData";
 import { ICON_GLYPHS } from "../../lib/icons/iconGlyphs";
 import { VENDORED_TOKENS, VENDORED_CHAINS } from "../../lib/icons/vendoredLogos";
+import { assetUrl } from "../../lib/icons/assets";
 import { NETWORKS } from "../../lib/networks";
 import { subscribeLogos, getTokenLogo } from "../../lib/logoCache";
 
@@ -408,15 +409,6 @@ function chainFallbackSvg(chainId: string): string {
 }
 
 // ── Real-logo URL resolvers ────────────────────────────────────────────────────
-// Resolve a packaged asset path (e.g. logoOverride "token-logos/x.png") to an
-// extension URL; pass through absolute http(s) values unchanged.
-function assetUrl(p: string): string {
-  if (/^https?:/.test(p)) return p;
-  try {
-    if (typeof chrome !== "undefined" && chrome.runtime?.getURL) return chrome.runtime.getURL(p);
-  } catch { /* not in an extension context */ }
-  return p;
-}
 
 export function tokenIconUrl(symbol: string): string {
   const canon = (ICON_DATA.aliases[symbol.toUpperCase()] || symbol).toUpperCase();

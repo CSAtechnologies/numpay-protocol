@@ -5,8 +5,7 @@ import { useWallet } from "../hooks/useWallet";
 import Layout from "../components/Layout";
 import { CopyIcon, CheckIcon, ChevronDownIcon, ChainIcon } from "../components/Icons";
 import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
-
-const TW = "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains";
+import { chainLogoAsset } from "@/lib/icons/assets";
 
 interface ReceiveChain {
   id: string;
@@ -27,12 +26,12 @@ const EVM_CHAINS: ReceiveChain[] = Object.values(NETWORKS)
   .map((n) => ({ id: n.id, name: n.name, symbol: n.symbol, logo: n.logo, isEVM: true }));
 
 const NON_EVM_CHAINS: ReceiveChain[] = [
-  { id: "bitcoin",  name: "Bitcoin",    symbol: "BTC", logo: `${TW}/bitcoin/info/logo.png`,   isEVM: false },
-  { id: "solana",   name: "Solana",     symbol: "SOL", logo: `${TW}/solana/info/logo.png`,    isEVM: false },
-  { id: "sui",      name: "Sui",        symbol: "SUI", logo: `${TW}/sui/info/logo.png`,       isEVM: false },
-  { id: "tron",     name: "Tron",       symbol: "TRX", logo: `${TW}/tron/info/logo.png`,      isEVM: false },
-  { id: "xrp",      name: "XRP Ledger", symbol: "XRP", logo: `${TW}/ripple/info/logo.png`,    isEVM: false },
-  { id: "litecoin", name: "Litecoin",   symbol: "LTC", logo: `${TW}/litecoin/info/logo.png`,  isEVM: false },
+  { id: "bitcoin",  name: "Bitcoin",    symbol: "BTC", logo: chainLogoAsset("bitcoin"),  isEVM: false },
+  { id: "solana",   name: "Solana",     symbol: "SOL", logo: chainLogoAsset("solana"),   isEVM: false },
+  { id: "sui",      name: "Sui",        symbol: "SUI", logo: chainLogoAsset("sui"),      isEVM: false },
+  { id: "tron",     name: "Tron",       symbol: "TRX", logo: chainLogoAsset("tron"),     isEVM: false },
+  { id: "xrp",      name: "XRP Ledger", symbol: "XRP", logo: chainLogoAsset("xrp"),      isEVM: false },
+  { id: "litecoin", name: "Litecoin",   symbol: "LTC", logo: chainLogoAsset("litecoin"), isEVM: false },
 ];
 
 const ALL_CHAINS: ReceiveChain[] = [...EVM_CHAINS, ...NON_EVM_CHAINS].sort((a, b) => {
