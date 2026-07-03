@@ -421,13 +421,19 @@ export async function sweepAllChainTokens(
 ): Promise<void> {
   const cacheKey = CACHE_PFX + address.toLowerCase();
 
-  // Serve cache immediately (stale-while-revalidate)
+  // Serve cache immediately (stale-while-revalidate). Keep it around as the
+  // enrichment source for the re-sweep below: a source that is over quota
+  // (Moralis 402) must not produce a cache with the prices stripped off.
   let cacheIsFresh = false;
+  const cachedByChain = new Map<string, Map<string, AutoToken>>();
   try {
     const raw = await getItem(cacheKey);
     if (raw) {
       const { ts, data } = JSON.parse(raw) as { ts: number; data: Record<string, AutoToken[]> };
-      for (const [chainId, tokens] of Object.entries(data)) onUpdate(chainId, stripNativeToken(chainId, tokens));
+      for (const [chainId, tokens] of Object.entries(data)) {
+        cachedByChain.set(chainId, new Map(tokens.map((t) => [t.address.toLowerCase(), t])));
+        onUpdate(chainId, stripNativeToken(chainId, tokens));
+      }
       if (Date.now() - ts < CACHE_TTL) cacheIsFresh = true;
     }
   } catch {}
@@ -445,8 +451,22 @@ export async function sweepAllChainTokens(
     const byAddr = new Map<string, AutoToken>(
       (freshData[chainId] ?? []).map((t) => [t.address.toLowerCase(), t]),
     );
-    for (const t of incoming) {
-      const k = t.address.toLowerCase();
+    for (const tRaw of incoming) {
+      const k = tRaw.address.toLowerCase();
+      // Backfill metadata a lean source (RPC/Alchemy) lacks from the previous
+      // cache, so held tokens keep their price/spam verdict across a sweep
+      // where the pricing indexer failed or hasn't answered yet.
+      const cached = cachedByChain.get(chainId)?.get(k);
+      const t: AutoToken = cached
+        ? {
+            ...tRaw,
+            priceUsd:         tRaw.priceUsd         ?? cached.priceUsd,
+            logo:             tRaw.logo             ?? cached.logo,
+            possibleSpam:     tRaw.possibleSpam     ?? cached.possibleSpam,
+            securityScore:    tRaw.securityScore    ?? cached.securityScore,
+            verifiedContract: tRaw.verifiedContract ?? cached.verifiedContract,
+          }
+        : tRaw;
       const cur = byAddr.get(k);
       if (!cur) { byAddr.set(k, t); continue; }
       const realSym  = (s?: string) => !!s && !s.startsWith("0x");

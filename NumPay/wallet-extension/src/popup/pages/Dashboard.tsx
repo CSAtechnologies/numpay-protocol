@@ -977,7 +977,7 @@ export default function Dashboard({ onLock }: Props) {
               </svg>
             </button>
             <button
-              onClick={() => { refresh(); refreshNonEvm(); }}
+              onClick={() => { refresh(); refreshNonEvm(true); }}
               className="p-1.5 rounded-lg text-muted hover:text-brand-400 transition-colors"
             >
               <RefreshIcon size={14} />

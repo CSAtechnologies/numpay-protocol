@@ -44,7 +44,7 @@ export interface WalletState {
   filterChainId: string | null;
   setAssetFilter: (id: string | null) => void;
   refresh: () => void;
-  refreshNonEvm: () => Promise<void>;
+  refreshNonEvm: (showLoading?: boolean) => Promise<void>;
   portfolioUsd: number;
   chainBalances: ChainBalance[];
   multiChainLoading: boolean;
@@ -173,7 +173,22 @@ export function useWallet(): WalletState {
       })
     );
     setTokens(withBalances);
-    setTokensByChain((prev) => ({ ...prev, [network.id]: withBalances }));
+    // Merge into the chain's token list instead of replacing it: replacement
+    // dropped every auto-detected token and stripped priceUsd/spam metadata
+    // off the defaults until the next sweep re-merged them, which made the
+    // portfolio total dip and recover (visible oscillation at popup open and
+    // in the post-tx fast-poll window).
+    setTokensByChain((prev) => {
+      const existing = prev[network.id] ?? [];
+      const existingByAddr = new Map(existing.map((t) => [t.address.toLowerCase(), t]));
+      const withMeta = withBalances.map((t) => {
+        const old = existingByAddr.get(t.address.toLowerCase());
+        return old ? { ...old, ...t, logo: t.logo ?? old.logo } : t;
+      });
+      const covered = new Set(withBalances.map((t) => t.address.toLowerCase()));
+      const rest = existing.filter((t) => !covered.has(t.address.toLowerCase()));
+      return { ...prev, [network.id]: [...withMeta, ...rest] };
+    });
     setLoading(false);
   }, [wallet, network]);
 
@@ -241,10 +256,28 @@ export function useWallet(): WalletState {
     await sweepAllChainTokens(wallet.address, (chainId, autoTokens) => {
       setTokensByChain((prev) => {
         const existing = prev[chainId] ?? [];
+        const existingByAddr = new Map(existing.map((t) => [t.address.toLowerCase(), t]));
+        // Sticky enrichment: a sweep source that carries no price/logo/spam
+        // metadata (RPC layer, or Moralis over quota) must not strip fields the
+        // previous update already had — that made the portfolio total oscillate
+        // by the value of every token whose price flashed away mid-sweep.
+        // Balance always comes from the incoming (fresh) row.
+        const autoTokensSticky = autoTokens.map((t) => {
+          const old: any = existingByAddr.get(t.address.toLowerCase());
+          if (!old) return t;
+          return {
+            ...t,
+            priceUsd:         t.priceUsd         ?? old.priceUsd,
+            logo:             t.logo             ?? old.logo,
+            possibleSpam:     t.possibleSpam     ?? old.possibleSpam,
+            securityScore:    t.securityScore    ?? old.securityScore,
+            verifiedContract: t.verifiedContract ?? old.verifiedContract,
+          };
+        });
         // Merge: keep custom tokens not overwritten by auto-detection
         const autoAddrs = new Set(autoTokens.map((t) => t.address.toLowerCase()));
         const onlyCustom = existing.filter((t) => !autoAddrs.has(t.address.toLowerCase()));
-        const merged = [...autoTokens, ...onlyCustom];
+        const merged = [...autoTokensSticky, ...onlyCustom];
         // Avoid unnecessary state updates
         if (JSON.stringify(merged) === JSON.stringify(existing)) return prev;
         return { ...prev, [chainId]: merged };
@@ -344,10 +377,13 @@ export function useWallet(): WalletState {
     })();
   }, [wallet?.mnemonic]);
 
-  // Re-fetch non-EVM balances + SPL tokens without re-deriving addresses
-  const refreshNonEvm = useCallback(async () => {
+  // Re-fetch non-EVM balances + SPL tokens without re-deriving addresses.
+  // Silent by default: background polls must not flash the "syncing…" header
+  // on data that is already on screen. Pass true (manual refresh button) to
+  // show the indicator.
+  const refreshNonEvm = useCallback(async (showLoading = false) => {
     if (!nonEvmWallet) return;
-    setNonEvmLoading(true);
+    if (showLoading) setNonEvmLoading(true);
     try {
       const [chains, splTokens, trc20Tokens, suiCoins] = await Promise.all([
         fetchNonEvmBalances(nonEvmWallet),
