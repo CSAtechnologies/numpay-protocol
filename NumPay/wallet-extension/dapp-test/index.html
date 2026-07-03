@@ -127,7 +127,9 @@
     window.dispatchEvent(new CustomEvent("wallet-standard:app-ready", { detail: { register: registerSolWallet } }));
 
     function numpayStandardWallet() {
-      return solWallets.find((w) => w.name === "NumPay");
+      // The Solana standard wallet registers as "NumPay (Solana)" so EVM
+      // connect dialogs don't offer the Solana entry; match either name.
+      return solWallets.find((w) => w.name === "NumPay" || w.name === "NumPay (Solana)");
     }
     function updateSolDiscovery() {
       const std = numpayStandardWallet();
