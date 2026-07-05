@@ -1,0 +1,14 @@
+# Copy to .dev.vars (gitignored) for local `wrangler dev`.
+# Production values are set with `wrangler secret put <NAME>` and never live in the repo.
+
+# Comma-separated allowed Origin headers (extension origins). Empty = origin check skipped (dev).
+ALLOWED_ORIGINS=""
+
+# Upstream provider keys.
+MORALIS_KEY=""
+GOLDRUSH_KEY=""
+# CoinGecko Demo API key - REQUIRED in production for /v1/prices (CoinGecko
+# 429s keyless requests from Workers egress IPs). Free at
+# https://www.coingecko.com/en/api/pricing (Demo plan, 10k calls/month).
+# Locally optional: keyless works from a residential IP.
+COINGECKO_KEY=""

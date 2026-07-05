@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "numpay-wallet-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "workers_dev": true,
+  "preview_urls": false,
+
+  // Spec section 5: install-ID bucket 60/min, per-IP bucket 120/min.
+  // The binding is a fixed-window counter (period must be 10 or 60),
+  // not a token bucket; spec numbers are applied as hard ceilings.
+  "ratelimits": [
+    {
+      "name": "RL_INSTALL",
+      "namespace_id": "1001",
+      "simple": { "limit": 60, "period": 60 }
+    },
+    {
+      "name": "RL_IP",
+      "namespace_id": "1002",
+      "simple": { "limit": 120, "period": 60 }
+    }
+  ],
+
+  // Global (cross-colo) cache for shared upstream data like /v1/prices,
+  // so upstream refresh cost does not multiply per Cloudflare POP.
+  "kv_namespaces": [
+    {
+      "binding": "PRICES_KV",
+      "id": "411e187af77b4623b442f27663168b25"
+    }
+  ],
+
+  // Spec section 6: no request logging that pairs address with IP.
+  "observability": {
+    "enabled": false
+  }
+}

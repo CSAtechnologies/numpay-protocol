@@ -1,0 +1,16 @@
+{
+  "name": "numpay-wallet-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NumPay wallet API proxy: stateless Cloudflare Worker holding provider keys. Spec: NUMPAY_WALLET_API_SPEC_2026-07-04.md",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260619.0",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.24.0"
+  }
+}

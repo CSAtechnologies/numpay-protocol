@@ -1,5 +1,6 @@
 import { getItem, setItem } from "./storage";
 import { tokenLogoAsset } from "./icons/assets";
+import { apiGet } from "./walletApi";
 
 export interface Currency {
   code: string;
@@ -147,7 +148,12 @@ export async function fetchRates(): Promise<Rates> {
     }
   };
 
-  let data = await attempt();
+  // Proxy first when configured: one shared 30s cache at the edge instead of
+  // every install hitting CoinGecko. Same response shape (simple/price JSON).
+  // Null on any proxy failure drops through to the direct path unchanged.
+  let data = await apiGet<Rates>("/v1/prices");
+
+  if (!data) data = await attempt();
   if (!data) {
     // Brief backoff, then a single retry — smooths over transient throttling.
     await new Promise((r) => setTimeout(r, 1200));

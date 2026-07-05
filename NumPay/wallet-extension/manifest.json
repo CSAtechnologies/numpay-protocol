@@ -5,6 +5,7 @@
   "description": "Multi-chain crypto wallet with BPAN support. Send crypto using simple account numbers.",
   "permissions": ["storage", "alarms"],
   "host_permissions": [
+    "https://numpay-wallet-api.numpay.workers.dev/*",
     "https://*.g.alchemy.com/*",
     "https://*.drpc.org/*",
     "https://rpc.flashbots.net/*",

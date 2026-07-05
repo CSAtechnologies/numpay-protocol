@@ -17,6 +17,11 @@ export const GOLDRUSH_KEY = import.meta.env.VITE_GOLDRUSH_KEY ?? "";
 // replaces the Alchemy Solana endpoint (see src/lib/chains/solana.ts); when
 // empty, Solana falls back to Alchemy. Optional, like the others.
 export const HELIUS_KEY = import.meta.env.VITE_HELIUS_KEY ?? "";
+// NumPay wallet API proxy base URL (see src/lib/walletApi.ts). Empty = call
+// providers directly with the keys above (current behavior). When set, price
+// (and later token) reads route through the proxy and fall back to the
+// direct path on any proxy failure. No trailing slash.
+export const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/+$/, "");
 
 if (import.meta.env.DEV && !ALCHEMY_KEY) {
   console.warn("[NumPay] VITE_ALCHEMY_KEY is not set — Alchemy-backed RPCs will fail. Copy .env.example to .env.");
