@@ -7,9 +7,12 @@ install-ID-to-address mapping, observability off).
 
 ## Status
 
-Build-plan step 1 (skeleton): routing, install-ID + IP rate limiting,
-`/v1/health`. Data endpoints (`/v1/prices`, `/v1/tokens`, `/v1/token-meta`,
-`/v1/token-market`) land in steps 2-4.
+Live at https://numpay-wallet-api.numpay.workers.dev with `/v1/health`,
+`/v1/prices` (CoinGecko, 30 s colo + 5 min global KV cache) and
+`/v1/tokens/{chain}/{address}` (Moralis with GoldRush failover, 45 s cache).
+`/v1/token-meta` and `/v1/token-market` were deliberately dropped from v1:
+their upstreams are keyless and scale better from user IPs (see the spec's
+section 4 amendment).
 
 ## Develop
 
