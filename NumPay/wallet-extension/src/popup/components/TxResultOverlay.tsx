@@ -21,6 +21,8 @@ interface TxResultOverlayProps {
   txHash?: string;
   errorTitle?: string;
   errorMessage?: string;
+  /** Stage-specific pending line (e.g. "Approving USDT (1 of 2)…"); falls back to the generic per-kind text. */
+  pendingDetail?: string;
   onClose: () => void;
 }
 
@@ -44,6 +46,7 @@ export default function TxResultOverlay({
   txHash,
   errorTitle,
   errorMessage,
+  pendingDetail,
   onClose,
 }: TxResultOverlayProps) {
   const isError = status === "error";
@@ -128,7 +131,7 @@ export default function TxResultOverlay({
           <p className="mt-2 text-[12px] text-text-secondary leading-relaxed break-words">{errorMessage}</p>
         )}
         {isPending && (
-          <p className="mt-1.5 text-[12px] text-muted">{PENDING_SUB[kind]}</p>
+          <p className="mt-1.5 text-[12px] text-muted">{pendingDetail || PENDING_SUB[kind]}</p>
         )}
 
         {status === "success" && explorerUrl && txHash && (

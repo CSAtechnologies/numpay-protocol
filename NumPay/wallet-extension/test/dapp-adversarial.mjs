@@ -37,6 +37,7 @@ async function bundle(entry, name) {
       "import.meta.env.VITE_MORALIS_KEY": '""',
       "import.meta.env.VITE_GOLDRUSH_KEY": '""',
       "import.meta.env.VITE_HELIUS_KEY": '""',
+      "import.meta.env.VITE_API_BASE": '""',
       "import.meta.env.DEV": "false",
     },
   });

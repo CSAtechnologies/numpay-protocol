@@ -619,6 +619,9 @@ export default function Swap() {
   // (not on route-fetch errors), so the celebration/error overlay is tied to an
   // actual signed transaction.
   const [txFx,          setTxFx]          = useState<TxFxStatus | null>(null);
+  // Stage line for the pending overlay ("Approving USDT (1 of 2)…"), so the
+  // approval-then-swap minute reads as progress instead of a frozen spinner.
+  const [txFxDetail,    setTxFxDetail]    = useState("");
 
   const quoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const location = useLocation();
@@ -902,7 +905,7 @@ export default function Swap() {
     // ── Solana swap via Jupiter ─────────────────────────────────────────────
     if (route.provider === "jupiter") {
       if (!nonEvmWallet?.solana) { setSwapError("Solana wallet not ready"); return; }
-      setSwapping(true); setSwapError(""); setTxHash(""); setTxFx("pending");
+      setSwapping(true); setSwapError(""); setTxHash(""); setTxFxDetail(""); setTxFx("pending");
       try {
         // Compute what THIS swap actually needs in SOL (Jupiter 6024 fails
         // otherwise): a bounded fee (base + priority capped at 0.001 SOL),
@@ -969,9 +972,13 @@ export default function Swap() {
 
     const net = NETWORKS[fromToken.chainId];
     if (!net) return;
-    setSwapping(true); setSwapError(""); setTxHash(""); setTxFx("pending");
+    setSwapping(true); setSwapError(""); setTxHash(""); setTxFxDetail(""); setTxFx("pending");
     try {
       const signer    = getSigner(wallet.privateKey, net.rpcUrl);
+      // Receipts are detected by polling; the 4s default adds up to ~8s of
+      // dead time across the approval + swap waits. This signer is created
+      // fresh per swap, so the faster cadence affects nothing else.
+      (signer.provider as ethers.JsonRpcProvider).pollingInterval = 1000;
       const srcAmount = ethers.parseUnits(fromAmount, fromToken.decimals).toString();
       const srcAmountBn = BigInt(srcAmount);
       const isNativeSwap = !fromToken.address;
@@ -1014,12 +1021,15 @@ export default function Swap() {
         await assertIsContract(signer.provider!, txData.to);
         assertNativeValue(isNativeSwap, value, srcAmountBn);
 
+        const psApproval = !!(fromToken.address && route.priceRoute?.tokenTransferProxy);
         if (fromToken.address && route.priceRoute?.tokenTransferProxy) {
           // Gate the approval to ParaSwap's proxy for THIS chain (Base differs
           // from the others). Exact amount only.
           assertTrustedSpender("paraswap", route.priceRoute.tokenTransferProxy, net.chainId);
+          setTxFxDetail(`Approving ${fromToken.symbol} (1 of 2)…`);
           await approveErc20Exact(signer, fromToken.address, wallet.address, route.priceRoute.tokenTransferProxy, srcAmount);
         }
+        setTxFxDetail(psApproval ? "Swapping (2 of 2)…" : "Swapping…");
         await simulateOrThrow(signer, { to: txData.to, data: txData.data, value });
         const tx = await signer.sendTransaction({
           to: txData.to, data: txData.data, value,
@@ -1038,12 +1048,20 @@ export default function Swap() {
         // an approval is mined before the swap step is simulated.
         const steps = route.relaySteps || [];
         if (!steps.length) throw new Error("Relay returned no execution steps");
+        const relayTotal = steps.reduce(
+          (n: number, s: any) =>
+            n + (s.items || []).filter((it: any) => it?.data?.to && it?.data?.data && it.status !== "complete").length,
+          0,
+        );
+        let relayDone = 0;
         let lastHash = "";
         for (const step of steps) {
           for (const item of (step.items || [])) {
             const d = item?.data;
             if (!d?.to || !d?.data) continue;
             if (item.status === "complete") continue;
+            relayDone++;
+            setTxFxDetail(relayTotal > 1 ? `Confirming step ${relayDone} of ${relayTotal} on-chain…` : "Confirming on-chain…");
             if (d.chainId != null && Number(d.chainId) !== net.chainId) {
               throw new Error(`Blocked for safety: Relay step targets chain ${d.chainId}, expected ${net.chainId}.`);
             }
@@ -1088,8 +1106,10 @@ export default function Swap() {
 
         if (fromToken.address) {
           assertTrustedSpender("kyberswap", routerAddress);
+          setTxFxDetail(`Approving ${fromToken.symbol} (1 of 2)…`);
           await approveErc20Exact(signer, fromToken.address, wallet.address, routerAddress, srcAmount);
         }
+        setTxFxDetail(fromToken.address ? "Swapping (2 of 2)…" : "Swapping…");
         await simulateOrThrow(signer, { to: routerAddress, data, value });
         const tx = await signer.sendTransaction({ to: routerAddress, data, value });
         setTxHash(tx.hash);
@@ -1110,7 +1130,7 @@ export default function Swap() {
     if (await isLocked()) { setBridgeError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
     const fromNet = NETWORKS[fromToken.chainId];
     if (!fromNet) { setBridgeError("Bridge execution only supported from EVM chains"); return; }
-    setBridging(true); setBridgeError(""); setBridgeTxHash(""); setTxFx("pending");
+    setBridging(true); setBridgeError(""); setBridgeTxHash(""); setTxFxDetail(""); setTxFx("pending");
     try {
       // /advanced/routes gives display data only; /quote gives the actual transactionRequest
       const fromLifiId  = LIFI_CHAIN_ID[fromToken.chainId];
@@ -1136,6 +1156,7 @@ export default function Swap() {
       if (!txReq?.to || !txReq?.data) throw new Error("Bridge provider returned incomplete transaction data");
 
       const signer = getSigner(wallet.privateKey, fromNet.rpcUrl);
+      (signer.provider as ethers.JsonRpcProvider).pollingInterval = 1000;
       await assertChainId(signer, fromNet.chainId);
 
       // The LI.FI diamond (router + approval target) is chain-constant — gate it.
@@ -1150,10 +1171,13 @@ export default function Swap() {
 
       // Approve the bridge contract if spending an ERC-20 (exact amount only).
       const approvalAddr = qData?.estimate?.approvalAddress;
+      const bridgeApproval = !!(fromToken.address && approvalAddr);
       if (fromToken.address && approvalAddr) {
         assertTrustedSpender("lifi", approvalAddr);
+        setTxFxDetail(`Approving ${fromToken.symbol} (1 of 2)…`);
         await approveErc20Exact(signer, fromToken.address, wallet.address, approvalAddr, fromAmtRaw);
       }
+      setTxFxDetail(bridgeApproval ? "Bridging (2 of 2)…" : "Bridging…");
       await simulateOrThrow(signer, { to: txReq.to, data: txReq.data, value });
       const tx = await signer.sendTransaction({
         to:       txReq.to,
@@ -1721,6 +1745,7 @@ export default function Swap() {
             txHash={activeTxHash}
             errorTitle={parsed?.title}
             errorMessage={parsed ? (parsed.hint ? `${parsed.body} ${parsed.hint}` : parsed.body) : undefined}
+            pendingDetail={txFxDetail || undefined}
             onClose={() => setTxFx(null)}
           />
         );
