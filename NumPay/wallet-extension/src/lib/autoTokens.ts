@@ -12,7 +12,8 @@ import { ethers } from "ethers";
 import { getItem, setItem } from "./storage";
 import { NETWORKS } from "./networks";
 import { DEFAULT_TOKENS, getTokenBalance } from "./tokens";
-import { ALCHEMY_KEY, MORALIS_KEY, GOLDRUSH_KEY } from "./env";
+import { ALCHEMY_KEY, MORALIS_KEY, GOLDRUSH_KEY, API_BASE } from "./env";
+import { apiGet } from "./walletApi";
 
 // Alchemy network sub-domains. Only networks enabled in our Alchemy app return
 // data; others return 403 and rely on the Layer 2 Multicall3 sweep instead.
@@ -298,6 +299,18 @@ async function fetchGoldRushERC20s(chainId: string, address: string): Promise<Au
 }
 
 /**
+ * Proxy layer: one /v1/tokens call replaces the direct Moralis + GoldRush
+ * calls for a chain (failover happens server-side behind a shared 45 s edge
+ * cache; response is already in AutoToken shape). Null on any proxy failure
+ * so the caller falls back to the direct-key layers for that chain. The 12 s
+ * timeout covers the worker's own upstream failover window.
+ */
+async function fetchProxyERC20s(chainId: string, address: string): Promise<AutoToken[] | null> {
+  const data = await apiGet<{ tokens: AutoToken[] }>(`/v1/tokens/${chainId}/${address}`, 12000);
+  return data ? data.tokens : null;
+}
+
+/**
  * Build a networkId → RPC map for all chains that have DEFAULT_TOKENS.
  * Includes Alchemy chains so this acts as a guaranteed fallback when Alchemy 403s.
  */
@@ -529,25 +542,44 @@ export async function sweepAllChainTokens(
     ),
     // Layer 2: Multicall3 balanceOf for all chains with known DEFAULT_TOKENS
     sweepTokensByRPC(address, (chainId, tokens) => merge(chainId, tokens)),
-    // Layer 3: Moralis — arbitrary held tokens + USD price (memecoins, all chains)
-    Promise.all(
-      Object.keys(MORALIS_CHAINS).map(async (chainId) => {
-        const tokens = await fetchMoralisERC20s(chainId, address);
-        if (!tokens) return;
-        fullEnumOk.add(chainId);
-        merge(chainId, tokens);
-      }),
-    ),
-    // Layer 4: GoldRush (Covalent) — fallback indexer. Covers held tokens + USD
-    // price when Moralis is over its daily quota. No-op when GOLDRUSH_KEY unset.
-    Promise.all(
-      Object.keys(GOLDRUSH_CHAINS).map(async (chainId) => {
-        const tokens = await fetchGoldRushERC20s(chainId, address);
-        if (!tokens) return;
-        fullEnumOk.add(chainId);
-        merge(chainId, tokens);
-      }),
-    ),
+    // Layers 3+4: indexer discovery (arbitrary held tokens + USD price).
+    // With the proxy configured this collapses to ONE /v1/tokens call per
+    // chain (Moralis→GoldRush failover happens server-side); a proxy failure
+    // falls back to the direct-key calls for that chain. Without the proxy,
+    // Moralis and GoldRush run in parallel exactly as before so the two
+    // sources keep backing each other up.
+    API_BASE
+      ? Promise.all(
+          Object.keys(MORALIS_CHAINS).map(async (chainId) => {
+            let tokens = await fetchProxyERC20s(chainId, address);
+            if (tokens === null) tokens = await fetchMoralisERC20s(chainId, address);
+            if (tokens === null) tokens = await fetchGoldRushERC20s(chainId, address);
+            if (tokens === null) return;
+            fullEnumOk.add(chainId);
+            merge(chainId, tokens);
+          }),
+        )
+      : Promise.all([
+          // Layer 3: Moralis — arbitrary held tokens + USD price (memecoins)
+          Promise.all(
+            Object.keys(MORALIS_CHAINS).map(async (chainId) => {
+              const tokens = await fetchMoralisERC20s(chainId, address);
+              if (!tokens) return;
+              fullEnumOk.add(chainId);
+              merge(chainId, tokens);
+            }),
+          ),
+          // Layer 4: GoldRush (Covalent) — fallback indexer. Covers held
+          // tokens + USD price when Moralis is over its daily quota.
+          Promise.all(
+            Object.keys(GOLDRUSH_CHAINS).map(async (chainId) => {
+              const tokens = await fetchGoldRushERC20s(chainId, address);
+              if (!tokens) return;
+              fullEnumOk.add(chainId);
+              merge(chainId, tokens);
+            }),
+          ),
+        ]),
   ]);
 
   // A sweep where every source failed (offline, quotas everywhere) proves

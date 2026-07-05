@@ -7,8 +7,9 @@
  */
 
 import { handlePrices } from "./prices";
+import { handleTokens } from "./tokens";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 /** Local shape of the Workers rate-limit binding (fixed-window counter). */
 interface RateLimiter {
@@ -85,7 +86,7 @@ export default {
         version: VERSION,
         upstreams: {
           prices: "live",
-          tokens: "unwired",
+          tokens: "live",
           tokenMeta: "unwired",
           tokenMarket: "unwired",
         },
@@ -104,8 +105,10 @@ export default {
 
     if (pathname === "/v1/prices") return handlePrices(env, ctx);
 
-    // Remaining data endpoints land here in later build steps:
-    //   /v1/tokens/{chain}/{address},
+    const tokensMatch = pathname.match(/^\/v1\/tokens\/([a-z]+)\/([^/]+)$/);
+    if (tokensMatch) return handleTokens(tokensMatch[1]!, tokensMatch[2]!, env, ctx);
+
+    // Remaining data endpoints land here in step 4:
     //   /v1/token-meta/{chain}/{contract}, /v1/token-market/{chain}/{contract}
     return error(404, "not_found");
   },
