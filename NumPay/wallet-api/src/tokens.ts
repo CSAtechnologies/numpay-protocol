@@ -2,8 +2,9 @@
  * /v1/tokens/{chain}/{address} - held ERC-20 discovery with USD price
  * (spec section 4). Moralis first, GoldRush (Covalent) failover, normalized
  * to the client's AutoToken shape so the extension's merge logic is
- * provider-agnostic. Chain slugs and chain-id maps mirror
- * wallet-extension/src/lib/autoTokens.ts and must stay in sync with it.
+ * provider-agnostic. Chain slugs mirror wallet-extension/src/lib/
+ * autoTokens.ts (GOLDRUSH_CHAINS is the full 17-chain set; MORALIS_CHAINS
+ * is trimmed to what Moralis' Data API actually serves).
  *
  * Privacy (spec section 6): the wallet address transits to the upstream and
  * lands in a per-colo cache key that expires on TTL. Nothing is logged with
@@ -16,13 +17,16 @@
 
 import type { Env } from "./index";
 
-// networkId slug -> Moralis hex chain id
+// networkId slug -> Moralis hex chain id.
+// Verified against docs.moralis.com/supported-chains 2026-07-05: fantom and
+// scroll are gone from the Data API, and zksync/mantle/blast/polygonzkevm
+// are RPC-only (wallets/tokens 400s on all six, measured live). Those
+// chains go straight to GoldRush below.
 const MORALIS_CHAINS: Record<string, string> = {
   ethereum:     "0x1",
   polygon:      "0x89",
   bsc:          "0x38",
   avalanche:    "0xa86a",
-  fantom:       "0xfa",
   cronos:       "0x19",
   arbitrum:     "0xa4b1",
   optimism:     "0xa",
@@ -30,11 +34,6 @@ const MORALIS_CHAINS: Record<string, string> = {
   gnosis:       "0x64",
   linea:        "0xe708",
   moonbeam:     "0x504",
-  zksync:       "0x144",
-  mantle:       "0x1388",
-  blast:        "0x13e31",
-  scroll:       "0x82750",
-  polygonzkevm: "0x44d",
 };
 
 // networkId slug -> GoldRush (Covalent) decimal chain id
@@ -185,7 +184,7 @@ export async function handleTokens(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
-  if (!(chain in MORALIS_CHAINS)) {
+  if (!(chain in MORALIS_CHAINS) && !(chain in GOLDRUSH_CHAINS)) {
     return new Response(JSON.stringify({ error: "unknown_chain" }), {
       status: 400,
       headers: { "Content-Type": "application/json; charset=utf-8" },
