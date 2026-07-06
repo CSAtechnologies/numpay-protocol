@@ -38,6 +38,9 @@ interface SwapToken {
   // Live USD price carried from the held-token fetchers when known. Fallback
   // fiat pricing only; quote-provided USD values take precedence.
   priceUsd?: number;
+  // Indexer spam flag carried from the held-token fetchers; sinks the token
+  // to the bottom of the picker regardless of its (usually fake) quantity.
+  possibleSpam?: boolean;
 }
 
 interface RouteOption {
@@ -546,7 +549,7 @@ export default function Swap() {
     return (tokensByChain["solana"] ?? []).map((t) => ({
       symbol: t.symbol, name: t.name, logo: t.logo, address: t.address,
       decimals: t.decimals, balance: t.balance || "0", chainId: "solana", chainName: "Solana",
-      priceUsd: (t as any).priceUsd,
+      priceUsd: (t as any).priceUsd, possibleSpam: (t as any).possibleSpam,
     }));
   }, [tokensByChain]);
 
@@ -561,7 +564,7 @@ export default function Swap() {
         out.push({
           symbol: t.symbol, name: t.name, logo: t.logo, address: t.address,
           decimals: t.decimals, balance: t.balance || "0", chainId, chainName: net.name,
-          priceUsd: (t as any).priceUsd,
+          priceUsd: (t as any).priceUsd, possibleSpam: (t as any).possibleSpam,
         });
       }
     }
@@ -1333,9 +1336,26 @@ export default function Swap() {
       if (!groups[t.chainId]) groups[t.chainId] = { chainId: t.chainId, chainName: t.chainName, tokens: [] };
       groups[t.chainId].tokens.push(t);
     }
-    // Sort tokens within each chain: highest balance first
+    // Sort tokens within each chain: native first, then stablecoins, then by
+    // fiat value. Raw quantity is NOT a rank key — airdrop spam mints
+    // trillions of a worthless token precisely to game quantity sorts; with
+    // no real price it carries zero value and sinks, and indexer-flagged spam
+    // is pinned to the bottom outright. Among equally worthless rows an owned
+    // token still beats a zero-balance default (so an unpriced holding stays
+    // findable), but quantity magnitude never ranks; final ties keep
+    // insertion order (held list before curated defaults).
+    const STABLES = new Set(["USDT", "USDC", "DAI", "BUSD", "FDUSD", "TUSD", "USDD", "PYUSD", "USDE", "USD1"]);
+    const tierOf = (t: SwapToken) =>
+      t.possibleSpam ? 3 : !t.address ? 0 : STABLES.has(t.symbol.toUpperCase()) ? 1 : 2;
+    const valueOf = (t: SwapToken) => (parseFloat(t.balance) || 0) * tokenUsdPrice(t);
     for (const g of Object.values(groups)) {
-      g.tokens.sort((a, b) => (parseFloat(b.balance) || 0) - (parseFloat(a.balance) || 0));
+      g.tokens.sort((a, b) => {
+        const tier = tierOf(a) - tierOf(b);
+        if (tier) return tier;
+        const val = valueOf(b) - valueOf(a);
+        if (val) return val;
+        return ((parseFloat(b.balance) || 0) > 0 ? 1 : 0) - ((parseFloat(a.balance) || 0) > 0 ? 1 : 0);
+      });
     }
     // Sort chains: active network first, then by any nonzero balance, then rest
     return Object.values(groups).sort((a, b) => {
@@ -1345,7 +1365,7 @@ export default function Swap() {
       const bB = b.tokens.reduce((s, t) => s + (parseFloat(t.balance) || 0), 0);
       return bB - bA;
     });
-  }, [allTokens, pickerChain, pickerSearch, network.id]);
+  }, [allTokens, pickerChain, pickerSearch, network.id, tokenUsdPrice]);
 
   const isSolMintSearch = isSolanaMint(pickerSearch.trim());
   const isAddrSearch = isAddress(pickerSearch.trim()) || isSolMintSearch;
