@@ -340,12 +340,14 @@ async function fetchTrc20DecimalsOnChain(contract: string, owner: string): Promi
  */
 export async function fetchTronTokens(address: string): Promise<Array<{
   symbol: string; name: string; address: string; decimals: number; balance: string; logo?: string;
-}>> {
+}> | null> {
+  // null = provider unreachable (callers keep last-known); [] = authoritative
+  // "no tokens" (callers must clear stale entries).
   try {
     const resp = await fetch(`https://api.trongrid.io/v1/accounts/${address}`, {
       headers: { Accept: "application/json" },
     });
-    if (!resp.ok) return [];
+    if (!resp.ok) return null;
     const data = await resp.json();
 
     // trc20 is an array of { contract_address: balance_string } objects
@@ -472,5 +474,5 @@ export async function fetchTronTokens(address: string): Promise<Array<{
     }
 
     return tokens;
-  } catch { return []; }
+  } catch { return null; }
 }

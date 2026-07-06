@@ -417,7 +417,9 @@ export async function fetchSuiBalance(address: string): Promise<number> {
  */
 export async function fetchSuiTokens(address: string): Promise<Array<{
   symbol: string; name: string; address: string; decimals: number; balance: string; logo?: string;
-}>> {
+}> | null> {
+  // null = every RPC failed (callers keep last-known); [] = authoritative
+  // "no tokens" (callers must clear stale entries).
   const NATIVE = "0x2::sui::SUI";
   for (const rpc of SUI_RPCS) {
     try {
@@ -468,5 +470,5 @@ export async function fetchSuiTokens(address: string): Promise<Array<{
       return out.filter((t) => parseFloat(t.balance) > 0);
     } catch {}
   }
-  return [];
+  return null;
 }

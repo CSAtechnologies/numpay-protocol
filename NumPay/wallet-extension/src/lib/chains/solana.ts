@@ -881,7 +881,11 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
   symbol: string; name: string; address: string; decimals: number; balance: string; logo?: string; priceUsd?: number;
   possibleSpam?: boolean; verifiedContract?: boolean; securityScore?: number;
   liquidityUsd?: number; marketCapUsd?: number;
-}>> {
+}> | null> {
+  // Returns null when the RPC could not be reached / answered garbage, so
+  // callers keep their last-known list. An empty array is an authoritative
+  // "this wallet holds no tokens" and must be allowed to clear stale entries
+  // (e.g. after swapping the only SPL token back to SOL).
   try {
     // ── Step 0: get all token accounts (SPL + Token2022) ─────────────────────
     const [resp1, resp2] = await Promise.all([
@@ -901,9 +905,13 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
       }).then((r) => r.json()).catch(() => null),
     ]);
 
+    // Authoritative only when BOTH token programs answered; a partial failure
+    // must not report "no tokens" for the program that never responded.
+    if (!Array.isArray(resp1?.result?.value) || !Array.isArray(resp2?.result?.value)) return null;
+
     const accounts: any[] = [
-      ...(resp1?.result?.value ?? []),
-      ...(resp2?.result?.value ?? []),
+      ...resp1.result.value,
+      ...resp2.result.value,
     ];
 
     const holdings: { mint: string; balance: number; decimals: number }[] = [];
@@ -1077,7 +1085,7 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
         marketCapUsd: mcMap[mint],
       };
     });
-  } catch { return []; }
+  } catch { return null; }
 }
 
 /**

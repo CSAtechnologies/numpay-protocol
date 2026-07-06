@@ -357,24 +357,20 @@ export function useWallet(): WalletState {
         // Fetch native balances + SPL + TRC-20 + Sui tokens in parallel
         const [chains, splTokens, trc20Tokens, suiCoins] = await Promise.all([
           fetchNonEvmBalances(nev, prevChains),
-          fetchSolanaTokens(nev.solana.address).catch(() => []),
-          fetchTronTokens(nev.tron.address).catch(() => []),
-          fetchSuiTokens(nev.sui.address).catch(() => []),
+          fetchSolanaTokens(nev.solana.address).catch(() => null),
+          fetchTronTokens(nev.tron.address).catch(() => null),
+          fetchSuiTokens(nev.sui.address).catch(() => null),
         ]);
 
-        // Keep last-known tokens when a fetch came back empty (offline/flaky),
-        // so SPL/TRC-20/Sui holdings don't vanish on a bad refresh.
-        const sol = splTokens.length  ? splTokens  : prevSol;
-        const trx = trc20Tokens.length ? trc20Tokens : prevTrx;
-        const sui = suiCoins.length ? suiCoins : prevSui;
+        // null = fetch failed: keep last-known so holdings don't vanish on a
+        // bad refresh. [] = provider answered "no tokens": take it, so a token
+        // swapped/sent away in full doesn't ghost in the list forever.
+        const sol = splTokens   ?? prevSol;
+        const trx = trc20Tokens ?? prevTrx;
+        const sui = suiCoins    ?? prevSui;
 
         setNonEvmChains(chains);
-        setTokensByChain((prev) => ({
-          ...prev,
-          ...(sol.length ? { solana: sol } : {}),
-          ...(trx.length ? { tron: trx }   : {}),
-          ...(sui.length ? { sui: sui }    : {}),
-        }));
+        setTokensByChain((prev) => ({ ...prev, solana: sol, tron: trx, sui: sui }));
 
         // Persist tokens too (not just native chains) so they survive offline.
         try {
@@ -418,22 +414,18 @@ export function useWallet(): WalletState {
 
       const [chains, splTokens, trc20Tokens, suiCoins] = await Promise.all([
         fetchNonEvmBalances(nonEvmWallet, prevChains),
-        fetchSolanaTokens(nonEvmWallet.solana.address).catch(() => []),
-        fetchTronTokens(nonEvmWallet.tron.address).catch(() => []),
-        fetchSuiTokens(nonEvmWallet.sui.address).catch(() => []),
+        fetchSolanaTokens(nonEvmWallet.solana.address).catch(() => null),
+        fetchTronTokens(nonEvmWallet.tron.address).catch(() => null),
+        fetchSuiTokens(nonEvmWallet.sui.address).catch(() => null),
       ]);
 
-      const sol = splTokens.length  ? splTokens  : prevSol;
-      const trx = trc20Tokens.length ? trc20Tokens : prevTrx;
-      const sui = suiCoins.length ? suiCoins : prevSui;
+      // null = fetch failed (keep last-known); [] = authoritative empty (clear).
+      const sol = splTokens   ?? prevSol;
+      const trx = trc20Tokens ?? prevTrx;
+      const sui = suiCoins    ?? prevSui;
 
       setNonEvmChains(chains);
-      setTokensByChain((prev) => ({
-        ...prev,
-        ...(sol.length ? { solana: sol } : {}),
-        ...(trx.length ? { tron: trx }   : {}),
-        ...(sui.length ? { sui: sui }    : {}),
-      }));
+      setTokensByChain((prev) => ({ ...prev, solana: sol, tron: trx, sui: sui }));
 
       if (cacheKey) {
         try {

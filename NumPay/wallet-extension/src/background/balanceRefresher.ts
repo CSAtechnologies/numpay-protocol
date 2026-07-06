@@ -131,14 +131,15 @@ async function refreshNonEvm(evmAddress: string, addrs: NonEvmAddressMap, force 
 
   const [chains, splTokens, trc20Tokens, suiCoins] = await Promise.all([
     fetchNonEvmBalancesByAddress(addrs, prevChains),
-    fetchSolanaTokens(addrs.solana).catch(() => []),
-    fetchTronTokens(addrs.tron).catch(() => []),
-    fetchSuiTokens(addrs.sui).catch(() => []),
+    fetchSolanaTokens(addrs.solana).catch(() => null),
+    fetchTronTokens(addrs.tron).catch(() => null),
+    fetchSuiTokens(addrs.sui).catch(() => null),
   ]);
 
-  const sol = splTokens.length   ? splTokens   : prevSol;
-  const trx = trc20Tokens.length ? trc20Tokens : prevTrx;
-  const sui = suiCoins.length    ? suiCoins    : prevSui;
+  // null = fetch failed (keep last-known); [] = authoritative empty (clear).
+  const sol = splTokens   ?? prevSol;
+  const trx = trc20Tokens ?? prevTrx;
+  const sui = suiCoins    ?? prevSui;
 
   await setItem(cacheKey, JSON.stringify({
     ts: Date.now(), chains, solanaTokens: sol, tronTokens: trx, suiTokens: sui,
