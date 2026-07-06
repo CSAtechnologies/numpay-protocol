@@ -58,7 +58,15 @@ export function deriveXrpAddress(mnemonic: string): {
 }
 
 export async function fetchXrpBalance(address: string): Promise<number> {
-  // Primary: xrplcluster.com community cluster
+  // account_info returns only the balance (~0.5 kB).
+  //
+  // We deliberately do NOT fall back to XRPScan's REST account endpoint
+  // (https://api.xrpscan.com/api/v1/account/{address}): it 302-redirects to a
+  // full transaction dump (/tx.json — ~18 MB for an active account), which
+  // fetch() auto-follows. With the background refresher hitting this every
+  // ~60s for an unfunded address (where the primary returns actNotFound and
+  // used to fall through), that download alone burned ~1 GB/hour. An
+  // unfunded/not-found account is a definitive balance of 0.
   try {
     const resp = await fetch("https://xrplcluster.com/", {
       method: "POST",
@@ -72,16 +80,7 @@ export async function fetchXrpBalance(address: string): Promise<number> {
       const data = await resp.json();
       const drops: string | undefined = data.result?.account_data?.Balance;
       if (drops) return parseInt(drops, 10) / 1_000_000;
-    }
-  } catch {}
-
-  // Fallback: XRPScan public REST API (balance already in XRP)
-  try {
-    const resp = await fetch(`https://api.xrpscan.com/api/v1/account/${address}`);
-    if (resp.ok) {
-      const data = await resp.json();
-      const xrp = parseFloat(data.xrpBalance || "0");
-      if (!isNaN(xrp)) return xrp;
+      // actNotFound (unfunded / never-activated) → 0, no giant-payload fallback.
     }
   } catch {}
 
