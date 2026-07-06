@@ -316,7 +316,10 @@ export default function Dashboard({ onLock }: Props) {
       for (const t of chainTokens) {
         // Skip a token that is really the chain's native coin (an indexer
         // pseudo-token) — its value is already counted in chainBalances/nonEvmChains.
-        if (nativeSym && t.symbol.toUpperCase() === nativeSym) continue;
+        // EVM only: Moralis/GoldRush emit such rows, but the Solana/Tron/Sui
+        // fetchers read token accounts and can never contain the native coin
+        // (a native-symbol match there is a real token, e.g. bridged wSOL).
+        if (isEvmChain && nativeSym && t.symbol.toUpperCase() === nativeSym) continue;
         const bal = parseFloat(t.balance || "0");
         if (bal <= 0) continue;
         // Spam-classified tokens are hidden from the asset list; keep them out
@@ -372,8 +375,10 @@ export default function Dashboard({ onLock }: Props) {
       for (const t of chainTokens) {
         // A non-native token whose symbol matches the chain's native coin is an
         // indexer pseudo-token that duplicates the native row — drop it. Wrapped
-        // natives (WBNB/WETH) keep their own symbol and are unaffected.
-        if (nativeSym && t.symbol.toUpperCase() === nativeSym) continue;
+        // natives (WBNB/WETH) keep their own symbol and are unaffected. EVM
+        // only: the Solana/Tron/Sui fetchers read token accounts and never emit
+        // the native coin, so a match there is a real token (bridged wSOL).
+        if (isEvmChain && nativeSym && t.symbol.toUpperCase() === nativeSym) continue;
         const bal = parseFloat(t.balance || "0");
         // Prefer a live per-token price when the fetcher resolved one (Solana/DexScreener);
         // else fall back to the known-token coingecko map (EVM). Unknown → 0 so it still shows.

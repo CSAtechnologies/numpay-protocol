@@ -1065,13 +1065,22 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
       } catch {}
     }
 
+    // Wrapped SOL's canonical metadata symbol is "SOL", which both collides
+    // with the native row's symbol in the UI and used to trip the dashboard's
+    // native-pseudo-token dedupe (hiding bridged wSOL entirely). Label it
+    // distinctly; the mint address stays the routing/identity key everywhere.
+    const WSOL_MINT = "So11111111111111111111111111111111111111112";
+
     return holdings.map(({ mint, balance, decimals }) => {
       const meta = metaMap[mint] ?? {};
       const mor  = moralisMap[mint] ?? {};
-      const symbol = meta.symbol || mor.symbol || mint.slice(0, 6).toUpperCase();
+      const symbol = mint === WSOL_MINT
+        ? "wSOL"
+        : (meta.symbol || mor.symbol || mint.slice(0, 6).toUpperCase());
       return {
         symbol,
-        name:    meta.name || mor.name || meta.symbol || mint.slice(0, 6).toUpperCase(),
+        name:    mint === WSOL_MINT ? "Wrapped SOL"
+               : meta.name || mor.name || meta.symbol || mint.slice(0, 6).toUpperCase(),
         address: mint,
         decimals,
         balance: balance.toString(),
