@@ -3,7 +3,7 @@ import { useLocation } from "react-router-dom";
 import { ethers } from "ethers";
 import { useWallet } from "../hooks/useWallet";
 import { useCurrency } from "../hooks/useCurrency";
-import { usdToDisplayCurrency } from "@/lib/currency";
+import { usdToDisplayCurrency, getUsdPrice } from "@/lib/currency";
 import { NETWORKS } from "@/lib/networks";
 import { DEFAULT_TOKENS } from "@/lib/tokens";
 import { markBalancesDirty } from "@/lib/balanceBus";
@@ -35,6 +35,9 @@ interface SwapToken {
   chainId: string;
   chainName: string;
   custom?: boolean;
+  // Live USD price carried from the held-token fetchers when known. Fallback
+  // fiat pricing only; quote-provided USD values take precedence.
+  priceUsd?: number;
 }
 
 interface RouteOption {
@@ -44,6 +47,9 @@ interface RouteOption {
   destAmount: string;
   destAmountRaw: string;
   gasCostUSD: string;
+  // Quote-reported fiat value of each side (post-fee), used for the ≈ $ lines.
+  srcUsd?: number;
+  destUsd?: number;
   tag?: string;
   priceRoute?: any;
   routeSummary?: any;
@@ -57,6 +63,8 @@ interface BridgeRoute {
   gasCostUSD: string;
   tags: string[];
   toAmount: string;
+  fromAmountUSD?: string;
+  toAmountUSD?: string;
   steps: Array<{
     tool?: string;
     toolDetails?: { name: string; logoURI: string };
@@ -327,6 +335,7 @@ async function fetchParaswapQuote(chainId: number, from: SwapToken, to: SwapToke
       logo: "https://assets.coingecko.com/coins/images/14929/small/paraswap.png",
       destAmount: parseFloat(ethers.formatUnits(pr.destAmount, to.decimals)).toFixed(Math.min(to.decimals, 6)),
       destAmountRaw: pr.destAmount, gasCostUSD: pr.gasCostUSD || "0", priceRoute: pr,
+      srcUsd: parseFloat(pr.srcUSD) || undefined, destUsd: parseFloat(pr.destUSD) || undefined,
     };
   } catch { return null; }
 }
@@ -354,6 +363,7 @@ async function fetchKyberQuote(chainId: number, from: SwapToken, to: SwapToken, 
       destAmount: parseFloat(ethers.formatUnits(rs.amountOut, to.decimals)).toFixed(Math.min(to.decimals, 6)),
       destAmountRaw: rs.amountOut, gasCostUSD: rs.gasUsd || "0",
       routeSummary: rs, kyberRouterAddress: data.data.routerAddress,
+      srcUsd: parseFloat(rs.amountInUsd) || undefined, destUsd: parseFloat(rs.amountOutUsd) || undefined,
     };
   } catch { return null; }
 }
@@ -395,6 +405,8 @@ async function fetchRelayQuote(
       destAmount: parseFloat(ethers.formatUnits(out, to.decimals)).toFixed(Math.min(to.decimals, 6)),
       destAmountRaw: String(out), gasCostUSD: String(gasUsd || "0"),
       relaySteps: data.steps,
+      srcUsd:  parseFloat(data?.details?.currencyIn?.amountUsd)  || undefined,
+      destUsd: parseFloat(data?.details?.currencyOut?.amountUsd) || undefined,
     };
   } catch { return null; }
 }
@@ -534,6 +546,7 @@ export default function Swap() {
     return (tokensByChain["solana"] ?? []).map((t) => ({
       symbol: t.symbol, name: t.name, logo: t.logo, address: t.address,
       decimals: t.decimals, balance: t.balance || "0", chainId: "solana", chainName: "Solana",
+      priceUsd: (t as any).priceUsd,
     }));
   }, [tokensByChain]);
 
@@ -548,6 +561,7 @@ export default function Swap() {
         out.push({
           symbol: t.symbol, name: t.name, logo: t.logo, address: t.address,
           decimals: t.decimals, balance: t.balance || "0", chainId, chainName: net.name,
+          priceUsd: (t as any).priceUsd,
         });
       }
     }
@@ -752,6 +766,7 @@ export default function Swap() {
         setBridgeRoutes(data.routes.slice(0, 4).map((r: any) => ({
           id: r.id, gasCostUSD: r.gasCostUSD || "0", tags: r.tags || [],
           toAmount: r.toAmountMin || r.toAmount || "0", steps: r.steps || [],
+          fromAmountUSD: r.fromAmountUSD, toAmountUSD: r.toAmountUSD,
         })));
       } catch (e: any) {
         setBridgeError(e.message || "Failed to fetch bridge routes");
@@ -773,6 +788,9 @@ export default function Swap() {
             destAmount: parseFloat(ethers.formatUnits(q.outAmount, to.decimals)).toFixed(Math.min(to.decimals, 6)),
             destAmountRaw: q.outAmount, gasCostUSD: "0", tag: "Best",
             priceRoute: q.raw, // carry the Jupiter quote for the swap build
+            // Jupiter reports one USD value for the trade; the per-side split
+            // falls back to held-token prices when this is absent.
+            srcUsd: parseFloat(q.raw?.swapUsdValue) || undefined,
           }]);
         } else {
           setQuoteError("No Jupiter route found for this pair");
@@ -1248,6 +1266,41 @@ export default function Swap() {
     return routeOptions[selectedRoute]?.destAmount || "";
   }, [isBridge, bridgeRoutes, selBridge, routeOptions, selectedRoute, toToken]);
 
+  // Fiat value under each amount. The selected quote's own USD figures win
+  // (post-fee, both sides priced at the same snapshot); before a quote lands
+  // (or when a provider omits them) fall back to held-token / native prices.
+  // null hides the line instead of showing a wrong figure.
+  const fiatLine = useCallback((usd: number) => {
+    if (!(usd > 0)) return null;
+    const v = usdToDisplayCurrency(usd, currencyCode, rates);
+    const sym = currency?.symbol || "$";
+    if (v < 0.01) return `< ${sym}0.01`;
+    return `${sym}${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }, [currencyCode, rates, currency]);
+
+  const tokenUsdPrice = useCallback((t: SwapToken): number => {
+    if (t.priceUsd && t.priceUsd > 0) return t.priceUsd;
+    return getUsdPrice(t.symbol, rates);
+  }, [rates]);
+
+  const sellFiat = useMemo(() => {
+    const amt = parseFloat(fromAmount || "0");
+    if (!(amt > 0)) return null;
+    const quoteUsd = isBridge
+      ? parseFloat(bridgeRoutes[selBridge]?.fromAmountUSD || "0")
+      : (routeOptions[selectedRoute]?.srcUsd ?? 0);
+    return fiatLine(quoteUsd > 0 ? quoteUsd : amt * tokenUsdPrice(fromToken));
+  }, [fromAmount, isBridge, bridgeRoutes, selBridge, routeOptions, selectedRoute, fromToken, tokenUsdPrice, fiatLine]);
+
+  const buyFiat = useMemo(() => {
+    const amt = parseFloat(receiveAmt || "0");
+    if (!(amt > 0)) return null;
+    const quoteUsd = isBridge
+      ? parseFloat(bridgeRoutes[selBridge]?.toAmountUSD || "0")
+      : (routeOptions[selectedRoute]?.destUsd ?? 0);
+    return fiatLine(quoteUsd > 0 ? quoteUsd : amt * tokenUsdPrice(toToken));
+  }, [receiveAmt, isBridge, bridgeRoutes, selBridge, routeOptions, selectedRoute, toToken, tokenUsdPrice, fiatLine]);
+
   const isLoading    = isBridge ? loadingBridge : loadingQuote;
   const routeError   = isBridge ? bridgeError   : quoteError;
   const activeTxHash = isBridge ? bridgeTxHash  : txHash;
@@ -1512,6 +1565,7 @@ export default function Swap() {
                 <ChevronDownIcon size={12} className="text-muted" />
               </button>
             </div>
+            {sellFiat && <p className="text-[11px] text-muted tabular-nums mt-1">≈ {sellFiat}</p>}
             {fromBalance > 0 && (
               <div className="flex gap-2 mt-3">
                 {[{ l: "25%", p: 0.25 }, { l: "50%", p: 0.5 }, { l: "75%", p: 0.75 }, { l: "MAX", p: 1 }].map(({ l, p }) => (
@@ -1558,6 +1612,7 @@ export default function Swap() {
                     ? <span className="text-accent-green">{receiveAmt}</span>
                     : <span className="text-muted/25">0</span>}
                 </p>
+                {buyFiat && <p className="text-[11px] text-muted tabular-nums mt-0.5">≈ {buyFiat}</p>}
                 {receiveAmt && fromAmount && !isBridge && routeOptions[selectedRoute] && (
                   <p className="text-[11px] text-muted tabular-nums mt-0.5">
                     1 {fromToken.symbol} ≈ {(parseFloat(receiveAmt) / parseFloat(fromAmount)).toFixed(4)} {toToken.symbol}
