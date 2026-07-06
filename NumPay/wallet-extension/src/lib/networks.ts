@@ -85,7 +85,10 @@ export const NETWORKS: Record<string, Network> = {
   },
   bsc: {
     id: "bsc", name: "BNB Chain", chainId: 56,
-    rpcUrl: "https://bsc.drpc.org",
+    // Official BNB dataseed, NOT bsc.drpc.org: drpc's free BSC endpoint
+    // rate-limits bursts (measured 2026-07-06: 9 of 15 sequential calls
+    // rejected), which stalled swap receipt polling for minutes.
+    rpcUrl: "https://bsc-dataseed.bnbchain.org",
     symbol: "BNB", decimals: 18,
     explorer: "https://bscscan.com",
     logo: logoOf("bsc"),

@@ -8,6 +8,7 @@
     "https://numpay-wallet-api.numpay.workers.dev/*",
     "https://*.g.alchemy.com/*",
     "https://*.drpc.org/*",
+    "https://*.bnbchain.org/*",
     "https://rpc.flashbots.net/*",
     "https://*.base.org/*",
     "https://*.linea.build/*",
