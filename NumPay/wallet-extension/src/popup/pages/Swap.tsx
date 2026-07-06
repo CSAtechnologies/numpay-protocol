@@ -149,9 +149,13 @@ const LIFI_CHAIN_ID: Record<string, number> = {
   solana: 1151111081099710,
 };
 
-// Native token address LI.FI uses for each chain (EVM chains share 0x0000...)
+// Native token address LI.FI uses for each chain (EVM chains share 0x0000...).
+// Solana is the system program address (32 ones), verified against
+// li.quest/v1/token 2026-07-06 — NOT the wSOL mint So111…112 (that is
+// Jupiter's convention); passing the wSOL mint makes bridges deliver
+// wrapped SOL as an SPL token instead of native SOL.
 const LIFI_NATIVE_TOKEN: Record<string, string> = {
-  solana: "So11111111111111111111111111111111111111112",
+  solana: "11111111111111111111111111111111",
 };
 
 const TAG_STYLE: Record<string, string> = {
