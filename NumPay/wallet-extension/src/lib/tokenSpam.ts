@@ -39,12 +39,26 @@ export const SPAM_MIN_LIQ_MC_RATIO = 0.005; // 0.5%
 // a stablecoin pool worth tens of thousands) sits well above this floor.
 export const SPAM_THIN_LIQ_USD = 10_000;
 
+// Promotional naming is positive evidence: airdrop spam advertises a website
+// or a claim in the token's own name/symbol ("Pay.bi", "visit xyz.com to
+// claim"). Matches URLs, bare domains on common (scam-favored) TLDs, Telegram
+// links, and claim-bait words. Deliberately NOT matching brand words like
+// "reward"/"bonus" alone — legitimate yield tokens use those.
+const SPAM_NAME_RE = new RegExp(
+  "https?://|www\\.|t\\.me/" +
+  "|(?:^|[^a-z0-9])(?:[a-z0-9-]+\\.)+(?:com|net|org|io|xyz|top|vip|cc|app|site|club|pro|online|fun|bi|lol|win|bet|life|cn)(?![a-z0-9])" +
+  "|\\bclaim\\b|\\bairdrop\\b|\\bvoucher\\b|\\bgiveaway\\b",
+  "i",
+);
+
 export interface SpamSignals {
   balance?: string | number;
   priceUsd?: number;
   liquidityUsd?: number;
   marketCapUsd?: number;
   possibleSpam?: boolean;
+  name?: string;
+  symbol?: string;
 }
 
 export interface SpamVerdict {
@@ -66,11 +80,14 @@ export function classifyToken(t: SpamSignals): SpamVerdict {
   //    tell it apart from airdrop dust) or its holding is worth under the floor.
   //    A priced, meaningfully valuable flagged token stays visible; its risk is
   //    surfaced by the badge on the token detail page.
-  if (t.possibleSpam) {
+  //    Promotional naming (a URL/claim-bait in the token's own name) is the
+  //    same class of suspicion and gets the same corroboration escape hatch.
+  const nameSpam = SPAM_NAME_RE.test(`${t.name ?? ""} ${t.symbol ?? ""}`);
+  if (t.possibleSpam || nameSpam) {
     const priced = typeof t.priceUsd === "number" && t.priceUsd > 0;
     const value = priced ? toNum(t.balance) * t.priceUsd! : 0;
     if (!priced || value < SPAM_FLAGGED_MIN_VALUE_USD) {
-      return { hidden: true, reason: "Flagged as possible spam" };
+      return { hidden: true, reason: nameSpam ? "Promotional token name" : "Flagged as possible spam" };
     }
   }
 

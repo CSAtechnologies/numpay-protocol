@@ -11,6 +11,7 @@ import { NETWORKS, BPAN_CHAINS } from "@/lib/networks";
 import { findOwnedBPANs } from "@/lib/bpan";
 import { type Rates } from "@/lib/currency";
 import { classifyToken } from "@/lib/tokenSpam";
+import { loadHiddenTokens, setTokenHidden, tokenHideKey } from "@/lib/hiddenTokens";
 
 const SYMBOL_TO_COINGECKO: Record<string, string> = {
   ETH: "ethereum", BTC: "bitcoin", SOL: "solana", SUI: "sui",
@@ -130,6 +131,8 @@ interface DisplayToken {
   verifiedContract?: boolean;
   // Spam / thin-liquidity verdict from the shared classifier.
   spamHidden?: boolean;
+  // The user explicitly hid this token from the home list.
+  manualHidden?: boolean;
 }
 
 export default function Dashboard({ onLock }: Props) {
@@ -158,6 +161,13 @@ export default function Dashboard({ onLock }: Props) {
   const [copied, setCopied] = useState("");
   const [bpan, setBpan] = useState<string | null>(null);
   const [showDust, setShowDust] = useState(false);
+  // Tokens the user explicitly hid (chainId:address keys, persisted).
+  const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(new Set());
+  useEffect(() => { void loadHiddenTokens().then(setHiddenKeys); }, []);
+  async function toggleTokenHidden(t: DisplayToken, hidden: boolean) {
+    if (!t.chainId || !t.address) return;
+    setHiddenKeys(await setTokenHidden(tokenHideKey(t.chainId, t.address), hidden));
+  }
 
   // Add account inline form
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -328,8 +338,10 @@ export default function Dashboard({ onLock }: Props) {
         if (classifyToken({
           balance: t.balance, priceUsd: t.priceUsd,
           liquidityUsd: t.liquidityUsd, marketCapUsd: t.marketCapUsd,
-          possibleSpam: t.possibleSpam,
+          possibleSpam: t.possibleSpam, name: t.name, symbol: t.symbol,
         }).hidden) continue;
+        // User-hidden tokens stay out of the headline number too.
+        if (t.address && hiddenKeys.has(tokenHideKey(chainId, t.address))) continue;
         const ep = extraPriceFor(t.address);
         if (t.priceUsd != null) total += usdToCurrency(bal * t.priceUsd, currencyCode, rates);
         else if (ep != null)    total += usdToCurrency(bal * ep, currencyCode, rates);
@@ -337,7 +349,7 @@ export default function Dashboard({ onLock }: Props) {
       }
     }
     return total || portfolioUsd;
-  }, [chainBalances, nonEvmChains, tokensByChain, rates, portfolioUsd, currencyCode, customChains, extraPrices]);
+  }, [chainBalances, nonEvmChains, tokensByChain, rates, portfolioUsd, currencyCode, customChains, extraPrices, hiddenKeys]);
 
   // Build token list from all chains, then apply optional chain filter
   const { visibleTokens, dustTokens } = useMemo(() => {
@@ -400,8 +412,9 @@ export default function Dashboard({ onLock }: Props) {
           spamHidden: classifyToken({
             balance: t.balance, priceUsd: t.priceUsd,
             liquidityUsd: t.liquidityUsd, marketCapUsd: t.marketCapUsd,
-            possibleSpam: t.possibleSpam,
+            possibleSpam: t.possibleSpam, name: t.name, symbol: t.symbol,
           }).hidden,
+          manualHidden: !!t.address && hiddenKeys.has(tokenHideKey(chainId, t.address)),
         });
       }
     }
@@ -413,6 +426,7 @@ export default function Dashboard({ onLock }: Props) {
     const dust: DisplayToken[] = [];
     for (const t of filtered) {
       const bal = parseFloat(t.balance);
+      if (t.manualHidden) { dust.push(t); continue; }
       if (bal <= 0) { dust.push(t); continue; }
       if (t.spamHidden) { dust.push(t); continue; }
       if (t.usdValue > 0 && t.usdValue < 0.10) { dust.push(t); continue; }
@@ -421,7 +435,7 @@ export default function Dashboard({ onLock }: Props) {
     visible.sort((a, b) => b.usdValue - a.usdValue);
     dust.sort((a, b) => b.usdValue - a.usdValue);
     return { visibleTokens: visible, dustTokens: dust };
-  }, [chainBalances, nonEvmChains, tokensByChain, rates, currencyCode, filterChainId, extraPrices]);
+  }, [chainBalances, nonEvmChains, tokensByChain, rates, currencyCode, filterChainId, extraPrices, hiddenKeys]);
 
   // When on a non-EVM chain, find that chain's balance data
   const activeNonEvmData = activeEvmNetwork
@@ -1010,7 +1024,7 @@ export default function Dashboard({ onLock }: Props) {
           {visibleTokens.map((token, i) => (
             <div
               key={`${token.symbol}-${token.chainName}-${i}`}
-              className="token-row cursor-pointer"
+              className="token-row cursor-pointer group"
               onClick={() => navigate("/token", { state: token })}
             >
               <div className="flex items-center gap-3">
@@ -1025,16 +1039,32 @@ export default function Dashboard({ onLock }: Props) {
                   <p className="text-[11px] text-muted">{token.chainName}</p>
                 </div>
               </div>
-              <div className="text-right">
-                <p className="text-[13px] font-semibold text-text-primary tabular-nums">
-                  {parseFloat(token.balance) > 0
-                    ? parseFloat(token.balance).toFixed(4)
-                    : "0"}
-                </p>
-                {token.usdValue > 0 && (
-                  <p className="text-[11px] text-muted tabular-nums">
-                    {sym}{token.usdValue.toFixed(2)}
+              <div className="flex items-center gap-1.5">
+                <div className="text-right">
+                  <p className="text-[13px] font-semibold text-text-primary tabular-nums">
+                    {parseFloat(token.balance) > 0
+                      ? parseFloat(token.balance).toFixed(4)
+                      : "0"}
                   </p>
+                  {token.usdValue > 0 && (
+                    <p className="text-[11px] text-muted tabular-nums">
+                      {sym}{token.usdValue.toFixed(2)}
+                    </p>
+                  )}
+                </div>
+                {!token.isNative && token.address && (
+                  <button
+                    title="Hide token"
+                    onClick={(e) => { e.stopPropagation(); void toggleTokenHidden(token, true); }}
+                    className="p-1 rounded-md text-muted hover:text-danger hover:bg-surface-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                      <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+                      <line x1="1" y1="1" x2="23" y2="23" />
+                    </svg>
+                  </button>
                 )}
               </div>
             </div>
@@ -1070,12 +1100,20 @@ export default function Dashboard({ onLock }: Props) {
                         <p className="text-[10px] text-muted">{token.chainName}</p>
                       </div>
                     </div>
-                    <div className="text-right">
+                    <div className="flex items-center gap-2">
                       <p className="text-xs font-medium text-text-primary tabular-nums">
                         {parseFloat(token.balance) > 0
                           ? parseFloat(token.balance).toFixed(6)
                           : "0"}
                       </p>
+                      {token.manualHidden && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); void toggleTokenHidden(token, false); }}
+                          className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-surface-2 text-text-secondary hover:bg-surface-3 transition-colors"
+                        >
+                          Unhide
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}

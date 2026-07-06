@@ -340,6 +340,7 @@ async function fetchTrc20DecimalsOnChain(contract: string, owner: string): Promi
  */
 export async function fetchTronTokens(address: string): Promise<Array<{
   symbol: string; name: string; address: string; decimals: number; balance: string; logo?: string;
+  possibleSpam?: boolean;
 }> | null> {
   // null = provider unreachable (callers keep last-known); [] = authoritative
   // "no tokens" (callers must clear stale entries).
@@ -355,6 +356,7 @@ export async function fetchTronTokens(address: string): Promise<Array<{
 
     const tokens: Array<{
       symbol: string; name: string; address: string; decimals: number; balance: string; logo?: string;
+      possibleSpam?: boolean;
     }> = [];
 
     // Unknown contracts are deferred: their decimals must be resolved before a
@@ -413,6 +415,10 @@ export async function fetchTronTokens(address: string): Promise<Array<{
           decimals,
           balance: balance.toString(),
           logo,
+          // A TRC-10 whose metadata never resolved (name/symbol are still the
+          // bare numeric asset id) is the signature of Tron airdrop spam —
+          // flag it so the spam classifier tucks it away.
+          possibleSpam: (symbol === id && name === id) || undefined,
         });
       }),
     );
