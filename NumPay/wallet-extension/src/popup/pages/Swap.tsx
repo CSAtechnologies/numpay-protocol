@@ -8,7 +8,7 @@ import { NETWORKS } from "@/lib/networks";
 import { DEFAULT_TOKENS } from "@/lib/tokens";
 import { markBalancesDirty } from "@/lib/balanceBus";
 import { type NonEvmChain } from "@/lib/chains";
-import { fetchJupiterQuote, executeJupiterSwap, resolveSolanaToken, hasTokenAccount, WSOL_MINT, SOLANA_SWAP_TOKENS } from "@/lib/chains/solana";
+import { fetchJupiterQuote, executeJupiterSwap, signSimulateSendSolanaTx, resolveSolanaToken, hasTokenAccount, WSOL_MINT, SOLANA_SWAP_TOKENS } from "@/lib/chains/solana";
 import { getSigner, isLocked } from "@/lib/wallet";
 import { getItem, setItem } from "@/lib/storage";
 import {
@@ -1133,7 +1133,9 @@ export default function Swap() {
     if (!wallet || !bridgeRoutes[selBridge] || !fromAmount) return;
     if (await isLocked()) { setBridgeError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
     const fromNet = NETWORKS[fromToken.chainId];
-    if (!fromNet) { setBridgeError("Bridge execution only supported from EVM chains"); return; }
+    const isSolanaSource = fromToken.chainId === "solana";
+    if (!fromNet && !isSolanaSource) { setBridgeError("Bridge execution is only supported from EVM chains and Solana"); return; }
+    if (isSolanaSource && !nonEvmWallet?.solana) { setBridgeError("Solana wallet not ready"); return; }
     setBridging(true); setBridgeError(""); setBridgeTxHash(""); setTxFxDetail(""); setTxFx("pending");
     try {
       // /advanced/routes gives display data only; /quote gives the actual transactionRequest
@@ -1157,6 +1159,25 @@ export default function Swap() {
       }
       const qData = await qRes.json();
       const txReq = qData?.transactionRequest;
+
+      // ── Solana source: LI.FI returns a pre-built base64 v0 transaction (no
+      // to/value fields — the SVM equivalent of the EVM calldata). The shared
+      // signer enforces sole-signer + fee-payer binding and simulates locally
+      // before broadcast, same guards as Jupiter swaps. No approval step:
+      // SPL transfers are moved directly by the transaction itself.
+      if (isSolanaSource) {
+        if (!txReq?.data) throw new Error("Bridge provider returned incomplete transaction data");
+        setTxFxDetail("Bridging…");
+        const sig = await signSimulateSendSolanaTx(
+          nonEvmWallet!.solana.secretKey, nonEvmWallet!.solana.address, txReq.data,
+        );
+        setBridgeTxHash(sig);
+        // Overlay the spent side; destination-chain arrival is minutes away.
+        markBalancesDirty([{ chainId: "solana", tokenAddress: fromToken.address || undefined, delta: -parseFloat(fromAmount) }]);
+        setTxFx("success");
+        return;
+      }
+
       if (!txReq?.to || !txReq?.data) throw new Error("Bridge provider returned incomplete transaction data");
 
       const signer = getSigner(wallet.privateKey, fromNet.rpcUrl);

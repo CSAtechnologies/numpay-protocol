@@ -698,14 +698,26 @@ export async function executeJupiterSwap(
   if (!swapData?.swapTransaction) {
     throw new Error(swapData?.error || "Jupiter could not build the swap transaction");
   }
+  return signSimulateSendSolanaTx(secretKey, userPublicKey, swapData.swapTransaction);
+}
 
-  const txBytes = Uint8Array.from(atob(swapData.swapTransaction), (c) => c.charCodeAt(0));
+/**
+ * Sign, locally simulate, and broadcast a pre-built base64 v0 transaction
+ * returned by a quote API (Jupiter swap, LI.FI bridge). Shared guards:
+ * the user must be the SOLE required signer and the fee payer (SWAP-2
+ * binding), and the signed transaction must pass simulateTransaction against
+ * current state before it is sent (node preflight is then skipped).
+ */
+export async function signSimulateSendSolanaTx(
+  secretKey: Uint8Array, userPublicKey: string, txB64: string,
+): Promise<string> {
+  const txBytes = Uint8Array.from(atob(txB64), (c) => c.charCodeAt(0));
   const { value: numSigs, length: lenBytes } = decodeCompactU16(txBytes, 0);
-  // We can only sign as the user (fee payer). Standard Jupiter swaps need exactly
-  // that; if a route requires extra signers, fail clearly instead of submitting
-  // a transaction we can't fully sign.
+  // We can only sign as the user (fee payer). Standard Jupiter swaps and LI.FI
+  // bridge txs need exactly that; if a route requires extra signers, fail
+  // clearly instead of submitting a transaction we can't fully sign.
   if (numSigs !== 1) {
-    throw new Error("This swap route needs additional signers and isn't supported. Try a different amount or token.");
+    throw new Error("This route needs additional signers and isn't supported. Try a different amount or token.");
   }
   const sigStart = lenBytes;
   const message = txBytes.slice(sigStart + numSigs * 64);
@@ -720,7 +732,7 @@ export async function executeJupiterSwap(
   const decoded = decodeSolanaMessage(message);
   if (decoded.feePayer !== userPublicKey) {
     throw new Error(
-      "Blocked for safety: the swap transaction's fee payer is not your wallet. Aborted before signing.",
+      "Blocked for safety: the transaction's fee payer is not your wallet. Aborted before signing.",
     );
   }
 
@@ -745,7 +757,7 @@ export async function executeJupiterSwap(
     }),
   });
   const simData = await simResp.json();
-  if (simData.error) throw new Error(simData.error.message ?? "Swap simulation failed");
+  if (simData.error) throw new Error(simData.error.message ?? "Transaction simulation failed");
   if (simData.result?.value?.err) {
     throw new Error(decodeSimulationFailure(simData.result.value.err, simData.result?.value?.logs ?? []));
   }
