@@ -411,8 +411,8 @@ interface ParsedSwapError {
 }
 
 // Map raw error strings from the swap/bridge paths to a titled, actionable
-// card. Unrecognized messages fall through to a generic "Swap Failed".
-function parseSwapError(msg: string): ParsedSwapError {
+// card. Unrecognized messages fall through to a generic "<kind> Failed".
+function parseSwapError(msg: string, kind: "Swap" | "Bridge" = "Swap"): ParsedSwapError {
   const solFigures = msg.match(/needs ~?([\d.]+) SOL[\s\S]*?has ([\d.]+) SOL/i);
   if (solFigures || /not enough sol|keep at least .* sol/i.test(msg)) {
     return {
@@ -471,11 +471,11 @@ function parseSwapError(msg: string): ParsedSwapError {
       preSend: true,
     };
   }
-  return { title: "Swap Failed", body: msg, preSend: false };
+  return { title: `${kind} Failed`, body: msg, preSend: false };
 }
 
-function SwapErrorCard({ message, tone }: { message: string; tone: "danger" | "amber" }) {
-  const e = parseSwapError(message);
+function SwapErrorCard({ message, tone, kind = "Swap" }: { message: string; tone: "danger" | "amber"; kind?: "Swap" | "Bridge" }) {
+  const e = parseSwapError(message, kind);
   const color = tone === "danger" ? "var(--danger)" : "var(--amber)";
   const iconBg = tone === "danger" ? "rgba(239,68,68,0.12)" : "rgba(245,158,11,0.12)";
   return (
@@ -1657,10 +1657,10 @@ export default function Swap() {
           )}
 
           {/* Route error */}
-          {routeError && !isLoading && <SwapErrorCard message={routeError} tone="amber" />}
+          {routeError && !isLoading && <SwapErrorCard message={routeError} tone="amber" kind={isBridge ? "Bridge" : "Swap"} />}
 
           {/* Execution error */}
-          {activeExecErr && activeExecErr !== routeError && <SwapErrorCard message={activeExecErr} tone="danger" />}
+          {activeExecErr && activeExecErr !== routeError && <SwapErrorCard message={activeExecErr} tone="danger" kind={isBridge ? "Bridge" : "Swap"} />}
 
           {/* Success */}
           {activeTxHash && (
@@ -1760,7 +1760,7 @@ export default function Swap() {
       </div>
 
       {txFx && (() => {
-        const parsed = txFx === "error" && activeExecErr ? parseSwapError(activeExecErr) : null;
+        const parsed = txFx === "error" && activeExecErr ? parseSwapError(activeExecErr, isBridge ? "Bridge" : "Swap") : null;
         return (
           <TxResultOverlay
             status={txFx}

@@ -186,9 +186,12 @@ export const NETWORKS: Record<string, Network> = {
   },
   klaytn: {
     id: "klaytn", name: "Klaytn", chainId: 8217,
-    rpcUrl: "https://public-en-cypress.klaytn.net",
+    // Klaytn rebranded to Kaia; public-en-cypress.klaytn.net is decommissioned
+    // (dead 12/12 in the 2026-07-06 endpoint sweep). Kaia successor verified
+    // 12/12 with chainId 0x2019. Display name/symbol rebrand handled separately.
+    rpcUrl: "https://public-en.node.kaia.io",
     symbol: "KLAY", decimals: 18,
-    explorer: "https://scope.klaytn.com",
+    explorer: "https://kaiascan.io",
     logo: logoOf("klaytn"),
   },
   metis: {

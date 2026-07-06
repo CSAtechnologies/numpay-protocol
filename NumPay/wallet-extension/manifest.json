@@ -25,6 +25,7 @@
     "https://*.aurora.dev/*",
     "https://*.avax.network/*",
     "https://*.klaytn.net/*",
+    "https://*.kaia.io/*",
     "https://*.metis.io/*",
     "https://*.sui.io/*",
     "https://*.rpcpool.com/*",
