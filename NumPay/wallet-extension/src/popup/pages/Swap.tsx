@@ -191,8 +191,14 @@ const chainRank = (id: string) => CHAIN_RANK[id] ?? 99;
 const isAddress = (s: string) => /^0x[0-9a-fA-F]{40}$/.test(s.trim());
 // Solana mint = base58, 32-44 chars (no 0x, excludes 0/O/I/l per base58 alphabet)
 const isSolanaMint = (s: string) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s.trim());
-// SOL left untouched on a max swap so the network fee + any ATA rent can be paid.
-const SOL_FEE_RESERVE = 0.01;
+// SOL left untouched on a max swap so the network fee + transient wrapped-SOL
+// rent can be paid. The wrapped-SOL account is created and closed inside the
+// same transaction, so its ~0.00204 SOL rent is refunded — we only need it
+// available momentarily. 0.005 covers the base fee, a generous priority-fee
+// headroom, and that transient rent, without stranding most of a small balance
+// (the old 0.01, ~$1.80 at $180/SOL, left a $1 wallet almost nothing to swap).
+// The pre-broadcast guard + simulation are the real safety net if this is short.
+const SOL_FEE_RESERVE = 0.005;
 
 // The slippage field is free text; sanitize before it reaches any aggregator.
 // NaN/zero falls back to 0.5%, and the cap stops fat-fingered values (e.g. 50)

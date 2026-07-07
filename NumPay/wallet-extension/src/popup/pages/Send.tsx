@@ -50,7 +50,11 @@ const NATIVE_FEE_RESERVE: Record<string, number> = {
   polygon: 0.2, avalanche: 0.02, bsc: 0.002, fantom: 0.5, cronos: 0.5,
   celo: 0.05, gnosis: 0.02, moonbeam: 0.05, klaytn: 0.5, sei: 0.1,
   mantle: 0.5, metis: 0.005,
-  solana: 0.01, tron: 5, sui: 0.05,
+  // Solana: the base fee is ~0.000005 SOL; 0.002 covers it with priority-fee
+  // margin without stranding most of a small balance (was 0.01 ≈ $1.80). Sui gas
+  // for a transfer is a few thousandths; 0.02 is ample (was 0.05). Tron keeps a
+  // larger buffer because it must cover account-activation on a fresh recipient.
+  solana: 0.002, tron: 5, sui: 0.02,
 };
 // ETH L2s (arbitrum, optimism, base, zksync, scroll, linea, blast, ...) and any
 // custom/unknown chain: gas is cheap, so a tiny buffer is enough. A too-small
@@ -59,6 +63,14 @@ const DEFAULT_FEE_RESERVE = 0.0005;
 
 function nativeFeeReserve(chainId: string): number {
   return NATIVE_FEE_RESERVE[chainId] ?? DEFAULT_FEE_RESERVE;
+}
+
+// An ENS name (foo.eth, sub.foo.eth). Resolved on-chain via Ethereum mainnet, so
+// it is trustless (no third-party API); the resolved 0x address is valid on any
+// EVM chain. (.sol / SNS needs on-chain resolution to meet the same safety bar as
+// BPAN and is handled separately, not via an untrusted resolver API.)
+function isEnsName(v: string): boolean {
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.eth$/i.test(v.trim());
 }
 
 // Parse a decimal amount string into an integer base-unit bigint without
@@ -104,6 +116,7 @@ export default function Send() {
   const [amount, setAmount] = useState("");
   const [resolvedAddr, setResolvedAddr] = useState("");
   const [resolvedBPAN, setResolvedBPAN] = useState("");
+  const [resolvedName, setResolvedName] = useState(""); // ENS name that produced resolvedAddr
   const [resolving, setResolving] = useState(false);
   // TRUST-1: non-blocking caution about how the BPAN mapping was verified
   // (single-source read, or the mapping changed since last seen).
@@ -210,7 +223,7 @@ export default function Send() {
   function handleChainChange(id: BPANChainId) {
     setSelectedChainId(id);
     switchChain(id);
-    setTo(""); setResolvedAddr(""); setResolvedBPAN("");
+    setTo(""); setResolvedAddr(""); setResolvedBPAN(""); setResolvedName("");
     setBpanChange(null); setBpanChangeAck(false);
     setError(""); setAmount(""); setSelectedToken(null); setTxHash("");
     setShowTokenPicker(false); setShowHiddenTokens(false);
@@ -233,8 +246,31 @@ export default function Send() {
 
   async function handleToChange(value: string) {
     setTo(value);
-    setResolvedAddr(""); setResolvedBPAN(""); setError("");
+    setResolvedAddr(""); setResolvedBPAN(""); setResolvedName(""); setError("");
     setBpanChange(null); setBpanChangeAck(false);
+
+    // ENS name on an EVM chain: resolve on-chain via Ethereum mainnet (trustless).
+    if (isEvmChain && isEnsName(value)) {
+      const seq = ++resolveSeq.current;
+      setResolving(true);
+      try {
+        const mainnet = new ethers.JsonRpcProvider(NETWORKS.ethereum.rpcUrl, 1, { staticNetwork: true });
+        const addr = await mainnet.resolveName(value.trim().toLowerCase());
+        if (seq !== resolveSeq.current) return; // superseded by a newer keystroke
+        if (addr && ethers.isAddress(addr)) {
+          setResolvedAddr(addr);
+          setResolvedName(value.trim().toLowerCase());
+        } else {
+          setError(`No address is set for ${value.trim()}. Double-check the name, or paste the address directly.`);
+        }
+      } catch {
+        if (seq !== resolveSeq.current) return;
+        setError("Name lookup failed. Check your connection, or paste the address directly.");
+      } finally {
+        if (seq === resolveSeq.current) setResolving(false);
+      }
+      return;
+    }
 
     const clean = value.trim().replace(/\D/g, "");
     if (isBPANInput(value) && isValidBPAN(clean)) {
@@ -498,7 +534,7 @@ export default function Send() {
             <div className="flex items-center gap-2 mb-3 animate-fade-in">
               <div className="w-3 h-3 border-2 border-brand-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
               <p className="text-brand-400 text-xs">
-                Resolving {chainInfo?.name} address from BPAN registry...
+                {isEnsName(to) ? "Resolving ENS name…" : `Resolving ${chainInfo?.name} address from BPAN registry...`}
               </p>
             </div>
           )}
@@ -510,6 +546,16 @@ export default function Send() {
                 <p className="text-[11px] text-brand-400 font-medium">
                   BPAN {formatBPAN(resolvedBPAN)} resolved — {chainInfo?.name}
                 </p>
+              </div>
+              <p className="text-xs text-text-primary font-mono break-all">{resolvedAddr}</p>
+            </div>
+          )}
+
+          {resolvedAddr && resolvedName && (
+            <div className="mb-3 px-3 py-2.5 rounded-xl bg-brand-500/5 border border-brand-500/15 animate-slide-up">
+              <div className="flex items-center gap-1.5 mb-1">
+                <CheckIcon size={12} className="text-brand-400" />
+                <p className="text-[11px] text-brand-400 font-medium">{resolvedName} resolved</p>
               </div>
               <p className="text-xs text-text-primary font-mono break-all">{resolvedAddr}</p>
             </div>
