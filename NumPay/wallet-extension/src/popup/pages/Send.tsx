@@ -107,6 +107,12 @@ function isEnsName(v: string): boolean {
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.eth$/i.test(v.trim());
 }
 
+// A Solana Name Service domain (foo.sol, sub.foo.sol). Resolved on-chain via the
+// lazy-loaded lib/sns module (heavy web3.js dep kept off the boot path).
+function isSnsName(v: string): boolean {
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.sol$/i.test(v.trim());
+}
+
 // Parse a decimal amount string into an integer base-unit bigint without
 // floating point, rejecting more fraction digits than the chain supports.
 function toBaseUnits(amount: string, decimals: number): bigint {
@@ -307,6 +313,29 @@ export default function Send() {
     setTo(value);
     setResolvedAddr(""); setResolvedBPAN(""); setResolvedName(""); setError("");
     setBpanChange(null); setBpanChangeAck(false);
+
+    // SNS (.sol) name on Solana: resolve on-chain via the lazy-loaded resolver.
+    if (selectedChainId === "solana" && isSnsName(value)) {
+      const seq = ++resolveSeq.current;
+      setResolving(true);
+      try {
+        const { resolveSns } = await import("@/lib/sns");
+        const addr = await resolveSns(value.trim());
+        if (seq !== resolveSeq.current) return; // superseded by a newer keystroke
+        if (addr && isValidNonEvmAddress(addr, "solana")) {
+          setResolvedAddr(addr);
+          setResolvedName(value.trim().toLowerCase());
+        } else {
+          setError(`No address is set for ${value.trim()}. Double-check the name, or paste the address directly.`);
+        }
+      } catch {
+        if (seq !== resolveSeq.current) return;
+        setError("Name lookup failed. Check the name, or paste the address directly.");
+      } finally {
+        if (seq === resolveSeq.current) setResolving(false);
+      }
+      return;
+    }
 
     // ENS name on an EVM chain: resolve on-chain via Ethereum mainnet (trustless).
     if (isEvmChain && isEnsName(value)) {
@@ -617,7 +646,9 @@ export default function Send() {
               onChange={(e) => handleToChange(e.target.value)}
               placeholder={isEvmChain
                 ? "0x / name.eth or 11-digit BPAN"
-                : `${sendSymbol} address or 11-digit BPAN`}
+                : selectedChainId === "solana"
+                  ? "Address / name.sol or 11-digit BPAN"
+                  : `${sendSymbol} address or 11-digit BPAN`}
               className="input-field pr-10"
             />
             {isBPANInput(to) && (
@@ -654,7 +685,7 @@ export default function Send() {
             <div className="flex items-center gap-2 mb-3 animate-fade-in">
               <div className="w-3 h-3 border-2 border-brand-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
               <p className="text-brand-400 text-xs">
-                {isEnsName(to) ? "Resolving ENS name…" : `Resolving ${chainInfo?.name} address from BPAN registry...`}
+                {isEnsName(to) ? "Resolving ENS name…" : isSnsName(to) ? "Resolving .sol name…" : `Resolving ${chainInfo?.name} address from BPAN registry...`}
               </p>
             </div>
           )}
