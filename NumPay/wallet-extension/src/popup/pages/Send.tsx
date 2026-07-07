@@ -12,7 +12,7 @@ import { BPAN_CHAINS, DEFAULT_NETWORK, NETWORKS, type BPANChainId, type Network 
 import { getSigner, isLocked } from "@/lib/wallet";
 import { sendToken, type Token } from "@/lib/tokens";
 import { markBalancesDirty } from "@/lib/balanceBus";
-import { logTx } from "@/lib/txLog";
+import { logTx, updateTx } from "@/lib/txLog";
 import { type Contact, loadContacts, saveContact, deleteContact, isSaved } from "@/lib/addressBook";
 import {
   sendSolanaTransfer, sendTronTransfer, sendSuiTransfer,
@@ -496,19 +496,29 @@ export default function Send() {
       }
       setTxHash(tx.hash);
       // Record in the local activity log so this send always shows in both the
-      // Activity page and the token panel, regardless of indexer coverage.
+      // Activity page and the token panel, regardless of indexer coverage. The
+      // nonce/to/value/data/gas fields let the Activity page speed up or cancel
+      // it while it is pending.
       void logTx({
         hash: tx.hash, chainId: sendNetwork.id, kind: "send", timestamp: Date.now(),
         symbol: selectedToken?.symbol || sendNetwork.symbol, value: amount,
         assetAddr: selectedToken?.address?.toLowerCase(),
         logo: selectedToken?.logo || sendNetwork.logo,
         counterparty: destinationAddress,
+        status: "pending",
+        nonce: tx.nonce, from: tx.from ?? wallet.address,
+        to: tx.to ?? undefined, valueWei: tx.value?.toString(), data: tx.data,
+        maxFeeWei: tx.maxFeePerGas?.toString(), maxPrioWei: tx.maxPriorityFeePerGas?.toString(),
+        gasPriceWei: tx.gasPrice?.toString(),
       });
       // Overlay the spend on the displayed balance immediately (gas settles on
       // reconciliation), and refresh the moment the receipt lands instead of
       // waiting out the fast-poll cadence.
       markBalancesDirty([{ chainId: sendNetwork.id, tokenAddress: selectedToken?.address, delta: -parseFloat(amount) }]);
-      void tx.wait().then(() => markBalancesDirty()).catch(() => {});
+      void tx.wait().then((rc) => {
+        markBalancesDirty();
+        void updateTx(sendNetwork.id, tx.hash, { status: rc && rc.status === 0 ? "failed" : "confirmed" });
+      }).catch(() => { /* replaced/dropped — the Activity reconciler settles it */ });
       setTxFx("success");
     } catch (e: any) {
       setError(e.reason || e.message || "Transaction failed");

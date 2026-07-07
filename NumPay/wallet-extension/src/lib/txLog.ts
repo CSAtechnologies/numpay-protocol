@@ -10,14 +10,15 @@
 
 import { getItem, setItem } from "./storage";
 import { NETWORKS } from "./networks";
-import { type TxRecord, type TxKind } from "./txHistory";
+import { type TxRecord, type TxKind, type TxStatus } from "./txHistory";
 
 const KEY = "numpay_txlog";
 const CAP = 120;
 
 // A logged NumPay transaction. `value`/`symbol`/`assetAddr` describe the
 // primary (spent) side; the `to*` fields describe the received side (swap) or
-// destination (bridge).
+// destination (bridge). The `status` + EVM replacement fields power the pending
+// tracker and speed-up/cancel (which rebuild the tx at the same nonce).
 export interface LoggedTx {
   hash: string;
   chainId: string;
@@ -33,6 +34,16 @@ export interface LoggedTx {
   toAssetAddr?: string;
   toLogo?: string;
   toChainId?: string;
+  // Lifecycle + EVM replacement data (sends only).
+  status?: TxStatus;
+  nonce?: number;
+  from?: string;
+  to?: string;
+  valueWei?: string;
+  data?: string;
+  maxFeeWei?: string;
+  maxPrioWei?: string;
+  gasPriceWei?: string;
 }
 
 const NON_EVM_EXPLORER_TX: Record<string, (h: string) => string> = {
@@ -88,6 +99,18 @@ export async function logTx(entry: LoggedTx): Promise<void> {
   } catch { /* best-effort */ }
 }
 
+/** Update a logged entry in place (by chain+hash); patch may set a new hash for
+ *  a replacement (speed-up/cancel). Never throws. */
+export async function updateTx(chainId: string, hash: string, patch: Partial<LoggedTx>): Promise<void> {
+  try {
+    const list = await loadTxLog();
+    const i = list.findIndex((e) => e.chainId === chainId && e.hash.toLowerCase() === hash.toLowerCase());
+    if (i < 0) return;
+    list[i] = { ...list[i], ...patch };
+    await setItem(KEY, JSON.stringify(list));
+  } catch { /* best-effort */ }
+}
+
 /** Convert logged entries to TxRecords for merging into fetched history. */
 export function loggedToRecords(logged: LoggedTx[]): TxRecord[] {
   return logged.map((e): TxRecord => ({
@@ -100,6 +123,7 @@ export function loggedToRecords(logged: LoggedTx[]): TxRecord[] {
     // received asset; receives (which we don't log) come from the chain.
     type: e.kind === "receive" ? "received" : "sent",
     kind: e.kind,
+    status: e.status,
     logo: e.logo,
     explorerUrl: explorerTxUrl(e.chainId, e.hash),
     chainName: chainNameOf(e.chainId),

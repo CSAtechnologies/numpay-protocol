@@ -12,7 +12,8 @@ import {
   mergeLoggedTxs,
   SUPPORTED,
 } from "@/lib/txHistory";
-import { loadTxLog, loggedToRecords } from "@/lib/txLog";
+import { type LoggedTx, loadTxLog, loggedToRecords } from "@/lib/txLog";
+import { reconcilePending, speedUpTx, cancelTx } from "@/lib/pendingTx";
 
 const NON_EVM_NAMES: Record<string, string> = {
   bitcoin: "Bitcoin", solana: "Solana", sui: "Sui",
@@ -26,6 +27,10 @@ export default function History() {
   const [txs, setTxs] = useState<TxRecord[]>([]);
   const [loading, setLoading] = useState(true);       // skeleton: only the first paint of a scope
   const [refreshing, setRefreshing] = useState(false); // in-flight indicator (spins the refresh icon)
+  const [busyHash, setBusyHash] = useState<string | null>(null); // speed-up/cancel in flight
+  const [actionError, setActionError] = useState("");
+  // Raw logged entries (with nonce/to/gas) keyed by chain-hash, for replacements.
+  const logMapRef = useRef<Map<string, LoggedTx>>(new Map());
 
   const isAllChains = filterChainId === null;
   const displayChainId = isAllChains ? activeChainId : filterChainId;
@@ -49,9 +54,10 @@ export default function History() {
   const walletAddrRef = useRef(wallet?.address); walletAddrRef.current = wallet?.address;
   const txsSigRef = useRef("");
 
-  // Content signature so a silent refresh only re-renders when something changed.
+  // Content signature so a silent refresh only re-renders when something changed
+  // (status included so a pending → confirmed transition repaints).
   const sigOf = (list: TxRecord[]) =>
-    list.map((t) => `${t.chainId}:${t.hash}:${t.assetAddr || ""}:${t.value}:${t.kind || t.type}`).join("|");
+    list.map((t) => `${t.chainId}:${t.hash}:${t.assetAddr || ""}:${t.value}:${t.kind || t.type}:${t.status || ""}`).join("|");
 
   const fetchHistory = useCallback(async (opts?: { skeleton?: boolean }) => {
     const skeleton = opts?.skeleton ?? false;
@@ -65,7 +71,10 @@ export default function History() {
         : await fetchChainHistory(displayChainId, activeAddress, nonEvmWalletRef.current, solTokenMetaRef.current);
       // Merge the user's own NumPay transactions (send/swap/bridge) so they are
       // always present with their real kind, regardless of indexer coverage.
-      const logged = loggedToRecords(await loadTxLog()).filter((r) =>
+      // Reconcile pending sends against receipts first so their status settles.
+      const rawLog = await reconcilePending(await loadTxLog());
+      logMapRef.current = new Map(rawLog.map((e) => [`${e.chainId}-${e.hash.toLowerCase()}`, e]));
+      const logged = loggedToRecords(rawLog).filter((r) =>
         isAllChains || r.chainId === displayChainId || r.toChainId === displayChainId
       );
       const merged = mergeLoggedTxs(records, logged);
@@ -99,6 +108,26 @@ export default function History() {
     chrome.runtime?.onMessage?.addListener(onMsg);
     return () => { clearInterval(id); chrome.runtime?.onMessage?.removeListener(onMsg); };
   }, [fetchHistory]);
+
+  // Speed up / cancel a pending EVM send by re-broadcasting at the same nonce.
+  async function replacePending(tx: TxRecord, mode: "speed" | "cancel") {
+    const entry = logMapRef.current.get(`${tx.chainId}-${(tx.hash || "").toLowerCase()}`);
+    if (!entry || !wallet?.privateKey) return;
+    setBusyHash(tx.hash); setActionError("");
+    try {
+      if (mode === "speed") await speedUpTx(entry, wallet.privateKey);
+      else await cancelTx(entry, wallet.privateKey);
+      await fetchHistory({ skeleton: false });
+    } catch (e: any) {
+      setActionError(e?.reason || e?.message || `Could not ${mode === "speed" ? "speed up" : "cancel"} the transaction`);
+    } finally {
+      setBusyHash(null);
+    }
+  }
+  // A pending send on an EVM chain with the data needed to replace it.
+  const canReplace = (tx: TxRecord) =>
+    tx.status === "pending" && tx.kind === "send" && !!NETWORKS[tx.chainId || ""] &&
+    logMapRef.current.get(`${tx.chainId}-${(tx.hash || "").toLowerCase()}`)?.nonce != null;
 
   return (
     <Layout title="Activity">
@@ -170,18 +199,31 @@ export default function History() {
             </div>
           )}
 
+          {/* Action error */}
+          {actionError && (
+            <div className="mt-2 px-3 py-2 rounded-xl bg-accent-red/5 border border-accent-red/15">
+              <p className="text-accent-red text-[11px] leading-relaxed">{actionError}</p>
+            </div>
+          )}
+
           {/* Transaction list */}
           {!loading && txs.length > 0 && (
             <div className="pt-1 space-y-0.5">
-              {txs.map((tx) => (
-                <TxRow
-                  key={`${tx.chainId}-${tx.hash}-${tx.assetAddr || "native"}`}
-                  tx={tx}
-                  size={36}
-                  showChain={isAllChains}
-                  className="animate-slide-up"
-                />
-              ))}
+              {txs.map((tx) => {
+                const replaceable = canReplace(tx);
+                return (
+                  <TxRow
+                    key={`${tx.chainId}-${tx.hash}-${tx.assetAddr || "native"}`}
+                    tx={tx}
+                    size={36}
+                    showChain={isAllChains}
+                    className="animate-slide-up"
+                    busy={busyHash === tx.hash}
+                    onSpeedUp={replaceable ? () => void replacePending(tx, "speed") : undefined}
+                    onCancel={replaceable ? () => void replacePending(tx, "cancel") : undefined}
+                  />
+                );
+              })}
             </div>
           )}
         </div>

@@ -20,6 +20,8 @@ import { SOL_RPC } from "@/lib/chains/solana";
 // labels and badges from. On-chain-only rows have kind derived from type; the
 // local activity log (txLog.ts) supplies real swap/bridge kinds.
 export type TxKind = "send" | "receive" | "swap" | "bridge";
+// Lifecycle of a wallet-initiated tx (local log only; on-chain rows are settled).
+export type TxStatus = "pending" | "confirmed" | "failed";
 
 export interface TxRecord {
   hash: string;
@@ -29,6 +31,7 @@ export interface TxRecord {
   timestamp: number;
   type: "sent" | "received";
   kind?: TxKind;
+  status?: TxStatus;
   // Logo URL for the primary asset, when the source knows it (local log rows).
   logo?: string;
   explorerUrl: string;
