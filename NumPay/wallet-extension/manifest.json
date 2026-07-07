@@ -68,6 +68,7 @@
     "https://*.githubusercontent.com/*",
     "https://assets.coincap.io/*",
     "https://icons.llamao.fi/*",
+    "https://yields.llama.fi/*",
     "https://cf-ipfs.com/*"
   ],
   "optional_host_permissions": ["https://*/*"],
