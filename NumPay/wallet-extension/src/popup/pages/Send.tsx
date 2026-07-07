@@ -13,6 +13,7 @@ import { getSigner, isLocked } from "@/lib/wallet";
 import { sendToken, type Token } from "@/lib/tokens";
 import { markBalancesDirty } from "@/lib/balanceBus";
 import { logTx } from "@/lib/txLog";
+import { type Contact, loadContacts, saveContact, deleteContact, isSaved } from "@/lib/addressBook";
 import {
   sendSolanaTransfer, sendTronTransfer, sendSuiTransfer,
   sendSolanaTokenTransfer, sendTronTokenTransfer, sendSuiTokenTransfer,
@@ -118,6 +119,13 @@ export default function Send() {
   const [resolvedBPAN, setResolvedBPAN] = useState("");
   const [resolvedName, setResolvedName] = useState(""); // ENS name that produced resolvedAddr
   const [resolving, setResolving] = useState(false);
+
+  // Address book
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [showContacts, setShowContacts] = useState(false);
+  const [savingContact, setSavingContact] = useState(false);
+  const [contactName, setContactName] = useState("");
+  useEffect(() => { void loadContacts().then(setContacts); }, []);
   // TRUST-1: non-blocking caution about how the BPAN mapping was verified
   // (single-source read, or the mapping changed since last seen).
   // When a BPAN mapping has CHANGED since last use, the user must explicitly
@@ -224,6 +232,7 @@ export default function Send() {
     setSelectedChainId(id);
     switchChain(id);
     setTo(""); setResolvedAddr(""); setResolvedBPAN(""); setResolvedName("");
+    setShowContacts(false); setSavingContact(false); setContactName("");
     setBpanChange(null); setBpanChangeAck(false);
     setError(""); setAmount(""); setSelectedToken(null); setTxHash("");
     setShowTokenPicker(false); setShowHiddenTokens(false);
@@ -345,6 +354,29 @@ export default function Send() {
     (isEvmChain
       ? (ethers.isAddress(to) ? to : "")
       : (isValidNonEvmAddress(to.trim(), selectedChainId) ? to.trim() : ""));
+
+  // Contacts valid for the active chain (EVM addresses on any EVM chain; a
+  // non-EVM address only on its own chain).
+  const chainContacts = useMemo(
+    () => contacts.filter((c) =>
+      isEvmChain ? ethers.isAddress(c.address) : isValidNonEvmAddress(c.address.trim(), selectedChainId)),
+    [contacts, isEvmChain, selectedChainId],
+  );
+  const canSaveContact = !!destinationAddress && !isSaved(contacts, destinationAddress);
+
+  function pickContact(c: Contact) {
+    setShowContacts(false);
+    void handleToChange(c.address);
+  }
+  async function handleSaveContact() {
+    const name = contactName.trim();
+    if (!name || !destinationAddress) return;
+    setContacts(await saveContact({ name, address: destinationAddress, chainId: selectedChainId }));
+    setSavingContact(false); setContactName("");
+  }
+  async function handleDeleteContact(id: string) {
+    setContacts(await deleteContact(id));
+  }
 
   async function handleEvmSend() {
     if (!wallet) return;
@@ -512,13 +544,27 @@ export default function Send() {
           </div>
 
           {/* Recipient */}
-          <label className="text-xs text-text-secondary mb-1.5 block font-medium">Recipient</label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs text-text-secondary block font-medium">Recipient</label>
+            {chainContacts.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowContacts((v) => !v)}
+                className="flex items-center gap-1 text-[11px] text-brand-400 hover:text-brand-300 transition-colors"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                </svg>
+                Contacts
+              </button>
+            )}
+          </div>
           <div className="relative mb-1">
             <input
               value={to}
               onChange={(e) => handleToChange(e.target.value)}
               placeholder={isEvmChain
-                ? "0x address or 11-digit BPAN"
+                ? "0x / name.eth or 11-digit BPAN"
                 : `${sendSymbol} address or 11-digit BPAN`}
               className="input-field pr-10"
             />
@@ -528,6 +574,28 @@ export default function Send() {
               </div>
             )}
           </div>
+
+          {/* Contacts picker */}
+          {showContacts && chainContacts.length > 0 && (
+            <div className="mb-3 rounded-xl border border-surface-3/60 bg-surface-1 overflow-hidden animate-slide-up max-h-52 overflow-y-auto">
+              {chainContacts.map((c) => (
+                <div key={c.id} className="flex items-center gap-2 px-3 py-2 hover:bg-surface-2/50 transition-colors">
+                  <button type="button" onClick={() => pickContact(c)} className="flex-1 min-w-0 text-left">
+                    <p className="text-[12px] font-medium text-text-primary truncate">{c.name}</p>
+                    <p className="text-[10px] text-muted font-mono truncate">{c.address}</p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteContact(c.id)}
+                    title="Remove contact"
+                    className="p-1 rounded-md text-muted hover:text-danger transition-colors flex-shrink-0"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* BPAN resolution status */}
           {resolving && (
@@ -558,6 +626,44 @@ export default function Send() {
                 <p className="text-[11px] text-brand-400 font-medium">{resolvedName} resolved</p>
               </div>
               <p className="text-xs text-text-primary font-mono break-all">{resolvedAddr}</p>
+            </div>
+          )}
+
+          {/* Save recipient to contacts */}
+          {canSaveContact && !savingContact && (
+            <button
+              type="button"
+              onClick={() => { setSavingContact(true); setContactName(resolvedName || (resolvedBPAN ? formatBPAN(resolvedBPAN) : "")); }}
+              className="mb-3 flex items-center gap-1.5 text-[11px] text-brand-400 hover:text-brand-300 transition-colors"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="22" y1="11" x2="16" y2="11" /></svg>
+              Save to contacts
+            </button>
+          )}
+          {canSaveContact && savingContact && (
+            <div className="mb-3 flex items-center gap-2 animate-slide-up">
+              <input
+                value={contactName}
+                onChange={(e) => setContactName(e.target.value)}
+                placeholder="Contact name"
+                autoFocus
+                className="input-field flex-1 py-2 text-[12px]"
+              />
+              <button
+                type="button"
+                onClick={() => void handleSaveContact()}
+                disabled={!contactName.trim()}
+                className="px-3 py-2 rounded-lg text-[12px] font-semibold bg-brand-500 text-white disabled:opacity-40 transition-opacity"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSavingContact(false); setContactName(""); }}
+                className="px-2 py-2 rounded-lg text-[12px] text-muted hover:text-text-primary transition-colors"
+              >
+                Cancel
+              </button>
             </div>
           )}
 
