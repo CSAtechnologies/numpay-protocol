@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useWallet } from "../hooks/useWallet";
 import Layout from "../components/Layout";
 import { ExternalLinkIcon, RefreshIcon, ActivityIcon } from "../components/Icons";
@@ -24,7 +24,8 @@ const NON_EVM_NAMES: Record<string, string> = {
 export default function History() {
   const { wallet, activeChainId, activeAddress, filterChainId, nonEvmWallet, tokensByChain } = useWallet();
   const [txs, setTxs] = useState<TxRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true);       // skeleton: only the first paint of a scope
+  const [refreshing, setRefreshing] = useState(false); // in-flight indicator (spins the refresh icon)
 
   const isAllChains = filterChainId === null;
   const displayChainId = isAllChains ? activeChainId : filterChainId;
@@ -37,27 +38,67 @@ export default function History() {
   // Symbol lookup so SPL/token rows show a real ticker instead of a raw mint.
   const solTokenMeta = useMemo(() => tokenMetaFromList(tokensByChain?.["solana"]), [tokensByChain]);
 
-  const fetchHistory = useCallback(async () => {
-    if (!activeAddress && !wallet?.address) { setLoading(false); return; }
-    setLoading(true);
+  // The background balance sweep hands useWallet a fresh tokensByChain (and so a
+  // fresh solTokenMeta) every ~minute. Reading those — plus nonEvmWallet and the
+  // evm address — through refs keeps fetchHistory's identity stable, so a
+  // background tick refreshes silently instead of re-running the effect and
+  // flashing the loading skeleton. Only a real scope change (wallet / chain /
+  // all-vs-single) rebuilds fetchHistory and shows the skeleton.
+  const solTokenMetaRef = useRef(solTokenMeta); solTokenMetaRef.current = solTokenMeta;
+  const nonEvmWalletRef = useRef(nonEvmWallet); nonEvmWalletRef.current = nonEvmWallet;
+  const walletAddrRef = useRef(wallet?.address); walletAddrRef.current = wallet?.address;
+  const txsSigRef = useRef("");
+
+  // Content signature so a silent refresh only re-renders when something changed.
+  const sigOf = (list: TxRecord[]) =>
+    list.map((t) => `${t.chainId}:${t.hash}:${t.assetAddr || ""}:${t.value}:${t.kind || t.type}`).join("|");
+
+  const fetchHistory = useCallback(async (opts?: { skeleton?: boolean }) => {
+    const skeleton = opts?.skeleton ?? false;
+    const evmAddr = activeAddress || walletAddrRef.current || "";
+    if (!evmAddr && !nonEvmWalletRef.current) { if (skeleton) setLoading(false); return; }
+    if (skeleton) setLoading(true);
+    setRefreshing(true);
     try {
       const records = isAllChains
-        ? await fetchAllChains(wallet?.address || "", nonEvmWallet, solTokenMeta)
-        : await fetchChainHistory(displayChainId, activeAddress, nonEvmWallet, solTokenMeta);
+        ? await fetchAllChains(walletAddrRef.current || "", nonEvmWalletRef.current, solTokenMetaRef.current)
+        : await fetchChainHistory(displayChainId, activeAddress, nonEvmWalletRef.current, solTokenMetaRef.current);
       // Merge the user's own NumPay transactions (send/swap/bridge) so they are
       // always present with their real kind, regardless of indexer coverage.
       const logged = loggedToRecords(await loadTxLog()).filter((r) =>
         isAllChains || r.chainId === displayChainId || r.toChainId === displayChainId
       );
-      setTxs(mergeLoggedTxs(records, logged));
+      const merged = mergeLoggedTxs(records, logged);
+      const sig = sigOf(merged);
+      if (sig !== txsSigRef.current) { txsSigRef.current = sig; setTxs(merged); }
     } catch {
-      setTxs([]);
+      // Only wipe the list on an explicit (skeleton) load; a background failure
+      // keeps the last good data on screen.
+      if (skeleton) { txsSigRef.current = ""; setTxs([]); }
     } finally {
-      setLoading(false);
+      if (skeleton) setLoading(false);
+      setRefreshing(false);
     }
-  }, [isAllChains, displayChainId, activeAddress, wallet?.address, nonEvmWallet, solTokenMeta]);
+  }, [isAllChains, displayChainId, activeAddress]);
 
-  useEffect(() => { fetchHistory(); }, [fetchHistory]);
+  // Scope changed (or first mount): reset the diff and do a skeleton load.
+  useEffect(() => {
+    txsSigRef.current = "";
+    void fetchHistory({ skeleton: true });
+  }, [fetchHistory]);
+
+  // Silent background refresh: a 60s poll plus the wsWatch incoming-funds signal,
+  // both diffed so the UI only updates when the data actually changes.
+  useEffect(() => {
+    const id = setInterval(() => void fetchHistory({ skeleton: false }), 60_000);
+    const onMsg = (msg: any, sender: any) => {
+      if (msg?.type === "NUMPAY_FUNDS_EVENT" && sender?.id === chrome.runtime?.id && !sender?.tab) {
+        void fetchHistory({ skeleton: false });
+      }
+    };
+    chrome.runtime?.onMessage?.addListener(onMsg);
+    return () => { clearInterval(id); chrome.runtime?.onMessage?.removeListener(onMsg); };
+  }, [fetchHistory]);
 
   return (
     <Layout title="Activity">
@@ -69,11 +110,11 @@ export default function History() {
             <span className="text-[11px] text-muted font-medium">{chainName}</span>
           </div>
           <button
-            onClick={fetchHistory}
-            disabled={loading}
+            onClick={() => fetchHistory({ skeleton: false })}
+            disabled={refreshing}
             className="p-1.5 rounded-lg hover:bg-surface-2 text-muted hover:text-text-primary transition-colors disabled:opacity-40"
           >
-            <RefreshIcon size={13} className={loading ? "animate-spin" : ""} />
+            <RefreshIcon size={13} className={refreshing ? "animate-spin" : ""} />
           </button>
         </div>
 
