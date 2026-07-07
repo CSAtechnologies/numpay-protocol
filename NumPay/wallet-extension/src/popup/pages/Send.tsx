@@ -66,6 +66,39 @@ function nativeFeeReserve(chainId: string): number {
   return NATIVE_FEE_RESERVE[chainId] ?? DEFAULT_FEE_RESERVE;
 }
 
+// ── Gas tiers (EVM) ───────────────────────────────────────────────────────────
+type GasTier = "slow" | "normal" | "fast";
+interface FeeInfo { maxFee?: bigint; prio?: bigint; gasPrice?: bigint; }
+
+const scaleWei = (v: bigint, num: number, den: number) => (v * BigInt(num)) / BigInt(den);
+
+// Ethers overrides for a chosen speed. "normal" returns {} so ethers uses the
+// node's own suggestion. Slow lowers the tip (keeps the fee cap so it still
+// confirms, just with less priority); fast raises the tip and lifts the cap to
+// make room for it. Legacy chains scale gasPrice.
+function tierOverrides(tier: GasTier, f: FeeInfo | null): ethers.Overrides {
+  if (!f || tier === "normal") return {};
+  if (f.maxFee != null && f.prio != null) {
+    if (tier === "slow") return { maxFeePerGas: f.maxFee, maxPriorityFeePerGas: scaleWei(f.prio, 60, 100) };
+    const prio = scaleWei(f.prio, 175, 100);
+    return { maxFeePerGas: f.maxFee + (prio - f.prio), maxPriorityFeePerGas: prio };
+  }
+  if (f.gasPrice != null) {
+    return { gasPrice: tier === "slow" ? scaleWei(f.gasPrice, 85, 100) : scaleWei(f.gasPrice, 130, 100) };
+  }
+  return {};
+}
+
+// The effective per-gas price for a tier, in gwei, for the selector labels.
+function tierGwei(tier: GasTier, f: FeeInfo | null): string {
+  if (!f) return "";
+  const ov = tierOverrides(tier, f);
+  const wei = (ov.maxFeePerGas ?? ov.gasPrice ?? f.maxFee ?? f.gasPrice) as bigint | undefined;
+  if (wei == null) return "";
+  const g = Number(wei) / 1e9;
+  return g < 1 ? g.toFixed(3) : g.toFixed(1);
+}
+
 // An ENS name (foo.eth, sub.foo.eth). Resolved on-chain via Ethereum mainnet, so
 // it is trustless (no third-party API); the resolved 0x address is valid on any
 // EVM chain. (.sol / SNS needs on-chain resolution to meet the same safety bar as
@@ -126,6 +159,11 @@ export default function Send() {
   const [savingContact, setSavingContact] = useState(false);
   const [contactName, setContactName] = useState("");
   useEffect(() => { void loadContacts().then(setContacts); }, []);
+
+  // Gas tier (EVM). Fee data is fetched per chain to label the selector and to
+  // build the send overrides.
+  const [gasTier, setGasTier] = useState<GasTier>("normal");
+  const [feeInfo, setFeeInfo] = useState<FeeInfo | null>(null);
   // TRUST-1: non-blocking caution about how the BPAN mapping was verified
   // (single-source read, or the mapping changed since last seen).
   // When a BPAN mapping has CHANGED since last use, the user must explicitly
@@ -169,6 +207,18 @@ export default function Send() {
   useEffect(() => {
     if (isEvmChain && activeChainId !== selectedChainId) switchChain(selectedChainId);
   }, [isEvmChain, selectedChainId, activeChainId, switchChain]);
+
+  // Fetch fee data for the active EVM chain to drive the gas-tier selector.
+  useEffect(() => {
+    if (!isEvmChain) { setFeeInfo(null); return; }
+    let live = true;
+    setGasTier("normal"); setFeeInfo(null);
+    const provider = new ethers.JsonRpcProvider(sendNetwork.rpcUrl, sendNetwork.chainId, { staticNetwork: true });
+    provider.getFeeData()
+      .then((fd) => { if (live) setFeeInfo({ maxFee: fd.maxFeePerGas ?? undefined, prio: fd.maxPriorityFeePerGas ?? undefined, gasPrice: fd.gasPrice ?? undefined }); })
+      .catch(() => { if (live) setFeeInfo(null); });
+    return () => { live = false; };
+  }, [isEvmChain, sendNetwork.rpcUrl, sendNetwork.chainId]);
 
   // Non-EVM metadata
   const nonEvmMeta      = NON_EVM_META[selectedChainId];
@@ -404,13 +454,15 @@ export default function Send() {
         );
       }
 
+      const gasOv = tierOverrides(gasTier, feeInfo);
       let tx;
       if (selectedToken) {
-        tx = await sendToken(selectedToken.address, destinationAddress, amount, selectedToken.decimals, signer);
+        tx = await sendToken(selectedToken.address, destinationAddress, amount, selectedToken.decimals, signer, gasOv);
       } else {
         tx = await signer.sendTransaction({
           to: destinationAddress,
           value: ethers.parseUnits(amount, sendNetwork.decimals),
+          ...gasOv,
         });
       }
       setTxHash(tx.hash);
@@ -914,6 +966,31 @@ export default function Send() {
                 </div>
               )}
             </>
+          )}
+
+          {/* Gas tier (EVM) */}
+          {isEvmChain && feeInfo && (
+            <div className="mb-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs text-text-secondary font-medium">Network fee</label>
+                <span className="text-[10px] text-muted">gwei</span>
+              </div>
+              <div className="flex gap-2">
+                {(["slow", "normal", "fast"] as GasTier[]).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setGasTier(t)}
+                    className={`flex-1 py-2 rounded-xl border text-center transition-colors ${
+                      gasTier === t ? "border-brand-500 bg-brand-500/10" : "border-border hover:border-brand-500/40"
+                    }`}
+                  >
+                    <p className={`text-[11px] font-semibold capitalize ${gasTier === t ? "text-brand-400" : "text-text-primary"}`}>{t}</p>
+                    <p className="text-[10px] text-muted tabular-nums">{tierGwei(t, feeInfo)}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
 
           {/* Error */}

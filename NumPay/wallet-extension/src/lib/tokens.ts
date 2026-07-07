@@ -181,8 +181,9 @@ export async function sendToken(
   to: string,
   amount: string,
   decimals: number,
-  signer: ethers.Signer
+  signer: ethers.Signer,
+  overrides?: ethers.Overrides,
 ): Promise<ethers.TransactionResponse> {
   const contract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
-  return contract.transfer(to, ethers.parseUnits(amount, decimals));
+  return contract.transfer(to, ethers.parseUnits(amount, decimals), overrides ?? {});
 }
