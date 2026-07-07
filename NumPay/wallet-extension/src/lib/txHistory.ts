@@ -14,6 +14,13 @@ import { NETWORKS } from "@/lib/networks";
 import { ALCHEMY_KEY, MORALIS_KEY } from "@/lib/env";
 import { SOL_RPC } from "@/lib/chains/solana";
 
+// send/receive = a plain transfer; swap = token→token on one chain; bridge =
+// same/related asset moved across chains. `type` stays as the raw direction
+// (drives the amount sign/colour); `kind` is the richer classification the UI
+// labels and badges from. On-chain-only rows have kind derived from type; the
+// local activity log (txLog.ts) supplies real swap/bridge kinds.
+export type TxKind = "send" | "receive" | "swap" | "bridge";
+
 export interface TxRecord {
   hash: string;
   counterparty: string;
@@ -21,12 +28,91 @@ export interface TxRecord {
   symbol: string;
   timestamp: number;
   type: "sent" | "received";
+  kind?: TxKind;
+  // Logo URL for the primary asset, when the source knows it (local log rows).
+  logo?: string;
   explorerUrl: string;
   chainName?: string;
   chainId?: string;
   // ERC-20 contract / SPL mint / TRC-20 contract, lowercased. Undefined for a
   // native-coin transfer. Used to filter the token-detail panel to one token.
   assetAddr?: string;
+  // ── swap / bridge "other side" (the asset received, or the destination) ──
+  toSymbol?: string;
+  toValue?: string;
+  toAssetAddr?: string;
+  toLogo?: string;
+  toChainId?: string;
+  toChainName?: string;
+}
+
+/** The classification the UI renders from — real kind if present, else the raw direction. */
+export function kindOf(tx: TxRecord): TxKind {
+  return tx.kind ?? (tx.type === "sent" ? "send" : "receive");
+}
+
+const dedupeKey = (tx: TxRecord) => `${tx.chainId}-${(tx.hash || "").toLowerCase()}`;
+
+/**
+ * Collapse on-chain rows that are really one swap: a single tx hash on one
+ * chain that moved a token OUT of and a (different) token INTO the same wallet.
+ * Covers swaps done outside NumPay (which the local log won't have). Rows keyed
+ * by a hash the local log already owns are left untouched — the merge drops them.
+ */
+export function coalesceSwaps(records: TxRecord[]): TxRecord[] {
+  const byHash = new Map<string, TxRecord[]>();
+  for (const r of records) {
+    const k = dedupeKey(r);
+    (byHash.get(k) ?? byHash.set(k, []).get(k)!).push(r);
+  }
+  const out: TxRecord[] = [];
+  for (const group of byHash.values()) {
+    const sent = group.find((r) => r.type === "sent");
+    const recv = group.find((r) => r.type === "received");
+    // A genuine swap has both legs and they are different assets.
+    if (group.length >= 2 && sent && recv && (sent.assetAddr || "") !== (recv.assetAddr || "")) {
+      out.push({
+        ...sent,
+        kind: "swap",
+        // from = the leg we spent; to = the leg we received.
+        symbol: sent.symbol, value: sent.value, assetAddr: sent.assetAddr, logo: sent.logo,
+        toSymbol: recv.symbol, toValue: recv.value, toAssetAddr: recv.assetAddr, toLogo: recv.logo,
+        toChainId: recv.chainId, toChainName: recv.chainName,
+        counterparty: "",
+      });
+    } else {
+      out.push(...group);
+    }
+  }
+  return out.sort((a, b) => b.timestamp - a.timestamp);
+}
+
+/**
+ * Merge locally-logged NumPay transactions into fetched on-chain history.
+ * A logged row wins for its (chain, hash) — it carries the true kind, logos and
+ * both sides — and drops every on-chain leg sharing that key so a swap/bridge
+ * shows as one row, not its raw transfer legs.
+ */
+export function mergeLoggedTxs(onchain: TxRecord[], logged: TxRecord[]): TxRecord[] {
+  const loggedKeys = new Set(logged.map(dedupeKey));
+  const merged = [...logged, ...onchain.filter((r) => !loggedKeys.has(dedupeKey(r)))];
+  // Final dedupe (an on-chain source can list the same hash twice across sources).
+  const seen = new Set<string>();
+  return merged
+    .filter((r) => { const k = `${dedupeKey(r)}-${r.assetAddr || "native"}`; if (seen.has(k)) return false; seen.add(k); return true; })
+    .sort((a, b) => b.timestamp - a.timestamp);
+}
+
+/**
+ * Does this record involve a given asset on a given chain? Matches either the
+ * primary side or the swap/bridge "to" side, so a swap shows on both token
+ * pages and a bridge shows on its source- and destination-chain token pages.
+ */
+export function txInvolvesAsset(tx: TxRecord, chainId: string, addr: string | undefined, isNative: boolean): boolean {
+  const a = addr?.toLowerCase();
+  const sideMatch = (cId?: string, aAddr?: string) =>
+    cId === chainId && (isNative ? !aAddr : (aAddr || "").toLowerCase() === a);
+  return sideMatch(tx.chainId, tx.assetAddr) || sideMatch(tx.toChainId, tx.toAssetAddr);
 }
 
 // Optional symbol/decimals lookup for SPL mints (and any token whose symbol the
@@ -516,6 +602,15 @@ export async function fetchChainHistory(
   nonEvmWallet: any | null,
   solTokenMeta: TokenMeta = {},
 ): Promise<TxRecord[]> {
+  return coalesceSwaps(await fetchChainHistoryRaw(chainId, evmAddress, nonEvmWallet, solTokenMeta));
+}
+
+async function fetchChainHistoryRaw(
+  chainId: string,
+  evmAddress: string,
+  nonEvmWallet: any | null,
+  solTokenMeta: TokenMeta,
+): Promise<TxRecord[]> {
   try {
     if (ALCHEMY_NETS[chainId]) return await fetchAlchemy(chainId, evmAddress);
     // Moralis is the working source for these chains; fall back to the (mostly
@@ -544,14 +639,16 @@ export async function fetchAllChains(
   solTokenMeta: TokenMeta = {},
 ): Promise<TxRecord[]> {
   const jobs: Promise<TxRecord[]>[] = [];
-  for (const chainId of Object.keys(ALCHEMY_NETS)) jobs.push(fetchChainHistory(chainId, evmAddress, null, solTokenMeta));
-  for (const chainId of Object.keys(SCAN_APIS)) jobs.push(fetchChainHistory(chainId, evmAddress, null, solTokenMeta));
+  for (const chainId of Object.keys(ALCHEMY_NETS)) jobs.push(fetchChainHistoryRaw(chainId, evmAddress, null, solTokenMeta));
+  for (const chainId of Object.keys(SCAN_APIS)) jobs.push(fetchChainHistoryRaw(chainId, evmAddress, null, solTokenMeta));
   if (nonEvmWallet) {
     for (const chainId of ["bitcoin", "litecoin", "solana", "xrp", "tron", "sui"]) {
-      jobs.push(fetchChainHistory(chainId, evmAddress, nonEvmWallet, solTokenMeta));
+      jobs.push(fetchChainHistoryRaw(chainId, evmAddress, nonEvmWallet, solTokenMeta));
     }
   }
-  const all = (await Promise.all(jobs)).flat();
+  // Coalesce once over the whole set (groups by chain+hash, so cross-chain is
+  // safe), then dedupe and cap.
+  const all = coalesceSwaps((await Promise.all(jobs)).flat());
   const seen = new Set<string>();
   return all
     .filter((tx) => { const k = `${tx.chainId}-${tx.hash}-${tx.assetAddr || "native"}`; if (seen.has(k)) return false; seen.add(k); return true; })

@@ -1,39 +1,23 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useWallet } from "../hooks/useWallet";
 import Layout from "../components/Layout";
-import { SendIcon, ReceiveIcon, ExternalLinkIcon, RefreshIcon, ActivityIcon, ChainBadge } from "../components/Icons";
+import { ExternalLinkIcon, RefreshIcon, ActivityIcon } from "../components/Icons";
+import TxRow from "../components/TxRow";
 import { NETWORKS } from "@/lib/networks";
 import {
   type TxRecord,
   fetchChainHistory,
   fetchAllChains,
   tokenMetaFromList,
+  mergeLoggedTxs,
   SUPPORTED,
 } from "@/lib/txHistory";
+import { loadTxLog, loggedToRecords } from "@/lib/txLog";
 
 const NON_EVM_NAMES: Record<string, string> = {
   bitcoin: "Bitcoin", solana: "Solana", sui: "Sui",
   tron: "Tron", xrp: "XRP Ledger", litecoin: "Litecoin",
 };
-
-function shortAddr(addr: string): string {
-  if (!addr || addr.length < 12) return addr || "Unknown";
-  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-}
-
-function timeAgo(ms: number): string {
-  if (!ms) return "";
-  const diff = Date.now() - ms;
-  const mins  = Math.floor(diff / 60_000);
-  const hours = Math.floor(diff / 3_600_000);
-  const days  = Math.floor(diff / 86_400_000);
-  if (mins < 2)    return "Just now";
-  if (mins < 60)   return `${mins}m ago`;
-  if (hours < 24)  return `${hours}h ago`;
-  if (days === 1)  return "Yesterday";
-  if (days < 30)   return `${days}d ago`;
-  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -60,7 +44,12 @@ export default function History() {
       const records = isAllChains
         ? await fetchAllChains(wallet?.address || "", nonEvmWallet, solTokenMeta)
         : await fetchChainHistory(displayChainId, activeAddress, nonEvmWallet, solTokenMeta);
-      setTxs(records);
+      // Merge the user's own NumPay transactions (send/swap/bridge) so they are
+      // always present with their real kind, regardless of indexer coverage.
+      const logged = loggedToRecords(await loadTxLog()).filter((r) =>
+        isAllChains || r.chainId === displayChainId || r.toChainId === displayChainId
+      );
+      setTxs(mergeLoggedTxs(records, logged));
     } catch {
       setTxs([]);
     } finally {
@@ -142,66 +131,15 @@ export default function History() {
 
           {/* Transaction list */}
           {!loading && txs.length > 0 && (
-            <div className="pt-1">
+            <div className="pt-1 space-y-0.5">
               {txs.map((tx) => (
-                <a
+                <TxRow
                   key={`${tx.chainId}-${tx.hash}-${tx.assetAddr || "native"}`}
-                  href={tx.explorerUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-start gap-3 py-3.5 border-b border-surface-3/30 last:border-0 hover:bg-surface-2/30 transition-colors rounded-lg -mx-1 px-1 animate-slide-up"
-                >
-                  {/* Direction icon */}
-                  <div className={`relative w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${
-                    tx.type === "sent"
-                      ? "bg-gradient-to-br from-accent-red/20 to-accent-red/5 border border-accent-red/15"
-                      : "bg-gradient-to-br from-accent-green/20 to-accent-green/5 border border-accent-green/15"
-                  }`}>
-                    {tx.type === "sent"
-                      ? <SendIcon size={13} className="text-accent-red" />
-                      : <ReceiveIcon size={13} className="text-accent-green" />
-                    }
-                    {/* Chain badge — shown in All Assets mode. ChainIcon resolves a
-                        real logo for every chain (EVM + non-EVM) by chainId, with
-                        its own branded per-chain fallback, so no chain falls back to
-                        a bare initial. */}
-                    {isAllChains && tx.chainId && (
-                      <ChainBadge chainId={tx.chainId} logo={NETWORKS[tx.chainId]?.logo} />
-                    )}
-                  </div>
-
-                  {/* Text block */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-baseline justify-between mb-1.5">
-                      <span className={`text-[13px] font-semibold ${tx.type === "sent" ? "text-accent-red" : "text-accent-green"}`}>
-                        {tx.type === "sent" ? "Sent" : "Received"}
-                      </span>
-                      <span className="text-[13px] font-semibold tabular-nums text-text-primary ml-2 shrink-0">
-                        {tx.type === "sent" ? "-" : "+"}{parseFloat(tx.value).toFixed(4)} {tx.symbol}
-                      </span>
-                    </div>
-
-                    <p className="text-[11px] text-muted truncate mb-1.5">
-                      {tx.counterparty
-                        ? <>{tx.type === "sent" ? "To: " : "From: "}<span className="font-mono">{shortAddr(tx.counterparty)}</span></>
-                        : <span className="italic opacity-60">address unavailable</span>
-                      }
-                    </p>
-
-                    <div className="flex items-center gap-2">
-                      {isAllChains && tx.chainName && (
-                        <span className="text-[10px] text-brand-400/70 font-medium">{tx.chainName}</span>
-                      )}
-                      {tx.timestamp > 0 && (
-                        <span className="text-[10px] text-muted/55">{timeAgo(tx.timestamp)}</span>
-                      )}
-                      <span className="flex items-center gap-1 text-[10px] text-muted/40">
-                        <ExternalLinkIcon size={9} />
-                        View
-                      </span>
-                    </div>
-                  </div>
-                </a>
+                  tx={tx}
+                  size={36}
+                  showChain={isAllChains}
+                  className="animate-slide-up"
+                />
               ))}
             </div>
           )}

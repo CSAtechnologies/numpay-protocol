@@ -7,6 +7,7 @@ import { usdToDisplayCurrency, getUsdPrice } from "@/lib/currency";
 import { NETWORKS } from "@/lib/networks";
 import { DEFAULT_TOKENS } from "@/lib/tokens";
 import { markBalancesDirty } from "@/lib/balanceBus";
+import { logTx } from "@/lib/txLog";
 import { type NonEvmChain } from "@/lib/chains";
 import { fetchJupiterQuote, executeJupiterSwap, signSimulateSendSolanaTx, resolveSolanaToken, hasTokenAccount, WSOL_MINT, SOLANA_SWAP_TOKENS } from "@/lib/chains/solana";
 import { getSigner, isLocked } from "@/lib/wallet";
@@ -982,6 +983,11 @@ export default function Swap() {
           quoteToUse,
         );
         setTxHash(txid);
+        void logTx({
+          hash: txid, chainId: "solana", kind: "swap", timestamp: Date.now(),
+          symbol: fromToken.symbol, value: fromAmount, assetAddr: fromToken.address?.toLowerCase(), logo: fromToken.logo,
+          toSymbol: toToken.symbol, toValue: receiveAmt, toAssetAddr: toToken.address?.toLowerCase(), toLogo: toToken.logo, toChainId: toToken.chainId,
+        });
         // Overlay the spent side immediately; the received side shows up on the
         // fast-poll reconciliation (Solana confirms in ~1s).
         markBalancesDirty([{ chainId: "solana", tokenAddress: fromToken.address || undefined, delta: -parseFloat(fromAmount) }]);
@@ -998,6 +1004,7 @@ export default function Swap() {
     const net = NETWORKS[fromToken.chainId];
     if (!net) return;
     setSwapping(true); setSwapError(""); setTxHash(""); setTxFxDetail(""); setTxFx("pending");
+    let outHash = "";
     try {
       const signer    = getSigner(wallet.privateKey, net.rpcUrl);
       // Receipts are detected by polling; the 4s default adds up to ~8s of
@@ -1060,7 +1067,7 @@ export default function Swap() {
           to: txData.to, data: txData.data, value,
           gasLimit: txData.gas ? BigInt(txData.gas) : undefined,
         });
-        setTxHash(tx.hash);
+        setTxHash(outHash = tx.hash);
         // Refresh the instant the receipt lands so the received token appears
         // without waiting out the poll cadence.
         void tx.wait().then(() => markBalancesDirty()).catch(() => {});
@@ -1108,7 +1115,7 @@ export default function Swap() {
           }
         }
         if (!lastHash) throw new Error("Relay produced no signable transaction");
-        setTxHash(lastHash);
+        setTxHash(outHash = lastHash);
       } else {
         const kyberChain = KYBERSWAP_CHAIN[net.chainId];
         const buildRes = await fetch(`https://aggregator-api.kyberswap.com/${kyberChain}/api/v1/route/build`, {
@@ -1137,9 +1144,14 @@ export default function Swap() {
         setTxFxDetail(fromToken.address ? "Swapping (2 of 2)…" : "Swapping…");
         await simulateOrThrow(signer, { to: routerAddress, data, value });
         const tx = await signer.sendTransaction({ to: routerAddress, data, value });
-        setTxHash(tx.hash);
+        setTxHash(outHash = tx.hash);
         void tx.wait().then(() => markBalancesDirty()).catch(() => {});
       }
+      if (outHash) void logTx({
+        hash: outHash, chainId: fromToken.chainId, kind: "swap", timestamp: Date.now(),
+        symbol: fromToken.symbol, value: fromAmount, assetAddr: fromToken.address?.toLowerCase(), logo: fromToken.logo,
+        toSymbol: toToken.symbol, toValue: receiveAmt, toAssetAddr: toToken.address?.toLowerCase(), toLogo: toToken.logo, toChainId: toToken.chainId,
+      });
       // Overlay the spent side immediately (relay already waited for its
       // receipts above; paraswap/kyber refresh again when theirs land).
       markBalancesDirty([{ chainId: fromToken.chainId, tokenAddress: fromToken.address || undefined, delta: -parseFloat(fromAmount) }]);
@@ -1193,6 +1205,11 @@ export default function Swap() {
           nonEvmWallet!.solana.secretKey, nonEvmWallet!.solana.address, txReq.data,
         );
         setBridgeTxHash(sig);
+        void logTx({
+          hash: sig, chainId: "solana", kind: "bridge", timestamp: Date.now(),
+          symbol: fromToken.symbol, value: fromAmount, assetAddr: fromToken.address?.toLowerCase(), logo: fromToken.logo,
+          toSymbol: toToken.symbol, toValue: receiveAmt, toAssetAddr: toToken.address?.toLowerCase(), toLogo: toToken.logo, toChainId: toToken.chainId,
+        });
         // Overlay the spent side; destination-chain arrival is minutes away.
         markBalancesDirty([{ chainId: "solana", tokenAddress: fromToken.address || undefined, delta: -parseFloat(fromAmount) }]);
         setTxFx("success");
@@ -1232,6 +1249,11 @@ export default function Swap() {
         gasLimit: txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined,
       });
       setBridgeTxHash(tx.hash);
+      void logTx({
+        hash: tx.hash, chainId: fromToken.chainId, kind: "bridge", timestamp: Date.now(),
+        symbol: fromToken.symbol, value: fromAmount, assetAddr: fromToken.address?.toLowerCase(), logo: fromToken.logo,
+        toSymbol: toToken.symbol, toValue: receiveAmt, toAssetAddr: toToken.address?.toLowerCase(), toLogo: toToken.logo, toChainId: toToken.chainId,
+      });
       // Overlay the spent side; the destination-chain arrival is minutes away
       // (bridge latency), so only the source side is shown as spent.
       markBalancesDirty([{ chainId: fromToken.chainId, tokenAddress: fromToken.address || undefined, delta: -parseFloat(fromAmount) }]);

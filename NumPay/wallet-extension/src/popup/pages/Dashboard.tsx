@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchDexPrices, fetchTokenLogos } from "@/lib/tokenMarket";
 import { getTokenLogo } from "@/lib/logoCache";
@@ -133,6 +133,118 @@ interface DisplayToken {
   spamHidden?: boolean;
   // The user explicitly hid this token from the home list.
   manualHidden?: boolean;
+}
+
+/** Width (px) of the "Hide" action revealed on a full right-to-left swipe. */
+const HIDE_ACTION_W = 76;
+
+/**
+ * A token row you drag right-to-left to reveal a "Hide" action. Replaces the
+ * old always-mounted hover button, which reserved layout width on non-native
+ * rows and pushed their value column out of alignment with the native rows.
+ * Now nothing sits in the row's flow, so every row's value column is hard-right,
+ * and the hide control only shows on a deliberate swipe (works with mouse drag
+ * and touch via Pointer Events).
+ */
+function SwipeRow({
+  hideable,
+  onHide,
+  onClick,
+  children,
+}: {
+  hideable: boolean;
+  onHide: () => void;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  const [dx, setDx] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const startX = useRef(0);
+  const baseDx = useRef(0);
+  const moved = useRef(false);
+
+  // Native / addressless rows can't be hidden: render the plain row, no swipe.
+  if (!hideable) {
+    return (
+      <div className="token-row cursor-pointer" onClick={onClick}>
+        {children}
+      </div>
+    );
+  }
+
+  function down(e: ReactPointerEvent) {
+    startX.current = e.clientX;
+    baseDx.current = dx;
+    moved.current = false;
+    setDragging(true);
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* older engines */ }
+  }
+  function move(e: ReactPointerEvent) {
+    if (!dragging) return;
+    const delta = e.clientX - startX.current;
+    if (Math.abs(delta) > 5) moved.current = true;
+    setDx(Math.max(-HIDE_ACTION_W, Math.min(0, baseDx.current + delta)));
+  }
+  function end(e: ReactPointerEvent) {
+    if (!dragging) return;
+    setDragging(false);
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    // Past the halfway point stays open, otherwise snap shut.
+    setDx(dx <= -HIDE_ACTION_W / 2 ? -HIDE_ACTION_W : 0);
+  }
+  function rowClick() {
+    if (moved.current) return;          // a swipe, not a tap
+    if (dx !== 0) { setDx(0); return; } // tapping an open row just closes it
+    onClick();
+  }
+
+  return (
+    <div style={{ position: "relative", overflow: "hidden" }}>
+      {/* Sliding row first in the DOM so `.token-row:last-child` (which strips the
+          divider) never targets it; z-index — not source order — keeps it painted
+          over the action when closed. Opaque bg hides the action until swiped. */}
+      <div
+        className="token-row cursor-pointer"
+        onPointerDown={down}
+        onPointerMove={move}
+        onPointerUp={end}
+        onPointerCancel={end}
+        onClick={rowClick}
+        style={{
+          position: "relative",
+          zIndex: 1,
+          transform: `translateX(${dx}px)`,
+          transition: dragging ? "none" : "transform 200ms ease",
+          background: "var(--bg)",
+          touchAction: "pan-y",
+        }}
+      >
+        {children}
+      </div>
+      {/* Hide action revealed beneath the row's right edge */}
+      <button
+        type="button"
+        aria-label="Hide token"
+        onClick={(e) => { e.stopPropagation(); setDx(0); onHide(); }}
+        style={{
+          position: "absolute", top: 0, right: 0, bottom: 0, zIndex: 0,
+          width: HIDE_ACTION_W,
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3,
+          border: "none", cursor: "pointer",
+          background: "var(--danger, #e5484d)", color: "#fff",
+          fontFamily: "inherit",
+        }}
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+          <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+          <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+          <line x1="1" y1="1" x2="23" y2="23" />
+        </svg>
+        <span style={{ fontSize: 10, fontWeight: 600 }}>Hide</span>
+      </button>
+    </div>
+  );
 }
 
 export default function Dashboard({ onLock }: Props) {
@@ -1022,9 +1134,10 @@ export default function Dashboard({ onLock }: Props) {
         {/* Visible tokens */}
         <div className="space-y-1.5">
           {visibleTokens.map((token, i) => (
-            <div
+            <SwipeRow
               key={`${token.symbol}-${token.chainName}-${i}`}
-              className="token-row cursor-pointer group"
+              hideable={!token.isNative && !!token.address}
+              onHide={() => void toggleTokenHidden(token, true)}
               onClick={() => navigate("/token", { state: token })}
             >
               <div className="flex items-center gap-3">
@@ -1039,35 +1152,19 @@ export default function Dashboard({ onLock }: Props) {
                   <p className="text-[11px] text-muted">{token.chainName}</p>
                 </div>
               </div>
-              <div className="flex items-center gap-1.5">
-                <div className="text-right">
-                  <p className="text-[13px] font-semibold text-text-primary tabular-nums">
-                    {parseFloat(token.balance) > 0
-                      ? parseFloat(token.balance).toFixed(4)
-                      : "0"}
+              <div className="text-right">
+                <p className="text-[13px] font-semibold text-text-primary tabular-nums">
+                  {parseFloat(token.balance) > 0
+                    ? parseFloat(token.balance).toFixed(4)
+                    : "0"}
+                </p>
+                {token.usdValue > 0 && (
+                  <p className="text-[11px] text-muted tabular-nums">
+                    {sym}{token.usdValue.toFixed(2)}
                   </p>
-                  {token.usdValue > 0 && (
-                    <p className="text-[11px] text-muted tabular-nums">
-                      {sym}{token.usdValue.toFixed(2)}
-                    </p>
-                  )}
-                </div>
-                {!token.isNative && token.address && (
-                  <button
-                    title="Hide token"
-                    onClick={(e) => { e.stopPropagation(); void toggleTokenHidden(token, true); }}
-                    className="p-1 rounded-md text-muted hover:text-danger hover:bg-surface-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-                      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-                      <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-                      <line x1="1" y1="1" x2="23" y2="23" />
-                    </svg>
-                  </button>
                 )}
               </div>
-            </div>
+            </SwipeRow>
           ))}
         </div>
 

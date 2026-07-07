@@ -7,8 +7,10 @@ import {
   ArrowLeftIcon, SendIcon, ReceiveIcon, ExternalLinkIcon,
   TrendingUpIcon, AssetIcon, RefreshIcon, SwapIcon,
 } from "../components/Icons";
+import TxRow from "../components/TxRow";
 import { NETWORKS } from "@/lib/networks";
-import { type TxRecord, fetchChainHistory, tokenMetaFromList } from "@/lib/txHistory";
+import { type TxRecord, fetchChainHistory, tokenMetaFromList, mergeLoggedTxs, txInvolvesAsset } from "@/lib/txHistory";
+import { loadTxLog, loggedToRecords } from "@/lib/txLog";
 import { getItem, setItem } from "@/lib/storage";
 import { usdToDisplayCurrency } from "@/lib/currency";
 import {
@@ -83,27 +85,6 @@ function PriceChart({ prices, isUp }: { prices: [number, number][]; isUp: boolea
       <path d={pathD} fill="none" stroke={stroke} strokeWidth="1.6" strokeLinejoin="round" />
     </svg>
   );
-}
-
-// ── Helpers ─────────────────────────────────────────────────────────────────────
-
-function shortAddr(addr: string): string {
-  if (!addr || addr.length < 12) return addr || "Unknown";
-  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-}
-
-function timeAgo(ms: number): string {
-  if (!ms) return "";
-  const diff = Date.now() - ms;
-  const mins = Math.floor(diff / 60_000);
-  const hours = Math.floor(diff / 3_600_000);
-  const days = Math.floor(diff / 86_400_000);
-  if (mins < 2) return "Just now";
-  if (mins < 60) return `${mins}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  if (days === 1) return "Yesterday";
-  if (days < 30) return `${days}d ago`;
-  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 // ── Market data ───────────────────────────────────────────────────────────────
@@ -229,13 +210,16 @@ export default function TokenDetail() {
     setTxLoading(true);
     const evmAddr = activeAddress || wallet?.address || "";
     const records = await fetchChainHistory(token.chainId, evmAddr, nonEvmWallet, solTokenMeta);
+    const chainId = token.chainId;
     const tokenAddr = token.address?.toLowerCase();
-    const filtered = token.isNative
-      ? records.filter((r) => !r.assetAddr)
-      : tokenAddr
-        ? records.filter((r) => r.assetAddr === tokenAddr)
-        : records;
-    setTxs(filtered);
+    const involves = (r: TxRecord) => txInvolvesAsset(r, chainId, tokenAddr, token.isNative);
+    const filtered = records.filter(involves);
+    // Merge the user's own logged send/swap/bridge txs that involve this token —
+    // either side counts, so a swap shows on both token pages and a bridge on
+    // its source and destination pages. This is what makes the token panel
+    // consistent with the Activity page even when the indexer misses a tx.
+    const logged = loggedToRecords(await loadTxLog()).filter(involves);
+    setTxs(mergeLoggedTxs(filtered, logged));
     setTxLoading(false);
   }, [token?.chainId, token?.address, token?.isNative, activeAddress, wallet?.address, nonEvmWallet, solTokenMeta]);
 
@@ -512,45 +496,7 @@ export default function TokenDetail() {
         ) : (
           <div className="space-y-1.5">
             {txs.map((tx) => (
-              <a
-                key={`${tx.hash}-${tx.assetAddr || "native"}`}
-                href={tx.explorerUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="token-row no-underline block"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div
-                    className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
-                    style={{
-                      background: tx.type === "sent"
-                        ? "rgba(239,68,68,0.12)"
-                        : "rgba(34,197,94,0.12)",
-                    }}
-                  >
-                    {tx.type === "sent"
-                      ? <SendIcon size={13} style={{ color: "#ef4444" }} />
-                      : <ReceiveIcon size={13} style={{ color: "#22c55e" }} />}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-[12px] font-medium text-text-primary capitalize">{tx.type}</p>
-                    <p className="text-[10px] text-muted truncate">
-                      {tx.counterparty
-                        ? <>{tx.type === "sent" ? "To " : "From "}{shortAddr(tx.counterparty)}</>
-                        : <span className="italic opacity-60">address unavailable</span>}
-                    </p>
-                  </div>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <p
-                    className="text-[12px] font-semibold tabular-nums"
-                    style={{ color: tx.type === "sent" ? "#ef4444" : "#22c55e" }}
-                  >
-                    {tx.type === "sent" ? "-" : "+"}{tx.value} {tx.symbol}
-                  </p>
-                  <p className="text-[10px] text-muted">{timeAgo(tx.timestamp)}</p>
-                </div>
-              </a>
+              <TxRow key={`${tx.hash}-${tx.assetAddr || "native"}`} tx={tx} size={34} />
             ))}
           </div>
         )}

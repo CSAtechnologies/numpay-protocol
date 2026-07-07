@@ -12,6 +12,7 @@ import { BPAN_CHAINS, DEFAULT_NETWORK, NETWORKS, type BPANChainId, type Network 
 import { getSigner, isLocked } from "@/lib/wallet";
 import { sendToken, type Token } from "@/lib/tokens";
 import { markBalancesDirty } from "@/lib/balanceBus";
+import { logTx } from "@/lib/txLog";
 import {
   sendSolanaTransfer, sendTronTransfer, sendSuiTransfer,
   sendSolanaTokenTransfer, sendTronTokenTransfer, sendSuiTokenTransfer,
@@ -345,6 +346,15 @@ export default function Send() {
         });
       }
       setTxHash(tx.hash);
+      // Record in the local activity log so this send always shows in both the
+      // Activity page and the token panel, regardless of indexer coverage.
+      void logTx({
+        hash: tx.hash, chainId: sendNetwork.id, kind: "send", timestamp: Date.now(),
+        symbol: selectedToken?.symbol || sendNetwork.symbol, value: amount,
+        assetAddr: selectedToken?.address?.toLowerCase(),
+        logo: selectedToken?.logo || sendNetwork.logo,
+        counterparty: destinationAddress,
+      });
       // Overlay the spend on the displayed balance immediately (gas settles on
       // reconciliation), and refresh the moment the receipt lands instead of
       // waiting out the fast-poll cadence.
@@ -373,6 +383,7 @@ export default function Send() {
     // it is treated as trusted from here on (deliberate acceptance, H-03).
     if (bpanChange) await acceptBPANChange(bpanChange.number, bpanChange.chain, bpanChange.newAddr);
     setSending(true); setError(""); setTxHash(""); setTxFx("pending");
+    let outHash = "";
     try {
       if (selectedChainId === "solana") {
         if (selectedToken) {
@@ -380,11 +391,11 @@ export default function Send() {
           const sig = await sendSolanaTokenTransfer(
             nonEvmWallet.solana.secretKey, selectedToken.address, destinationAddress, amt, selectedToken.decimals,
           );
-          setTxHash(sig);
+          setTxHash(outHash = sig);
         } else {
           const lamports = toBaseUnits(amount, 9);
           const sig = await sendSolanaTransfer(nonEvmWallet.solana.secretKey, destinationAddress, lamports);
-          setTxHash(sig);
+          setTxHash(outHash = sig);
         }
       } else if (selectedChainId === "tron") {
         if (selectedToken) {
@@ -392,13 +403,13 @@ export default function Send() {
           const hash = await sendTronTokenTransfer(
             nonEvmWallet.tron.privateKey, nonEvmWallet.tron.address, selectedToken.address, destinationAddress, amt,
           );
-          setTxHash(hash);
+          setTxHash(outHash = hash);
         } else {
           const sun = toBaseUnits(amount, 6);
           const hash = await sendTronTransfer(
             nonEvmWallet.tron.privateKey, nonEvmWallet.tron.address, destinationAddress, sun,
           );
-          setTxHash(hash);
+          setTxHash(outHash = hash);
         }
       } else if (selectedChainId === "sui") {
         if (selectedToken) {
@@ -406,17 +417,24 @@ export default function Send() {
           const digest = await sendSuiTokenTransfer(
             nonEvmWallet.sui.secretKey, nonEvmWallet.sui.address, selectedToken.address, destinationAddress, amt,
           );
-          setTxHash(digest);
+          setTxHash(outHash = digest);
         } else {
           const mist = toBaseUnits(amount, 9);
           const digest = await sendSuiTransfer(
             nonEvmWallet.sui.secretKey, nonEvmWallet.sui.address, destinationAddress, mist,
           );
-          setTxHash(digest);
+          setTxHash(outHash = digest);
         }
       } else {
         throw new Error(`Native ${selectedChainId} sending is not available yet`);
       }
+      if (outHash) void logTx({
+        hash: outHash, chainId: selectedChainId, kind: "send", timestamp: Date.now(),
+        symbol: selectedToken?.symbol || nativeSymbol, value: amount,
+        assetAddr: selectedToken?.address?.toLowerCase(),
+        logo: selectedToken?.logo,
+        counterparty: destinationAddress,
+      });
       // Overlay the spend immediately; the 6s fast poll reconciles (non-EVM
       // chains confirm fast, so no receipt hook is needed here).
       markBalancesDirty([{ chainId: selectedChainId, tokenAddress: selectedToken?.address, delta: -parseFloat(amount) }]);
