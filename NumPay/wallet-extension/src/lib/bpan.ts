@@ -78,7 +78,13 @@ export function isValidBPAN(value: string): boolean {
 }
 
 export function isBPANInput(value: string): boolean {
-  return /^\d{7,11}$/.test(value.trim());
+  // Tolerate the separators the app itself displays (562-9736-1767) plus
+  // stray spaces from copy/paste. ONLY dashes/spaces are stripped: anything
+  // containing letters (a 0x address, an ENS name) still fails the gate, so
+  // an address can never misfire as a BPAN. Previously this required bare
+  // digits, so pasting a formatted BPAN silently did nothing — no resolution,
+  // no error.
+  return /^\d{7,11}$/.test(value.trim().replace(/[\s-]/g, ""));
 }
 
 export function formatBPAN(raw: string): string {
