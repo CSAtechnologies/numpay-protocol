@@ -11,7 +11,7 @@ import { logTx } from "@/lib/txLog";
 import { type NonEvmChain } from "@/lib/chains";
 import { fetchJupiterQuote, executeJupiterSwap, signSimulateSendSolanaTx, resolveSolanaToken, hasTokenAccount, WSOL_MINT, SOLANA_SWAP_TOKENS } from "@/lib/chains/solana";
 import { getSigner, isLocked } from "@/lib/wallet";
-import { getItem, setItem } from "@/lib/storage";
+import { getCustomTokens, upsertCustomToken } from "@/lib/customTokens";
 import {
   assertTrustedSpender, assertTrustedRouter, assertChainId,
   assertIsContract, assertNativeValue, simulateOrThrow,
@@ -84,7 +84,6 @@ const LIFI_API         = "https://li.quest/v1";
 const LIFI_ROUTES_URL  = `${LIFI_API}/advanced/routes`;
 const NATIVE_ADDR      = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 const LIFI_NATIVE      = "0x0000000000000000000000000000000000000000";
-const CUSTOM_TOKENS_KEY = "numpay_custom_tokens";
 
 // Shared fee-collection wallet (EVM). One address works across every EVM
 // aggregator and chain — used by ParaSwap, KyberSwap and Relay app fees.
@@ -578,12 +577,18 @@ export default function Swap() {
     return out;
   }, [tokensByChain]);
 
-  // Custom tokens (persisted)
+  // Custom tokens (persisted via lib/customTokens — the shared single-schema
+  // store). Balance shows 0 in the picker until held balances merge in; the
+  // old path persisted a stale balance snapshot, which was no better.
   const [customTokens, setCustomTokens] = useState<SwapToken[]>([]);
   useEffect(() => {
-    getItem(CUSTOM_TOKENS_KEY).then((raw) => {
-      if (raw) try { setCustomTokens(JSON.parse(raw)); } catch {}
-    });
+    getCustomTokens().then((list) => {
+      setCustomTokens(list.map((ct) => ({
+        symbol: ct.symbol, name: ct.name, address: ct.address, decimals: ct.decimals,
+        logo: ct.logo, balance: "0", chainId: ct.chainId,
+        chainName: NETWORKS[ct.chainId]?.name ?? ct.chainId, custom: true,
+      })));
+    }).catch(() => {});
   }, []);
 
   const allTokens = useMemo(
@@ -915,15 +920,20 @@ export default function Swap() {
   }
 
   async function confirmImport() {
-    if (!importToken) return;
-    const raw = await getItem(CUSTOM_TOKENS_KEY);
-    const existing: SwapToken[] = raw ? JSON.parse(raw) : [];
-    const deduped = existing.filter(
-      (t) => !(t.address?.toLowerCase() === importToken.address?.toLowerCase() && t.chainId === importToken.chainId),
-    );
-    const updated = [...deduped, importToken];
-    await setItem(CUSTOM_TOKENS_KEY, JSON.stringify(updated));
-    setCustomTokens(updated);
+    if (!importToken?.address || !importToken.chainId) return;
+    // Persist through the shared store (dedupes by chain+address); keep the
+    // freshly-fetched balance in local state for this session's picker.
+    await upsertCustomToken({
+      chainId: importToken.chainId, address: importToken.address,
+      symbol: importToken.symbol, name: importToken.name,
+      decimals: importToken.decimals, logo: importToken.logo,
+    });
+    setCustomTokens((prev) => [
+      ...prev.filter(
+        (t) => !(t.address?.toLowerCase() === importToken.address?.toLowerCase() && t.chainId === importToken.chainId),
+      ),
+      importToken,
+    ]);
     selectToken(importToken);
   }
 
