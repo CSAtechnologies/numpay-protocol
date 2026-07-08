@@ -273,12 +273,16 @@ export default function Dashboard({ onLock }: Props) {
   const [copied, setCopied] = useState("");
   const [bpan, setBpan] = useState<string | null>(null);
   const [showDust, setShowDust] = useState(false);
-  // Tokens the user explicitly hid (chainId:address keys, persisted).
+  // Tokens the user explicitly hid (chainId:address keys, persisted per
+  // wallet — reloads on a wallet switch so A's hides never apply to B).
   const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(new Set());
-  useEffect(() => { void loadHiddenTokens().then(setHiddenKeys); }, []);
+  useEffect(() => {
+    if (!wallet?.address) return;
+    void loadHiddenTokens(wallet.address).then(setHiddenKeys);
+  }, [wallet?.address]);
   async function toggleTokenHidden(t: DisplayToken, hidden: boolean) {
-    if (!t.chainId || !t.address) return;
-    setHiddenKeys(await setTokenHidden(tokenHideKey(t.chainId, t.address), hidden));
+    if (!t.chainId || !t.address || !wallet?.address) return;
+    setHiddenKeys(await setTokenHidden(wallet.address, tokenHideKey(t.chainId, t.address), hidden));
   }
 
   // Add account inline form
