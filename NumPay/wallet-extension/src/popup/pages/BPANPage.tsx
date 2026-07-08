@@ -674,6 +674,32 @@ function MappingSection({
     if (ownedBPANs.length > 0 && !number) setNumber(ownedBPANs[0]);
   }, [ownedBPANs]);
 
+  // Existing on-chain mappings for the selected BPAN (key -> address). A chain
+  // already mapped to the SAME address is a no-op write: it is badged "mapped"
+  // and skipped from the tx batch, so the user never pays gas to re-write an
+  // identical mapping. A DIFFERENT address stays writable (a legitimate
+  // update). null = not loaded / load failed → skip nothing.
+  const [existingMap, setExistingMap] = useState<Record<string, string> | null>(null);
+  useEffect(() => {
+    setExistingMap(null);
+    if (!isValidBPAN(number)) return;
+    let stale = false;
+    getAllBPANMappings(number, readTarget)
+      .then((m) => {
+        if (!stale) setExistingMap(Object.fromEntries(m.chains.map((c, i) => [c, m.wallets[i]])));
+      })
+      .catch(() => { /* stays null — no skipping without data */ });
+    return () => { stale = true; };
+  }, [number, readTarget?.contract, readTarget?.rpc]);
+
+  // "Up to date" = an existing mapping equals what would be written (EVM
+  // addresses compare case-insensitively; base58/bech32 chains exactly).
+  const evmUpToDate =
+    !!existingMap?.["evm"] &&
+    existingMap["evm"].trim().toLowerCase() === evmAddr.trim().toLowerCase();
+  const nonEvmUpToDate = (id: string) =>
+    !!existingMap?.[id] && existingMap[id].trim() === (nonEvmAddrs[id] || "").trim();
+
   const isOnEthereum = canWriteBPAN(network.id);
 
   const evmChains = BPAN_CHAINS.filter((c) => c.isEVM);
@@ -742,6 +768,17 @@ function MappingSection({
     setError(""); setLoading(true); setTxHashes([]);
 
     try {
+      // Re-read the CURRENT on-chain mappings (fresh, not the UI cache): they
+      // drive both the no-op skip and the stale-override rewrites below.
+      let existing: Record<string, string> | null = null;
+      try {
+        const m = await getAllBPANMappings(number, readTarget);
+        existing = Object.fromEntries(m.chains.map((c, i) => [c, m.wallets[i]]));
+        setExistingMap(existing);
+      } catch {
+        existing = null;
+      }
+
       // Build the write list. All selected EVM chains collapse into ONE
       // "evm" mapping (the resolver falls back to it for any EVM chain with
       // no exact mapping) — one mainnet tx instead of one per chain. Exact
@@ -749,27 +786,34 @@ function MappingSection({
       // existing per-chain EVM mapping that points at a DIFFERENT address
       // must be rewritten in the same batch, or it would silently keep
       // overriding the new evm mapping. Non-EVM chains stay per-chain.
+      // A chain whose existing mapping ALREADY equals the address being
+      // written is skipped — never pay gas for a no-op.
       const writes: { key: string; addr: string; label: string }[] = [];
       if (evmSelected) {
-        const addr = evmAddr.trim();
-        let existing: { chains: string[]; wallets: string[] };
-        try {
-          existing = await getAllBPANMappings(number, readTarget);
-        } catch {
+        if (!existing) {
           setError("Could not read this BPAN's current mappings (needed to check for per-chain overrides). Try again.");
           return;
         }
-        writes.push({ key: "evm", addr, label: "All EVM chains" });
-        for (let i = 0; i < existing.chains.length; i++) {
-          const cid = existing.chains[i];
+        const addr = evmAddr.trim();
+        if ((existing["evm"] ?? "").trim().toLowerCase() !== addr.toLowerCase()) {
+          writes.push({ key: "evm", addr, label: "All EVM chains" });
+        }
+        for (const [cid, mapped] of Object.entries(existing)) {
           const def = BPAN_CHAINS.find((c) => c.id === cid);
-          if (def?.isEVM && existing.wallets[i].toLowerCase() !== addr.toLowerCase()) {
+          if (def?.isEVM && mapped.toLowerCase() !== addr.toLowerCase()) {
             writes.push({ key: cid, addr, label: def.name });
           }
         }
       }
       for (const c of selectedNonEvmChains) {
-        writes.push({ key: c.id, addr: (nonEvmAddrs[c.id] || "").trim(), label: c.name });
+        const addr = (nonEvmAddrs[c.id] || "").trim();
+        if (existing && (existing[c.id] ?? "").trim() === addr) continue; // already mapped
+        writes.push({ key: c.id, addr, label: c.name });
+      }
+
+      if (writes.length === 0) {
+        setError("Everything selected is already mapped to these addresses — nothing to write.");
+        return;
       }
 
       setProgress({ current: 0, total: writes.length, chain: "" });
@@ -781,6 +825,9 @@ function MappingSection({
         const tx = await setWalletMapping(number, w.key, w.addr, contractAddr, signer);
         setTxHashes((prev) => [...prev, { chain: w.label, hash: tx.hash }]);
         await tx.wait();
+        // Reflect the confirmed write in the UI cache so rows flip to
+        // "mapped" and the tx count updates without a refetch.
+        setExistingMap((prev) => ({ ...(prev ?? {}), [w.key]: w.addr }));
       }
     } catch (e: any) {
       setError(e.reason || e.message || "Failed to set mapping");
@@ -881,7 +928,11 @@ function MappingSection({
                     )}
                   </div>
                 </div>
-                <span className="text-[9px] text-brand-400 bg-brand-500/10 px-1.5 py-0.5 rounded-full border border-brand-500/20 font-medium flex-shrink-0">1 tx</span>
+                {evmUpToDate ? (
+                  <span className="text-[9px] text-accent-green bg-accent-green/10 px-1.5 py-0.5 rounded-full border border-accent-green/20 font-medium flex-shrink-0">mapped</span>
+                ) : (
+                  <span className="text-[9px] text-brand-400 bg-brand-500/10 px-1.5 py-0.5 rounded-full border border-brand-500/20 font-medium flex-shrink-0">1 tx</span>
+                )}
               </button>
             )}
             {filteredChains.map((c) => {
@@ -897,6 +948,9 @@ function MappingSection({
                   </div>
                   <ChainIcon chainId={c.id} logo={c.logo} size={18} />
                   <span className="font-medium flex-1 text-left">{c.name}</span>
+                  {nonEvmUpToDate(c.id) && (
+                    <span className="text-[9px] text-accent-green bg-accent-green/10 px-1.5 py-0.5 rounded-full border border-accent-green/20 font-medium flex-shrink-0">mapped</span>
+                  )}
                 </button>
               );
             })}
@@ -909,7 +963,11 @@ function MappingSection({
         <div className="mb-3">
           <label className="text-xs text-text-secondary mb-1.5 block font-medium">
             EVM Address
-            <span className="text-muted font-normal ml-1.5">(covers ALL EVM chains, one transaction)</span>
+            {evmUpToDate ? (
+              <span className="text-accent-green font-normal ml-1.5">✓ already mapped to this address</span>
+            ) : (
+              <span className="text-muted font-normal ml-1.5">(covers ALL EVM chains, one transaction)</span>
+            )}
           </label>
           <div className="flex gap-2">
             <input
@@ -940,9 +998,11 @@ function MappingSection({
                 <div className="flex items-center gap-1.5 mb-1">
                   <ChainIcon chainId={c.id} logo={c.logo} size={14} />
                   <span className="text-[11px] text-text-secondary font-medium">{c.name}</span>
-                  {auto && val === auto && (
+                  {nonEvmUpToDate(c.id) ? (
+                    <span className="text-[9px] bg-accent-green/10 text-accent-green px-1.5 py-0.5 rounded-full border border-accent-green/20 font-medium">✓ mapped</span>
+                  ) : auto && val === auto ? (
                     <span className="text-[9px] bg-accent-green/10 text-accent-green px-1.5 py-0.5 rounded-full border border-accent-green/20 font-medium">auto</span>
-                  )}
+                  ) : null}
                 </div>
                 <div className="flex gap-2">
                   <input
@@ -1006,19 +1066,30 @@ function MappingSection({
         </div>
       )}
 
-      <button
-        onClick={handleSetMappings}
-        disabled={loading || selectedChains.size === 0 || !allAddressesFilled}
-        className="btn-primary-premium text-[13px]"
-      >
-        {(() => {
-          if (loading) return `Mapping ${progress.current}/${progress.total}...`;
-          // One tx covers every EVM chain (the "evm" mapping); non-EVM
-          // chains are one tx each.
-          const txCount = (evmSelected ? 1 : 0) + selectedNonEvmChains.length;
-          return txCount > 1 ? `Set Mappings (${txCount} transactions)` : "Set Mapping (1 transaction)";
-        })()}
-      </button>
+      {(() => {
+        // One tx covers every EVM chain (the "evm" mapping); non-EVM chains
+        // are one tx each. Chains already mapped to the same address are
+        // no-ops and never counted or written.
+        const plannedTx =
+          (evmSelected && !evmUpToDate ? 1 : 0) +
+          selectedNonEvmChains.filter((c) => !nonEvmUpToDate(c.id)).length;
+        const allDone = selectedChains.size > 0 && plannedTx === 0;
+        return (
+          <button
+            onClick={handleSetMappings}
+            disabled={loading || selectedChains.size === 0 || !allAddressesFilled || allDone}
+            className="btn-primary-premium text-[13px]"
+          >
+            {loading
+              ? `Mapping ${progress.current}/${progress.total}...`
+              : allDone
+              ? "Already mapped ✓"
+              : plannedTx > 1
+              ? `Set Mappings (${plannedTx} transactions)`
+              : "Set Mapping (1 transaction)"}
+          </button>
+        );
+      })()}
     </div>
   );
 }
