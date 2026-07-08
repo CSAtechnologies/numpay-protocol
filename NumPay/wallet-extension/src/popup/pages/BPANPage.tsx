@@ -633,7 +633,10 @@ function MappingSection({
 }) {
   const defaultBPAN = ownedBPANs[0] || "";
   const [number, setNumber] = useState(defaultBPAN);
-  const [selectedChains, setSelectedChains] = useState<Set<string>>(new Set(["ethereum", "polygon", "arbitrum"]));
+  // "evm" is a single synthetic picker entry covering every EVM chain (one
+  // registry mapping, one tx — see BPAN_EVM_KEY in lib/bpan.ts). Only non-EVM
+  // chains are listed individually.
+  const [selectedChains, setSelectedChains] = useState<Set<string>>(new Set(["evm"]));
   const [showChainPicker, setShowChainPicker] = useState(false);
   const [chainSearch, setChainSearch] = useState("");
 
@@ -673,10 +676,17 @@ function MappingSection({
 
   const isOnEthereum = canWriteBPAN(network.id);
 
-  const filteredChains = BPAN_CHAINS.filter((c) => {
-    const q = chainSearch.toLowerCase();
-    return c.name.toLowerCase().includes(q) || c.id.includes(q);
-  });
+  const evmChains = BPAN_CHAINS.filter((c) => c.isEVM);
+  const q = chainSearch.toLowerCase();
+  // Individually listed entries are non-EVM only; the EVM chains ride the
+  // single "All EVM chains" row above the list.
+  const filteredChains = BPAN_CHAINS.filter(
+    (c) => !c.isEVM && (c.name.toLowerCase().includes(q) || c.id.includes(q)),
+  );
+  // Show the EVM row when the search is empty or matches "evm"/any EVM chain.
+  const evmRowVisible =
+    !q || "all evm chains".includes(q) ||
+    evmChains.some((c) => c.name.toLowerCase().includes(q) || c.id.includes(q));
 
   function toggleChain(id: string) {
     setSelectedChains((prev) => {
@@ -686,18 +696,21 @@ function MappingSection({
     });
   }
 
-  const selectedLabel = selectedChains.size === 0
-    ? "Select chains"
-    : selectedChains.size === 1
-    ? BPAN_CHAINS.find((c) => c.id === Array.from(selectedChains)[0])?.name || "1 chain"
-    : `${selectedChains.size} chains selected`;
-
-  const selectedEvmChains = BPAN_CHAINS.filter((c) => c.isEVM && selectedChains.has(c.id));
+  const evmSelected = selectedChains.has("evm");
   const selectedNonEvmChains = BPAN_CHAINS.filter((c) => !c.isEVM && selectedChains.has(c.id));
+
+  const labelParts: string[] = [];
+  if (evmSelected) labelParts.push("All EVM chains");
+  for (const c of selectedNonEvmChains) labelParts.push(c.name);
+  const selectedLabel =
+    labelParts.length === 0 ? "Select chains"
+    : labelParts.length <= 2 ? labelParts.join(" + ")
+    : evmSelected ? `All EVM + ${selectedNonEvmChains.length} non-EVM`
+    : `${selectedNonEvmChains.length} chains selected`;
 
   // All selected chains have a non-empty address
   const allAddressesFilled =
-    (selectedEvmChains.length === 0 || !!evmAddr.trim()) &&
+    (!evmSelected || !!evmAddr.trim()) &&
     selectedNonEvmChains.every((c) => !!(nonEvmAddrs[c.id] || "").trim());
 
   async function handleSetMappings() {
@@ -706,16 +719,19 @@ function MappingSection({
     if (selectedChains.size === 0) { setError("Select at least one chain"); return; }
     if (!allAddressesFilled) { setError("Fill in all wallet addresses before mapping"); return; }
 
-    const chains = Array.from(selectedChains);
-
     // Validate every address against its chain's format BEFORE any on-chain
     // write. A malformed or wrong-chain mapping in the registry misdirects
-    // every future payment to this BPAN.
-    for (const chainId of chains) {
-      const chainDef = BPAN_CHAINS.find((c) => c.id === chainId);
-      const addr = chainDef?.isEVM ? evmAddr.trim() : (nonEvmAddrs[chainId] || "").trim();
-      if (!isValidChainAddress(addr, chainId, chainDef?.isEVM ?? true)) {
-        setError(`"${addr.slice(0, 24)}${addr.length > 24 ? "…" : ""}" is not a valid ${chainDef?.name || chainId} address.`);
+    // every future payment to this BPAN. The synthetic "evm" entry validates
+    // as an EVM address.
+    if (evmSelected && !isValidChainAddress(evmAddr.trim(), "ethereum", true)) {
+      const a = evmAddr.trim();
+      setError(`"${a.slice(0, 24)}${a.length > 24 ? "…" : ""}" is not a valid EVM address.`);
+      return;
+    }
+    for (const c of selectedNonEvmChains) {
+      const addr = (nonEvmAddrs[c.id] || "").trim();
+      if (!isValidChainAddress(addr, c.id, false)) {
+        setError(`"${addr.slice(0, 24)}${addr.length > 24 ? "…" : ""}" is not a valid ${c.name} address.`);
         return;
       }
     }
@@ -734,7 +750,7 @@ function MappingSection({
       // must be rewritten in the same batch, or it would silently keep
       // overriding the new evm mapping. Non-EVM chains stay per-chain.
       const writes: { key: string; addr: string; label: string }[] = [];
-      if (selectedEvmChains.length > 0) {
+      if (evmSelected) {
         const addr = evmAddr.trim();
         let existing: { chains: string[]; wallets: string[] };
         try {
@@ -839,10 +855,35 @@ function MappingSection({
             />
           </div>
           <div className="flex items-center justify-between px-3.5 py-1.5 border-b border-border">
-            <button onClick={() => setSelectedChains(new Set(BPAN_CHAINS.map((c) => c.id)))} className="text-[11px] text-brand-400 font-medium hover:underline">All</button>
+            <button onClick={() => setSelectedChains(new Set(["evm", ...BPAN_CHAINS.filter((c) => !c.isEVM).map((c) => c.id)]))} className="text-[11px] text-brand-400 font-medium hover:underline">All</button>
             <button onClick={() => setSelectedChains(new Set())} className="text-[11px] text-muted font-medium hover:underline">Clear</button>
           </div>
           <div className="max-h-[200px] overflow-y-auto">
+            {/* One row = every EVM chain (a single "evm" registry mapping) */}
+            {evmRowVisible && (
+              <button
+                onClick={() => toggleChain("evm")}
+                className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-[13px] hover:bg-surface-2 transition-colors border-b border-border ${evmSelected ? "text-brand-400" : "text-text-primary"}`}
+              >
+                <div className={`w-4 h-4 rounded flex items-center justify-center border transition-colors flex-shrink-0 ${evmSelected ? "bg-brand-500 border-brand-500" : "border-border"}`}>
+                  {evmSelected && <CheckIcon size={9} className="text-white" />}
+                </div>
+                <div className="flex-1 text-left min-w-0">
+                  <span className="font-medium block">All EVM chains</span>
+                  <div className="flex items-center mt-1">
+                    {evmChains.slice(0, 9).map((c, i) => (
+                      <div key={c.id} className={i > 0 ? "-ml-1.5" : ""} style={{ zIndex: 9 - i }}>
+                        <ChainIcon chainId={c.id} logo={c.logo} size={15} />
+                      </div>
+                    ))}
+                    {evmChains.length > 9 && (
+                      <span className="text-[9px] text-muted ml-1.5 font-medium">+{evmChains.length - 9} more</span>
+                    )}
+                  </div>
+                </div>
+                <span className="text-[9px] text-brand-400 bg-brand-500/10 px-1.5 py-0.5 rounded-full border border-brand-500/20 font-medium flex-shrink-0">1 tx</span>
+              </button>
+            )}
             {filteredChains.map((c) => {
               const sel = selectedChains.has(c.id);
               return (
@@ -856,7 +897,6 @@ function MappingSection({
                   </div>
                   <ChainIcon chainId={c.id} logo={c.logo} size={18} />
                   <span className="font-medium flex-1 text-left">{c.name}</span>
-                  {!c.isEVM && <span className="text-[9px] text-muted bg-surface-3 px-1 rounded">non-EVM</span>}
                 </button>
               );
             })}
@@ -864,8 +904,8 @@ function MappingSection({
         </div>
       )}
 
-      {/* EVM address — shared by all EVM chains */}
-      {selectedEvmChains.length > 0 && (
+      {/* EVM address — one "evm" mapping covers every EVM chain */}
+      {evmSelected && (
         <div className="mb-3">
           <label className="text-xs text-text-secondary mb-1.5 block font-medium">
             EVM Address
@@ -973,9 +1013,9 @@ function MappingSection({
       >
         {(() => {
           if (loading) return `Mapping ${progress.current}/${progress.total}...`;
-          // One tx covers every selected EVM chain (the "evm" mapping);
-          // non-EVM chains are one tx each.
-          const txCount = (selectedEvmChains.length > 0 ? 1 : 0) + selectedNonEvmChains.length;
+          // One tx covers every EVM chain (the "evm" mapping); non-EVM
+          // chains are one tx each.
+          const txCount = (evmSelected ? 1 : 0) + selectedNonEvmChains.length;
           return txCount > 1 ? `Set Mappings (${txCount} transactions)` : "Set Mapping (1 transaction)";
         })()}
       </button>
