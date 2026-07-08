@@ -41,6 +41,13 @@ function removeBPAN(address: string, number: string) {
     JSON.stringify(getSavedBPANs(address).filter((n) => n !== number))
   );
 }
+// Display label for a registry mapping key ("evm" is the opt-in key that
+// covers every EVM chain — see BPAN_EVM_KEY in lib/bpan.ts).
+function bpanChainLabel(chain: string): string {
+  if (chain === "evm") return "All EVM chains";
+  return BPAN_CHAINS.find((c) => c.id === chain)?.name ?? chain;
+}
+
 async function copyText(text: string) {
   try { await navigator.clipboard.writeText(text); }
   catch {
@@ -388,8 +395,8 @@ function BPANCard({
               <p className="text-[11px] text-muted uppercase tracking-wider font-medium">Wallet Mappings</p>
               {mappings.chains.map((chain, i) => (
                 <div key={i} className="flex items-center gap-2 py-1">
-                  <ChainIcon chainId={chain} size={16} />
-                  <span className="text-[11px] text-brand-400 font-medium w-24 flex-shrink-0 capitalize">{chain}</span>
+                  <ChainIcon chainId={chain === "evm" ? "ethereum" : chain} size={16} />
+                  <span className="text-[11px] text-brand-400 font-medium w-24 flex-shrink-0 capitalize">{bpanChainLabel(chain)}</span>
                   <span className="text-[10px] font-mono text-text-secondary break-all flex-1">
                     {mappings.wallets[i].slice(0, 8)}...{mappings.wallets[i].slice(-6)}
                   </span>
@@ -717,20 +724,46 @@ function MappingSection({
     if (await isLocked()) { setError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
 
     setError(""); setLoading(true); setTxHashes([]);
-    setProgress({ current: 0, total: chains.length, chain: "" });
 
     try {
+      // Build the write list. All selected EVM chains collapse into ONE
+      // "evm" mapping (the resolver falls back to it for any EVM chain with
+      // no exact mapping) — one mainnet tx instead of one per chain. Exact
+      // per-chain mappings WIN over the fallback at resolution time, so any
+      // existing per-chain EVM mapping that points at a DIFFERENT address
+      // must be rewritten in the same batch, or it would silently keep
+      // overriding the new evm mapping. Non-EVM chains stay per-chain.
+      const writes: { key: string; addr: string; label: string }[] = [];
+      if (selectedEvmChains.length > 0) {
+        const addr = evmAddr.trim();
+        let existing: { chains: string[]; wallets: string[] };
+        try {
+          existing = await getAllBPANMappings(number, readTarget);
+        } catch {
+          setError("Could not read this BPAN's current mappings (needed to check for per-chain overrides). Try again.");
+          return;
+        }
+        writes.push({ key: "evm", addr, label: "All EVM chains" });
+        for (let i = 0; i < existing.chains.length; i++) {
+          const cid = existing.chains[i];
+          const def = BPAN_CHAINS.find((c) => c.id === cid);
+          if (def?.isEVM && existing.wallets[i].toLowerCase() !== addr.toLowerCase()) {
+            writes.push({ key: cid, addr, label: def.name });
+          }
+        }
+      }
+      for (const c of selectedNonEvmChains) {
+        writes.push({ key: c.id, addr: (nonEvmAddrs[c.id] || "").trim(), label: c.name });
+      }
+
+      setProgress({ current: 0, total: writes.length, chain: "" });
       const signer = getSigner(wallet.privateKey, contractRPC);
 
-      for (let i = 0; i < chains.length; i++) {
-        const chainId = chains[i];
-        const chainDef = BPAN_CHAINS.find((c) => c.id === chainId);
-        const chainName = chainDef?.name || chainId;
-        const addr = chainDef?.isEVM ? evmAddr.trim() : (nonEvmAddrs[chainId] || "").trim();
-
-        setProgress({ current: i + 1, total: chains.length, chain: chainName });
-        const tx = await setWalletMapping(number, chainId, addr, contractAddr, signer);
-        setTxHashes((prev) => [...prev, { chain: chainName, hash: tx.hash }]);
+      for (let i = 0; i < writes.length; i++) {
+        const w = writes[i];
+        setProgress({ current: i + 1, total: writes.length, chain: w.label });
+        const tx = await setWalletMapping(number, w.key, w.addr, contractAddr, signer);
+        setTxHashes((prev) => [...prev, { chain: w.label, hash: tx.hash }]);
         await tx.wait();
       }
     } catch (e: any) {
@@ -836,7 +869,7 @@ function MappingSection({
         <div className="mb-3">
           <label className="text-xs text-text-secondary mb-1.5 block font-medium">
             EVM Address
-            <span className="text-muted font-normal ml-1.5">({selectedEvmChains.length} chain{selectedEvmChains.length > 1 ? "s" : ""})</span>
+            <span className="text-muted font-normal ml-1.5">(covers ALL EVM chains, one transaction)</span>
           </label>
           <div className="flex gap-2">
             <input
@@ -938,11 +971,13 @@ function MappingSection({
         disabled={loading || selectedChains.size === 0 || !allAddressesFilled}
         className="btn-primary-premium text-[13px]"
       >
-        {loading
-          ? `Mapping ${progress.current}/${progress.total}...`
-          : selectedChains.size > 1
-          ? `Set ${selectedChains.size} Mappings`
-          : "Set Mapping"}
+        {(() => {
+          if (loading) return `Mapping ${progress.current}/${progress.total}...`;
+          // One tx covers every selected EVM chain (the "evm" mapping);
+          // non-EVM chains are one tx each.
+          const txCount = (selectedEvmChains.length > 0 ? 1 : 0) + selectedNonEvmChains.length;
+          return txCount > 1 ? `Set Mappings (${txCount} transactions)` : "Set Mapping (1 transaction)";
+        })()}
       </button>
     </div>
   );
@@ -1009,7 +1044,7 @@ function LookupSection({ readTarget }: { readTarget?: BPANReadTarget }) {
             <div key={i} className="premium-card px-3.5 py-2.5 flex items-center gap-2.5">
               <ChainIcon chainId={chain} size={22} />
               <div className="flex-1 min-w-0">
-                <p className="text-[11px] text-brand-400 capitalize font-semibold">{chain}</p>
+                <p className="text-[11px] text-brand-400 capitalize font-semibold">{bpanChainLabel(chain)}</p>
                 <p className="text-[11px] font-mono text-text-primary break-all">{result.wallets[i]}</p>
               </div>
             </div>

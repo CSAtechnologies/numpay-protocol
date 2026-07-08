@@ -1,6 +1,20 @@
 import { ethers } from "ethers";
-import { BPAN_MAINNET_CONTRACT, BPAN_MAINNET_RPC, BPAN_MAINNET_READ_RPCS } from "./networks";
+import { BPAN_MAINNET_CONTRACT, BPAN_MAINNET_RPC, BPAN_MAINNET_READ_RPCS, BPAN_CHAINS, NETWORKS } from "./networks";
 import { getItem, setItem } from "./storage";
+
+// Registry key that maps ONE address for every EVM chain (same key controls
+// the same address on all of them for an EOA). Exact per-chain mappings always
+// win over it at resolution time; it is written as a deliberate opt-in by the
+// owner, never inferred from the "ethereum" mapping — a smart-contract wallet
+// (Safe etc.) can own an address on one EVM chain but not another, so silently
+// spreading a single-chain mapping across chains could misdirect funds.
+export const BPAN_EVM_KEY = "evm";
+
+function isEvmBpanChain(chain: string): boolean {
+  const def = BPAN_CHAINS.find((c) => c.id === chain);
+  if (def) return def.isEVM;
+  return !!NETWORKS[chain]; // every NETWORKS entry is an EVM chain
+}
 
 const BPAN_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
@@ -176,12 +190,10 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * Resolve a BPAN number to the wallet address registered for `chain`, with
- * independent-provider agreement and a trust-on-first-use pin (TRUST-1).
- *
- * The mapping is queried from every endpoint in BPAN_MAINNET_READ_RPCS at the
+ * One quorum-checked getWalletMapping read for a single registry key. The
+ * mapping is queried from every endpoint in BPAN_MAINNET_READ_RPCS at the
  * "finalized" block tag. A result is only returned when a QUORUM agrees:
- *  - two or more agree on the same answer → returned (confidence "high")
+ *  - two or more agree on the same answer → returned
  *  - fewer than two agree                 → BPANInsufficientConfirmationError
  *  - responders return different non-empty addresses → BPANConsensusError
  *
@@ -190,10 +202,10 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
  *
  * ALWAYS queries Ethereum mainnet regardless of the caller's current network.
  */
-export async function resolveBPANChecked(
+async function quorumMappingLookup(
   number: string,
   chain: string,
-): Promise<BPANResolution> {
+): Promise<{ chosen: string; agreed: number; queried: number }> {
   const contracts = getReadContracts();
   const settled = await Promise.allSettled(
     contracts.map((c) =>
@@ -238,7 +250,35 @@ export async function resolveBPANChecked(
     throw new BPANInsufficientConfirmationError(sourcesQueried, agreed);
   }
 
-  const address = chosen.length > 0 ? chosen : null;
+  return { chosen, agreed, queried: sourcesQueried };
+}
+
+/**
+ * Resolve a BPAN number to the wallet address registered for `chain`, with
+ * independent-provider agreement (quorumMappingLookup above) and a
+ * trust-on-first-use pin (TRUST-1). For an EVM chain with no exact mapping,
+ * the owner's opt-in "evm" (all-EVM-chains) mapping is consulted as a
+ * fallback under the same quorum rules; exact per-chain mappings always win.
+ */
+export async function resolveBPANChecked(
+  number: string,
+  chain: string,
+): Promise<BPANResolution> {
+  let r = await quorumMappingLookup(number, chain);
+  let address = r.chosen.length > 0 ? r.chosen : null;
+
+  // EVM fallback: a quorum-CONFIRMED "no mapping" for a specific EVM chain
+  // falls back to the owner's opt-in "evm" (all-EVM-chains) mapping, so one
+  // registry write covers every EVM chain. Exact per-chain mappings win (the
+  // fallback only runs when the exact lookup confirmed empty), and both
+  // lookups carry the same quorum + consensus guarantees — an error from the
+  // fallback propagates rather than being downgraded to "no mapping".
+  if (!address && chain !== BPAN_EVM_KEY && isEvmBpanChain(chain)) {
+    r = await quorumMappingLookup(number, BPAN_EVM_KEY);
+    address = r.chosen.length > 0 ? r.chosen : null;
+  }
+
+  const { agreed, queried: sourcesQueried } = r;
 
   // Trust-on-first-use pin. Compare the agreed address to the last one we saw
   // for this (number, chain). On FIRST use we trust and store it. On a CHANGE we

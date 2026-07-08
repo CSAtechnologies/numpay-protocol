@@ -400,7 +400,9 @@ export default function Send() {
         } else {
           setError(
             `No ${chainInfo.name} address mapped to BPAN ${formatBPAN(clean)}. ` +
-            `The owner needs to add a "${selectedChainId}" mapping in their profile.`
+            (isEvmChain
+              ? `The owner needs to add an "All EVM chains" mapping (or a "${selectedChainId}" one) in their profile.`
+              : `The owner needs to add a "${selectedChainId}" mapping in their profile.`)
           );
         }
       } catch (e) {
