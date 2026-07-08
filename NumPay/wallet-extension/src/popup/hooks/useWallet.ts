@@ -1,4 +1,7 @@
-import { useState, useEffect, useCallback, useMemo, useSyncExternalStore } from "react";
+import {
+  useState, useEffect, useCallback, useMemo, useSyncExternalStore,
+  createContext, useContext, createElement, type ReactNode,
+} from "react";
 import { ethers } from "ethers";
 import { type WalletData, type VaultMeta, setActiveId, updateWalletAvatar, touchActivity, unlockActiveVault, SESSION_KEY } from "@/lib/wallet";
 import { notifyDappState } from "@/lib/dapp/notify";
@@ -24,7 +27,7 @@ import { sweepEvmNativeBalances, type ChainBalance } from "@/lib/balanceSweep";
 import { updateWatchAddresses } from "@/lib/watchAddresses";
 import { sweepAllChainTokens } from "@/lib/autoTokens";
 import {
-  bootData, takeBootBalanceCache, takeBootNonEvmCache,
+  bootData, takeBootBalanceCache, takeBootNonEvmCache, takeBootSession,
   NETWORK_KEY, ACTIVE_CHAIN_KEY, ASSET_FILTER_KEY, EVM_CACHE_PFX, NONEVMCACHE_PFX,
 } from "../boot";
 
@@ -67,7 +70,7 @@ interface WalletSession {
   wallets: Record<string, WalletData>;
 }
 
-export function useWallet(): WalletState {
+function useWalletState(): WalletState {
   const [wallet, setWallet] = useState<WalletData | null>(null);
   const [networkId, setNetworkId] = useState(DEFAULT_NETWORK);
   const [balance, setBalance] = useState("0");
@@ -117,8 +120,10 @@ export function useWallet(): WalletState {
 
       // The boot session is a snapshot from popup-open: present when the popup
       // opened unlocked, null when it opened locked (the unlock flow wrote the
-      // session after the snapshot) — so fall back to a fresh read.
-      const cached = boot.sessionRaw ?? await getSession(SESSION_KEY);
+      // session after the snapshot). takeBootSession() hands it to the FIRST
+      // mount only; any later mount reads live storage, so a wallet switch is
+      // never rewound by a remount reading the frozen snapshot.
+      const cached = (await takeBootSession()) ?? await getSession(SESSION_KEY);
       if (cached) {
         try {
           const parsed = JSON.parse(cached);
@@ -658,6 +663,27 @@ export function useWallet(): WalletState {
     walletMetas, activeWalletId, switchActiveWallet, addWalletToSession, removeWalletMeta,
     setWalletAvatar, customChains,
   };
+}
+
+// ── Shared instance ─────────────────────────────────────────────────────────
+// The heavy hook above must run exactly ONCE per popup, above the router, so
+// every page reads the same wallet state. Previously each page called the hook
+// directly and got its own private copy seeded from the frozen boot snapshot,
+// so navigating to a page (Send, TokenDetail, …) after switching wallets
+// re-seeded a stale copy and silently reverted to the wallet that was active at
+// popup-open. A single provider fixes that and collapses N duplicate
+// balance-polling loops (one per mounted page) into one.
+const WalletContext = createContext<WalletState | null>(null);
+
+export function WalletProvider({ children }: { children: ReactNode }) {
+  const value = useWalletState();
+  return createElement(WalletContext.Provider, { value }, children);
+}
+
+export function useWallet(): WalletState {
+  const ctx = useContext(WalletContext);
+  if (!ctx) throw new Error("useWallet must be used within <WalletProvider>");
+  return ctx;
 }
 
 // Derive the new active wallet's Solana address for a wallet-change dApp

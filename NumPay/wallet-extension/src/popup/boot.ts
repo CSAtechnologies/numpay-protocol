@@ -100,3 +100,18 @@ export async function takeBootNonEvmCache(address: string): Promise<string | nul
   nonEvmCacheTaken = true;
   return b.nonEvmCacheRaw;
 }
+
+// One-shot consumer for the preloaded decrypted-session snapshot. The snapshot
+// is frozen at popup-open, so after a wallet switch it is STALE. Only the first
+// caller (the initial WalletProvider mount) may use it for an instant paint;
+// every later mount (e.g. a re-unlock after auto-lock, when the user may have
+// switched wallets earlier in the same popup session) gets null and reads live
+// storage instead. This is what stops a navigation/remount from silently
+// rewinding to the wallet that was active when the popup first opened.
+let sessionTaken = false;
+export async function takeBootSession(): Promise<string | null> {
+  const b = await bootData;
+  if (sessionTaken) return null;
+  sessionTaken = true;
+  return b.sessionRaw;
+}

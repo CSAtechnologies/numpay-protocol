@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { isLocked, touchActivity, lockWallet } from "@/lib/wallet";
 import { bootData } from "./boot";
 import { CurrencyProvider } from "./contexts/CurrencyContext";
+import { WalletProvider } from "./hooks/useWallet";
 
 import Welcome from "./pages/Welcome";
 import CreateWallet from "./pages/CreateWallet";
@@ -116,19 +117,21 @@ export default function App() {
 
     return (
       <CurrencyProvider>
-        <Routes>
-          <Route path="/" element={<Dashboard onLock={() => setState("locked")} />} />
-          <Route path="/send" element={<Send />} />
-          <Route path="/receive" element={<Receive />} />
-          <Route path="/history" element={<History />} />
-          <Route path="/bpan" element={<BPANPage />} />
-          <Route path="/swap" element={<Swap />} />
-          <Route path="/defi" element={<DeFi />} />
-          <Route path="/settings" element={<Settings onLock={() => setState("locked")} onReset={() => setState("onboarding")} />} />
-          <Route path="/manage-assets" element={<ManageAssets />} />
-          <Route path="/token" element={<TokenDetail />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <WalletProvider>
+          <Routes>
+            <Route path="/" element={<Dashboard onLock={() => setState("locked")} />} />
+            <Route path="/send" element={<Send />} />
+            <Route path="/receive" element={<Receive />} />
+            <Route path="/history" element={<History />} />
+            <Route path="/bpan" element={<BPANPage />} />
+            <Route path="/swap" element={<Swap />} />
+            <Route path="/defi" element={<DeFi />} />
+            <Route path="/settings" element={<Settings onLock={() => setState("locked")} onReset={() => setState("onboarding")} />} />
+            <Route path="/manage-assets" element={<ManageAssets />} />
+            <Route path="/token" element={<TokenDetail />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </WalletProvider>
       </CurrencyProvider>
     );
   })();
