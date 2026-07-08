@@ -22,6 +22,13 @@ const CAP = 120;
 export interface LoggedTx {
   hash: string;
   chainId: string;
+  /**
+   * Lowercased EVM address of the wallet that broadcast this tx — the vault's
+   * stable identifier (every chain's address derives from the same mnemonic).
+   * The log is one shared list; without this tag, wallet A's history showed
+   * wallet B's sends after a switch. Filtered on load, written by every logTx.
+   */
+  owner?: string;
   kind: TxKind;
   timestamp: number;
   symbol: string;
@@ -73,7 +80,9 @@ export function chainNameOf(chainId?: string): string | undefined {
   return NETWORKS[chainId]?.name ?? NON_EVM_NAMES[chainId] ?? chainId;
 }
 
-export async function loadTxLog(): Promise<LoggedTx[]> {
+// Full unfiltered list — internal plumbing for logTx/updateTx, which must
+// operate across owners (updateTx looks up by chain+hash alone).
+async function loadAll(): Promise<LoggedTx[]> {
   try {
     const raw = await getItem(KEY);
     const arr = raw ? JSON.parse(raw) : [];
@@ -81,6 +90,29 @@ export async function loadTxLog(): Promise<LoggedTx[]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * Load the log for ONE wallet, identified by its EVM address. Rows written
+ * before the owner tag existed are migrated on first read: an EVM send carries
+ * its `from` address, which IS the owner; anything else (swaps, non-EVM) is
+ * adopted by the first wallet to read the log after the update — a one-time
+ * best guess that beats showing every wallet everyone's history.
+ */
+export async function loadTxLog(owner: string): Promise<LoggedTx[]> {
+  const me = owner.toLowerCase();
+  const list = await loadAll();
+  let migrated = false;
+  for (const e of list) {
+    if (!e.owner) {
+      e.owner = (e.from ?? owner).toLowerCase();
+      migrated = true;
+    }
+  }
+  if (migrated) {
+    try { await setItem(KEY, JSON.stringify(list)); } catch { /* best-effort */ }
+  }
+  return list.filter((e) => e.owner === me);
 }
 
 /**
@@ -92,9 +124,10 @@ export async function loadTxLog(): Promise<LoggedTx[]> {
 export async function logTx(entry: LoggedTx): Promise<void> {
   if (!entry.hash || !entry.chainId) return;
   try {
-    const list = await loadTxLog();
+    const tagged = { ...entry, owner: entry.owner?.toLowerCase() };
+    const list = await loadAll();
     const key = `${entry.chainId}-${entry.hash.toLowerCase()}`;
-    const next = [entry, ...list.filter((e) => `${e.chainId}-${e.hash.toLowerCase()}` !== key)].slice(0, CAP);
+    const next = [tagged, ...list.filter((e) => `${e.chainId}-${e.hash.toLowerCase()}` !== key)].slice(0, CAP);
     await setItem(KEY, JSON.stringify(next));
   } catch { /* best-effort */ }
 }
@@ -103,7 +136,7 @@ export async function logTx(entry: LoggedTx): Promise<void> {
  *  a replacement (speed-up/cancel). Never throws. */
 export async function updateTx(chainId: string, hash: string, patch: Partial<LoggedTx>): Promise<void> {
   try {
-    const list = await loadTxLog();
+    const list = await loadAll();
     const i = list.findIndex((e) => e.chainId === chainId && e.hash.toLowerCase() === hash.toLowerCase());
     if (i < 0) return;
     list[i] = { ...list[i], ...patch };

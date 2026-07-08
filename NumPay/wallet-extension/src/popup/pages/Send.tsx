@@ -500,6 +500,7 @@ export default function Send() {
       // nonce/to/value/data/gas fields let the Activity page speed up or cancel
       // it while it is pending.
       void logTx({
+        owner: wallet.address,
         hash: tx.hash, chainId: sendNetwork.id, kind: "send", timestamp: Date.now(),
         symbol: selectedToken?.symbol || sendNetwork.symbol, value: amount,
         assetAddr: selectedToken?.address?.toLowerCase(),
@@ -588,6 +589,7 @@ export default function Send() {
         throw new Error(`Native ${selectedChainId} sending is not available yet`);
       }
       if (outHash) void logTx({
+        owner: wallet?.address,
         hash: outHash, chainId: selectedChainId, kind: "send", timestamp: Date.now(),
         symbol: selectedToken?.symbol || nativeSymbol, value: amount,
         assetAddr: selectedToken?.address?.toLowerCase(),

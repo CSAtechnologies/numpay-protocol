@@ -20,7 +20,7 @@ function readProvider(chainId: string): ethers.JsonRpcProvider | null {
  * a tx that confirmed while the popup was closed no longer shows as pending.
  * Returns the refreshed log. Best-effort per entry (a failed RPC leaves it pending).
  */
-export async function reconcilePending(list: LoggedTx[]): Promise<LoggedTx[]> {
+export async function reconcilePending(list: LoggedTx[], owner: string): Promise<LoggedTx[]> {
   const pending = list.filter((e) => e.status === "pending" && NETWORKS[e.chainId]);
   if (pending.length === 0) return list;
   await Promise.all(pending.map(async (e) => {
@@ -31,7 +31,7 @@ export async function reconcilePending(list: LoggedTx[]): Promise<LoggedTx[]> {
       if (rc) await updateTx(e.chainId, e.hash, { status: rc.status === 0 ? "failed" : "confirmed" });
     } catch { /* stays pending, retried next load */ }
   }));
-  return loadTxLog();
+  return loadTxLog(owner);
 }
 
 // Bump gas at least ~20% over both the original and the current network rate so

@@ -218,7 +218,11 @@ export default function TokenDetail() {
     // either side counts, so a swap shows on both token pages and a bridge on
     // its source and destination pages. This is what makes the token panel
     // consistent with the Activity page even when the indexer misses a tx.
-    const logged = loggedToRecords(await loadTxLog()).filter(involves);
+    // Per-wallet log: owner = the vault's EVM address (activeAddress can be a
+    // non-EVM address on Solana/Tron/… pages, so use wallet.address).
+    const logged = wallet?.address
+      ? loggedToRecords(await loadTxLog(wallet.address)).filter(involves)
+      : [];
     setTxs(mergeLoggedTxs(filtered, logged));
     setTxLoading(false);
   }, [token?.chainId, token?.address, token?.isNative, activeAddress, wallet?.address, nonEvmWallet, solTokenMeta]);

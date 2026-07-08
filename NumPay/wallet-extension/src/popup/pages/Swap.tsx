@@ -990,6 +990,7 @@ export default function Swap() {
         );
         setTxHash(txid);
         void logTx({
+          owner: wallet?.address,
           hash: txid, chainId: "solana", kind: "swap", timestamp: Date.now(),
           symbol: fromToken.symbol, value: fromAmount, assetAddr: fromToken.address?.toLowerCase(), logo: fromToken.logo,
           toSymbol: toToken.symbol, toValue: receiveAmt, toAssetAddr: toToken.address?.toLowerCase(), toLogo: toToken.logo, toChainId: toToken.chainId,
@@ -1154,6 +1155,7 @@ export default function Swap() {
         void tx.wait().then(() => markBalancesDirty()).catch(() => {});
       }
       if (outHash) void logTx({
+        owner: wallet?.address,
         hash: outHash, chainId: fromToken.chainId, kind: "swap", timestamp: Date.now(),
         symbol: fromToken.symbol, value: fromAmount, assetAddr: fromToken.address?.toLowerCase(), logo: fromToken.logo,
         toSymbol: toToken.symbol, toValue: receiveAmt, toAssetAddr: toToken.address?.toLowerCase(), toLogo: toToken.logo, toChainId: toToken.chainId,
@@ -1212,6 +1214,7 @@ export default function Swap() {
         );
         setBridgeTxHash(sig);
         void logTx({
+          owner: wallet?.address,
           hash: sig, chainId: "solana", kind: "bridge", timestamp: Date.now(),
           symbol: fromToken.symbol, value: fromAmount, assetAddr: fromToken.address?.toLowerCase(), logo: fromToken.logo,
           toSymbol: toToken.symbol, toValue: receiveAmt, toAssetAddr: toToken.address?.toLowerCase(), toLogo: toToken.logo, toChainId: toToken.chainId,
@@ -1256,6 +1259,7 @@ export default function Swap() {
       });
       setBridgeTxHash(tx.hash);
       void logTx({
+        owner: wallet.address,
         hash: tx.hash, chainId: fromToken.chainId, kind: "bridge", timestamp: Date.now(),
         symbol: fromToken.symbol, value: fromAmount, assetAddr: fromToken.address?.toLowerCase(), logo: fromToken.logo,
         toSymbol: toToken.symbol, toValue: receiveAmt, toAssetAddr: toToken.address?.toLowerCase(), toLogo: toToken.logo, toChainId: toToken.chainId,

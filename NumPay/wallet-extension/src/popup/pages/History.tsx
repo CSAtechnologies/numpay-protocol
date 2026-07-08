@@ -72,7 +72,10 @@ export default function History() {
       // Merge the user's own NumPay transactions (send/swap/bridge) so they are
       // always present with their real kind, regardless of indexer coverage.
       // Reconcile pending sends against receipts first so their status settles.
-      const rawLog = await reconcilePending(await loadTxLog());
+      // The log is per-wallet (owner = the vault's EVM address): without the
+      // filter, wallet A's activity showed up in wallet B after a switch.
+      const ownerAddr = walletAddrRef.current || "";
+      const rawLog = ownerAddr ? await reconcilePending(await loadTxLog(ownerAddr), ownerAddr) : [];
       logMapRef.current = new Map(rawLog.map((e) => [`${e.chainId}-${e.hash.toLowerCase()}`, e]));
       const logged = loggedToRecords(rawLog).filter((r) =>
         isAllChains || r.chainId === displayChainId || r.toChainId === displayChainId
