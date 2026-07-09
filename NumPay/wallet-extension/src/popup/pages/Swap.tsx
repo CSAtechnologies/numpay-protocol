@@ -196,8 +196,11 @@ const isSolanaMint = (s: string) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s.trim(
 // available momentarily. 0.005 covers the base fee, a generous priority-fee
 // headroom, and that transient rent, without stranding most of a small balance
 // (the old 0.01, ~$1.80 at $180/SOL, left a $1 wallet almost nothing to swap).
-// The pre-broadcast guard + simulation are the real safety net if this is short.
-const SOL_FEE_RESERVE = 0.005;
+// Covers the swap fee, priority margin, and one output-token ATA rent (~0.00204
+// SOL) that a Jupiter route may open on the buy side. Trimmed from 0.005 (~$0.90)
+// so a small SOL balance is not over-reserved; the pre-broadcast guard +
+// simulation are the real safety net if this is ever short.
+const SOL_FEE_RESERVE = 0.003;
 
 // The slippage field is free text; sanitize before it reaches any aggregator.
 // NaN/zero falls back to 0.5%, and the cap stops fat-fingered values (e.g. 50)

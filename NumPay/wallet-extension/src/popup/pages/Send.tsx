@@ -46,21 +46,32 @@ const CAN_SEND_NATIVE: Record<string, boolean> = { solana: true, tron: true, sui
 // in native units (not a live gas estimate): erring slightly large just sends a
 // hair under the true max, and the node still validates the final amount. Keyed by
 // chain because the same symbol (ETH) spans pricey L1 and cheap L2s.
+//
+// Sized to roughly cover a native transfer (~21k gas) at a normal-ish fee, biased
+// low so a small-portfolio user is not over-reserved. A ~21k-gas transfer is only
+// a few US cents on nearly every chain now, so most buffers target ~$0.02-0.05;
+// the exceptions are Ethereum L1 (fees genuinely reach dollars), Tron (recipient
+// activation costs ~1 TRX) and Solana (the account must stay rent-exempt). If a
+// buffer is ever short, MAX just fails at broadcast and the user lowers a hair,
+// and the pre-broadcast simulation is the real safety net regardless.
 const NATIVE_FEE_RESERVE: Record<string, number> = {
-  ethereum: 0.003,
-  polygon: 0.2, avalanche: 0.02, bsc: 0.002, fantom: 0.5, cronos: 0.5,
-  celo: 0.05, gnosis: 0.02, moonbeam: 0.05, klaytn: 0.5, sei: 0.1,
-  mantle: 0.5, metis: 0.005,
-  // Solana: the base fee is ~0.000005 SOL; 0.002 covers it with priority-fee
-  // margin without stranding most of a small balance (was 0.01 ≈ $1.80). Sui gas
-  // for a transfer is a few thousandths; 0.02 is ample (was 0.05). Tron keeps a
-  // larger buffer because it must cover account-activation on a fresh recipient.
-  solana: 0.002, tron: 5, sui: 0.02,
+  ethereum: 0.0012,
+  polygon: 0.05, avalanche: 0.003, bsc: 0.0003, fantom: 0.1, cronos: 0.3,
+  celo: 0.03, gnosis: 0.02, moonbeam: 0.05, klaytn: 0.1, sei: 0.05,
+  mantle: 0.1, metis: 0.002,
+  // Solana: base fee is ~0.000005 SOL, but the account must retain the
+  // rent-exempt minimum (~0.00089 SOL) or it can be purged. 0.0015 keeps that
+  // plus priority-fee margin. Sui transfer gas is a few thousandths; 0.005 is
+  // ample. Tron keeps ~2 TRX because sending to a fresh recipient costs ~1 TRX
+  // account-activation plus bandwidth.
+  solana: 0.0015, tron: 2, sui: 0.005,
 };
 // ETH L2s (arbitrum, optimism, base, zksync, scroll, linea, blast, ...) and any
-// custom/unknown chain: gas is cheap, so a tiny buffer is enough. A too-small
-// default only means MAX still fails and the user lowers the amount, as today.
-const DEFAULT_FEE_RESERVE = 0.0005;
+// custom/unknown chain: gas is cheap, so a tiny buffer is enough. 0.0001 ETH is
+// ~$0.30 and comfortably covers an L2 transfer incl. its L1 data fee (was 0.0005
+// ≈ $1.50, which badly over-reserved small L2 balances). A too-small default only
+// means MAX still fails and the user lowers the amount, as today.
+const DEFAULT_FEE_RESERVE = 0.0001;
 
 function nativeFeeReserve(chainId: string): number {
   return NATIVE_FEE_RESERVE[chainId] ?? DEFAULT_FEE_RESERVE;
