@@ -77,6 +77,20 @@ function nativeFeeReserve(chainId: string): number {
   return NATIVE_FEE_RESERVE[chainId] ?? DEFAULT_FEE_RESERVE;
 }
 
+// Rollups whose posted L2 gas price does NOT include the L1 data fee charged at
+// execution (OP-stack, Arbitrum, the zk rollups). For these a reserve computed
+// purely from 21k * L2-gas-price would under-reserve, so we never go below the
+// flat cushion. Every other EVM chain is an L1 (or L1-like) where the fee is
+// fully captured by gasPrice/maxFeePerGas, so the live estimate is exact.
+const HIDDEN_L1_FEE_CHAINS = new Set([
+  "arbitrum", "optimism", "base", "zksync", "scroll", "linea", "blast", "mantle", "polygonzkevm",
+]);
+
+// Gas units a plain native-coin transfer to an EOA costs. A contract recipient
+// can cost more, but MAX-to-a-contract is rare and the pre-broadcast simulation
+// is the backstop; the margin below also absorbs small overages.
+const NATIVE_TRANSFER_GAS = 21_000n;
+
 // ── Gas tiers (EVM) ───────────────────────────────────────────────────────────
 type GasTier = "slow" | "normal" | "fast";
 interface FeeInfo { maxFee?: bigint; prio?: bigint; gasPrice?: bigint; }
@@ -306,11 +320,32 @@ export default function Send() {
     chainSynced.current = true;
   }
 
+  // Native-coin headroom to leave for the fee on a percentage/MAX send. For an
+  // EVM chain with live fee data we reserve the ACTUAL estimated fee
+  // (21k gas * the selected tier's per-gas price, +20% margin) instead of the
+  // flat per-chain heuristic — so a small balance (e.g. $0.5 of BNB) sends
+  // nearly all of it rather than losing a fixed ~$0.18 buffer. The tier's
+  // maxFeePerGas is already a ceiling (actual fee ≤ 21k * maxFeePerGas), so this
+  // reserve is a safe upper bound on an L1. On rollups the L2 gas price omits
+  // the L1 data fee, so we never go below the flat cushion there.
+  function nativeReserve(): number {
+    const flat = nativeFeeReserve(selectedChainId);
+    if (!isEvmChain || !feeInfo) return flat;
+    const ov = tierOverrides(gasTier, feeInfo);
+    const gp = (ov.maxFeePerGas ?? ov.gasPrice ?? feeInfo.maxFee ?? feeInfo.gasPrice) as bigint | undefined;
+    if (gp == null || gp <= 0n) return flat;
+    const feeWei = (NATIVE_TRANSFER_GAS * gp * 12n) / 10n; // +20% headroom
+    const live = Number(ethers.formatUnits(feeWei, sendNetwork.decimals));
+    if (!Number.isFinite(live) || live <= 0) return flat;
+    // Rollups: keep at least the flat cushion for the unpriced L1 data fee.
+    return HIDDEN_L1_FEE_CHAINS.has(selectedChainId) ? Math.max(live, flat) : live;
+  }
+
   function setPercent(pct: number) {
     // Native-coin sends pay gas out of this same balance, so a MAX (100%) send with
-    // no headroom always fails. Reserve a small fee buffer for native sends; tokens
-    // pay gas from the native coin, so a token's own balance needs no reserve.
-    const reserve = selectedToken ? 0 : nativeFeeReserve(selectedChainId);
+    // no headroom always fails. Reserve the fee for native sends; tokens pay gas
+    // from the native coin, so a token's own balance needs no reserve.
+    const reserve = selectedToken ? 0 : nativeReserve();
     const cap = Math.max(0, sendBalance - reserve);
     const val = Math.min(sendBalance * pct, cap);
     setAmount(val > 0 ? val.toFixed(Math.min(sendDecimals, 8)) : "0");
