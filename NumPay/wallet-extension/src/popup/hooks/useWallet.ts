@@ -1,5 +1,5 @@
 import {
-  useState, useEffect, useCallback, useMemo, useSyncExternalStore,
+  useState, useEffect, useCallback, useMemo, useSyncExternalStore, useRef,
   createContext, useContext, createElement, type ReactNode,
 } from "react";
 import { ethers } from "ethers";
@@ -94,6 +94,18 @@ function useWalletState(): WalletState {
   const [activeWalletId, setActiveWalletId] = useState("");
   const [customChains, setCustomChains] = useState<CustomChain[]>([]);
 
+  // The lowercased address of the wallet that is active RIGHT NOW, updated
+  // synchronously at every setWallet site (mount, switch, add). The async
+  // balance/token fetchers capture the address they started for and compare it
+  // against this ref before committing: a fetch begun for wallet A that resolves
+  // after a switch to B is dropped, so A's tokens/balances never paint into B's
+  // (just-cleared) view. `isStale(addr)` is the guard.
+  const activeAddrRef = useRef<string>("");
+  const isStale = useCallback(
+    (addr: string) => activeAddrRef.current !== addr.toLowerCase(),
+    [],
+  );
+
   // Resolve current network — supports built-in and custom chains
   const network = useMemo<Network>(() => {
     if (NETWORKS[networkId]) return NETWORKS[networkId];
@@ -130,9 +142,10 @@ function useWalletState(): WalletState {
           const parsed = JSON.parse(cached);
           if (parsed.wallets && parsed.activeId) {
             const walletData = parsed.wallets[parsed.activeId] as WalletData | undefined;
-            if (walletData) setWallet(walletData);
+            if (walletData) { activeAddrRef.current = walletData.address.toLowerCase(); setWallet(walletData); }
             setActiveWalletId(parsed.activeId);
           } else if (parsed.address) {
+            activeAddrRef.current = (parsed as WalletData).address.toLowerCase();
             setWallet(parsed as WalletData);
             setActiveWalletId("wallet-1");
           }
@@ -148,6 +161,7 @@ function useWalletState(): WalletState {
   // Fetch current-network balance + tokens (built-in + custom)
   const refresh = useCallback(async () => {
     if (!wallet) return;
+    const addr = wallet.address;
     setLoading(true);
     // staticNetwork: skip the eth_chainId auto-detect round-trip — we already know
     // the chain id, so there's no reason to ask the RPC for it on every provider.
@@ -155,7 +169,7 @@ function useWalletState(): WalletState {
 
     try {
       const bal = await provider.getBalance(wallet.address);
-      setBalance(ethers.formatUnits(bal, network.decimals));
+      if (!isStale(addr)) setBalance(ethers.formatUnits(bal, network.decimals));
     } catch (e) {
       console.error("Failed to fetch balance:", e);
     }
@@ -182,6 +196,9 @@ function useWalletState(): WalletState {
         }
       })
     );
+    // A switch that happened while the balances were in flight: drop this
+    // wallet's now-stale reads instead of painting them onto the new wallet.
+    if (isStale(addr)) return;
     setTokens(withBalances.map(({ failed, ...t }) => t));
     // Merge into the chain's token list instead of replacing it: replacement
     // dropped every auto-detected token and stripped priceUsd/spam metadata
@@ -212,6 +229,7 @@ function useWalletState(): WalletState {
   // Multi-chain aggregate balance — stale-while-revalidate, includes custom chains
   const refreshMultiChain = useCallback(async () => {
     if (!wallet) return;
+    const addr = wallet.address;
 
     const cacheKey = EVM_CACHE_PFX + wallet.address;
     let hasCache = false;
@@ -221,7 +239,7 @@ function useWalletState(): WalletState {
       // First run consumes the boot-preloaded snapshot (already in memory);
       // later runs read storage fresh.
       const raw = (await takeBootBalanceCache(wallet.address)) ?? await getItem(cacheKey);
-      if (raw) {
+      if (raw && !isStale(addr)) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed.chainBalances) && typeof parsed.portfolioUsd === "number") {
           for (const cb of parsed.chainBalances as ChainBalance[]) prevByChain.set(cb.networkId, cb);
@@ -250,9 +268,13 @@ function useWalletState(): WalletState {
     const { results, portfolioUsd: total, anySuccess } =
       await sweepEvmNativeBalances(wallet.address, customNetMap, prevByChain);
 
-    setChainBalances(results);
-    setPortfolioUsd(total);
-    setMultiChainLoading(false);
+    // Drop the display update if the wallet changed mid-sweep; the cache write
+    // below still goes to THIS wallet's (address-keyed) cache, so it is correct.
+    if (!isStale(addr)) {
+      setChainBalances(results);
+      setPortfolioUsd(total);
+      setMultiChainLoading(false);
+    }
 
     // Only persist when something actually succeeded (or there was no cache yet),
     // so a fully-offline refresh never overwrites good cached balances.
@@ -269,7 +291,11 @@ function useWalletState(): WalletState {
   // `force` (manual refresh) bypasses the sweep's freshness gate.
   const refreshAutoTokens = useCallback(async (force = false) => {
     if (!wallet) return;
+    const addr = wallet.address;
     await sweepAllChainTokens(wallet.address, (chainId, autoTokens) => {
+      // The sweep streams per-chain results over time; a switch mid-sweep must
+      // not let the previous wallet's tokens land in the new wallet's list.
+      if (isStale(addr)) return;
       setTokensByChain((prev) => {
         const existing = prev[chainId] ?? [];
         const existingByAddr = new Map(existing.map((t) => [t.address.toLowerCase(), t]));
@@ -326,7 +352,7 @@ function useWalletState(): WalletState {
       try {
         // Same boot-preload consumption as the multi-chain cache above.
         const raw = (await takeBootNonEvmCache(address)) ?? await getItem(cacheKey);
-        if (raw) {
+        if (raw && !isStale(address)) {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed.solanaTokens)) prevSol = parsed.solanaTokens;
           if (Array.isArray(parsed.tronTokens))   prevTrx = parsed.tronTokens;
@@ -353,6 +379,7 @@ function useWalletState(): WalletState {
 
       try {
         const nev = await deriveNonEvmAddresses(mnemonic);
+        if (isStale(address)) return; // switched wallets while deriving
         setNonEvmWallet(nev);
         void updateWatchAddresses({
           evm: address,
@@ -375,8 +402,10 @@ function useWalletState(): WalletState {
         const trx = trc20Tokens ?? prevTrx;
         const sui = suiCoins    ?? prevSui;
 
-        setNonEvmChains(chains);
-        setTokensByChain((prev) => ({ ...prev, solana: sol, tron: trx, sui: sui }));
+        if (!isStale(address)) {
+          setNonEvmChains(chains);
+          setTokensByChain((prev) => ({ ...prev, solana: sol, tron: trx, sui: sui }));
+        }
 
         // Persist tokens too (not just native chains) so they survive offline.
         try {
@@ -430,8 +459,12 @@ function useWalletState(): WalletState {
       const trx = trc20Tokens ?? prevTrx;
       const sui = suiCoins    ?? prevSui;
 
-      setNonEvmChains(chains);
-      setTokensByChain((prev) => ({ ...prev, solana: sol, tron: trx, sui: sui }));
+      // Drop the display update if the wallet switched mid-fetch; the cache
+      // write below is address-keyed, so it stays correct for this wallet.
+      if (!addr || !isStale(addr)) {
+        setNonEvmChains(chains);
+        setTokensByChain((prev) => ({ ...prev, solana: sol, tron: trx, sui: sui }));
+      }
 
       if (cacheKey) {
         try {
@@ -560,6 +593,9 @@ function useWalletState(): WalletState {
     // by chain|token, not by wallet, so leaving them would apply the old
     // wallet's pending deltas to the new wallet's balances.
     clearBalanceOverlays();
+    // Point the staleness guard at the new wallet BEFORE any of its fetchers
+    // run, so any still-in-flight fetch from the previous wallet is dropped.
+    activeAddrRef.current = walletData.address.toLowerCase();
 
     setWallet(walletData);
     setActiveWalletId(id);
@@ -588,6 +624,7 @@ function useWalletState(): WalletState {
     // A newly added/imported wallet becomes active: clear any overlays from the
     // previously active wallet (keyed by chain|token, not by wallet).
     clearBalanceOverlays();
+    activeAddrRef.current = walletData.address.toLowerCase();
 
     setWallet(walletData);
     setActiveWalletId(id);
