@@ -17,12 +17,13 @@ export const BPAN_MAINNET_RPC      = `https://eth-mainnet.g.alchemy.com/v2/${ALC
 // least two of these independent providers return the same address. The primary
 // is the configured Alchemy endpoint; the others are public full nodes verified
 // to serve the `finalized` block tag from an extension origin (eth.drpc.org is
-// covered by the existing *.drpc.org host permission; rpc.flashbots.net is
-// added explicitly to the manifest).
+// covered by the existing *.drpc.org host permission; ethereum-rpc.publicnode.com
+// is added explicitly to the manifest). rpc.flashbots.net was dropped: it 403s
+// eth_call from extension egress IPs, which silently degraded the quorum to two.
 export const BPAN_MAINNET_READ_RPCS: string[] = [
   BPAN_MAINNET_RPC,
   "https://eth.drpc.org",
-  "https://rpc.flashbots.net",
+  "https://ethereum-rpc.publicnode.com",
 ];
 
 export interface Network {

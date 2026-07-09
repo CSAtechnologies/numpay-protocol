@@ -9,7 +9,7 @@
     "https://*.g.alchemy.com/*",
     "https://*.drpc.org/*",
     "https://*.bnbchain.org/*",
-    "https://rpc.flashbots.net/*",
+    "https://ethereum-rpc.publicnode.com/*",
     "https://*.base.org/*",
     "https://*.linea.build/*",
     "https://*.scroll.io/*",
