@@ -298,11 +298,9 @@ export default function Dashboard({ onLock }: Props) {
   const [addLoading, setAddLoading] = useState(false);
 
   // Reset and reload BPAN whenever the active wallet address changes.
-  // Remove the old address-less key if it still exists so stale data cannot leak.
   useEffect(() => {
     setBpan(null);
     if (!wallet?.address) return;
-    localStorage.removeItem("bpan_numbers");
     const saved = getSavedBPANs(wallet.address);
     if (saved.length > 0) setBpan(saved[0]);
   }, [wallet?.address]);

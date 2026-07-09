@@ -9,6 +9,7 @@ import { deriveSolanaAddress } from "@/lib/chains/solana";
 import { getItem, setItem, getSession, setSession } from "@/lib/storage";
 import {
   balancesDirty, subscribeBalanceBus, overlayVersion, hasPendingOverlays, pendingDeltaFor,
+  clearBalanceOverlays,
 } from "@/lib/balanceBus";
 import { NETWORKS, DEFAULT_NETWORK, type Network } from "@/lib/networks";
 import { DEFAULT_TOKENS, getTokenBalance, type Token } from "@/lib/tokens";
@@ -555,6 +556,11 @@ function useWalletState(): WalletState {
     await setActiveId(id);
     await touchActivity();
 
+    // Drop the previous wallet's optimistic balance overlays: they are keyed
+    // by chain|token, not by wallet, so leaving them would apply the old
+    // wallet's pending deltas to the new wallet's balances.
+    clearBalanceOverlays();
+
     setWallet(walletData);
     setActiveWalletId(id);
     setBalance("0");
@@ -578,6 +584,10 @@ function useWalletState(): WalletState {
     await setSession(SESSION_KEY, JSON.stringify(session));
     await setActiveId(id);
     await touchActivity();
+
+    // A newly added/imported wallet becomes active: clear any overlays from the
+    // previously active wallet (keyed by chain|token, not by wallet).
+    clearBalanceOverlays();
 
     setWallet(walletData);
     setActiveWalletId(id);

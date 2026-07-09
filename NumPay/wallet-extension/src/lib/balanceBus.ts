@@ -68,6 +68,20 @@ export function balancesDirty(): boolean {
   return Date.now() < dirtyUntil;
 }
 
+/**
+ * Drop every pending optimistic overlay (and end the fast-poll window). The
+ * overlays are keyed by chain|token, NOT by wallet, so a switch must clear
+ * them: otherwise wallet A's just-sent delta would be applied on top of
+ * wallet B's freshly fetched balance for the same asset until the TTL expired.
+ * Called from the wallet-switch / add-wallet paths.
+ */
+export function clearBalanceOverlays(): void {
+  overlays.length = 0;
+  dirtyUntil = 0;
+  version++;
+  for (const l of listeners) l();
+}
+
 /** Subscribe to dirty/overlay signals; the wallet hook refreshes on each. */
 export function subscribeBalanceBus(fn: () => void): () => void {
   listeners.add(fn);
