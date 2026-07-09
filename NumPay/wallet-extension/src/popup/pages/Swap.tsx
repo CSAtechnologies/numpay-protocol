@@ -202,6 +202,35 @@ const isSolanaMint = (s: string) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s.trim(
 // simulation are the real safety net if this is ever short.
 const SOL_FEE_RESERVE = 0.003;
 
+// Native EVM input needs gas headroom too: a MAX swap/bridge attached the full
+// balance as `value`, leaving nothing for gas, so it always failed at broadcast
+// ("insufficient funds for gas * price + value"). Reserve the live estimated
+// fee for an aggregator-sized tx (~350k gas — a swap through a router costs
+// far more than a 21k transfer), +20% margin. Fee data is fetched on first use
+// and cached per chain for the popup session; if the fetch fails, fall back to
+// a small flat cushion. Over-reserving a hair only trims MAX; the guard +
+// simulation still protect the actual send.
+const SWAP_GAS_UNITS = 350_000n;
+const EVM_SWAP_FLAT_RESERVE = 0.0005;
+const _gasPriceCache = new Map<string, bigint>(); // chainId -> wei per gas
+async function evmSwapReserve(chainId: string): Promise<number> {
+  const net = NETWORKS[chainId];
+  if (!net) return EVM_SWAP_FLAT_RESERVE;
+  let gp = _gasPriceCache.get(chainId);
+  if (gp == null) {
+    try {
+      const provider = new ethers.JsonRpcProvider(net.rpcUrl, net.chainId, { staticNetwork: true });
+      const fd = await provider.getFeeData();
+      gp = fd.maxFeePerGas ?? fd.gasPrice ?? 0n;
+    } catch { gp = 0n; }
+    if (gp > 0n) _gasPriceCache.set(chainId, gp);
+  }
+  if (!gp || gp <= 0n) return EVM_SWAP_FLAT_RESERVE;
+  const feeWei = (SWAP_GAS_UNITS * gp * 12n) / 10n; // +20% headroom
+  const v = Number(ethers.formatUnits(feeWei, net.decimals));
+  return Number.isFinite(v) && v > 0 ? v : EVM_SWAP_FLAT_RESERVE;
+}
+
 // The slippage field is free text; sanitize before it reaches any aggregator.
 // NaN/zero falls back to 0.5%, and the cap stops fat-fingered values (e.g. 50)
 // from authorizing a sandwich-sized tolerance.
@@ -1127,6 +1156,31 @@ export default function Swap() {
             } else if (value !== 0n) {
               throw new Error(`Blocked for safety: ERC-20 swap step should not send native value, but ${value} wei is attached.`);
             }
+            // A step that calls the SOURCE TOKEN's contract may only be a
+            // bounded approve/transfer. Relay's spender/solver is dynamic (no
+            // allowlist is possible, unlike Kyber/ParaSwap/LI.FI), so cap what
+            // a tampered step could authorize or move at the amount being
+            // swapped — the user already intends to spend that much. Any other
+            // selector on the token contract is blocked outright.
+            if (fromToken.address && d.to.toLowerCase() === fromToken.address.toLowerCase()) {
+              const sel = String(d.data).slice(0, 10).toLowerCase();
+              const APPROVE = "0x095ea7b3", TRANSFER = "0xa9059cbb";
+              if (sel !== APPROVE && sel !== TRANSFER) {
+                throw new Error("Blocked for safety: unexpected Relay call on the source token contract.");
+              }
+              let amt: bigint;
+              try {
+                const [, rawAmt] = ethers.AbiCoder.defaultAbiCoder().decode(
+                  ["address", "uint256"], "0x" + String(d.data).slice(10),
+                );
+                amt = BigInt(rawAmt);
+              } catch {
+                throw new Error("Blocked for safety: could not decode the Relay token-contract step.");
+              }
+              if (amt > srcAmountBn) {
+                throw new Error("Blocked for safety: Relay step approves/moves more of the token than the amount being swapped.");
+              }
+            }
             await assertIsContract(signer.provider!, d.to);
             await simulateOrThrow(signer, { to: d.to, data: d.data, value });
             const tx = await signer.sendTransaction({ to: d.to, data: d.data, value });
@@ -1252,6 +1306,16 @@ export default function Swap() {
       // Previously executeBridge omitted this, leaving the LI.FI native value
       // unbounded.
       const isNativeBridge = !fromToken.address;
+      // Keep the strict zero-native bound for ERC-20 bridges (loosening it
+      // would let a tampered route response attach and drain native), but name
+      // the actual situation when a route legitimately wants a native
+      // messaging fee (some LayerZero/Axelar-style routes) instead of the
+      // generic swap wording.
+      if (!isNativeBridge && value > 0n) {
+        throw new Error(
+          "This route attaches a native-coin fee to the transaction, which NumPay doesn't support yet. Try a different route.",
+        );
+      }
       assertNativeValue(isNativeBridge, value, BigInt(fromAmtRaw));
 
       // Approve the bridge contract if spending an ERC-20 (exact amount only).
@@ -1650,10 +1714,17 @@ export default function Swap() {
               <div className="flex gap-2 mt-3">
                 {[{ l: "25%", p: 0.25 }, { l: "50%", p: 0.5 }, { l: "75%", p: 0.75 }, { l: "MAX", p: 1 }].map(({ l, p }) => (
                   <button key={l}
-                    onClick={() => {
-                      // Native SOL must keep headroom for the network fee + any ATA rent.
+                    onClick={async () => {
+                      // Native input pays the fee from this same balance: SOL keeps
+                      // its fee + ATA-rent cushion; a native EVM coin reserves the
+                      // live estimated fee for an aggregator-sized tx (with zero
+                      // headroom a MAX always failed at broadcast). Tokens need none.
                       const isNativeSol = fromToken.chainId === "solana" && !fromToken.address;
-                      const cap = isNativeSol ? Math.max(0, fromBalance - SOL_FEE_RESERVE) : fromBalance;
+                      const isNativeEvm = !fromToken.address && !!NETWORKS[fromToken.chainId];
+                      const reserve = isNativeSol ? SOL_FEE_RESERVE
+                        : isNativeEvm ? await evmSwapReserve(fromToken.chainId)
+                        : 0;
+                      const cap = Math.max(0, fromBalance - reserve);
                       const amt = Math.min(fromBalance * p, cap);
                       handleFromAmountChange(amt.toFixed(Math.min(fromToken.decimals, 8)));
                     }}
