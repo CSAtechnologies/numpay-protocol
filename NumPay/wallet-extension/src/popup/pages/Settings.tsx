@@ -39,6 +39,20 @@ export default function Settings({ onLock, onReset }: Props) {
     listOrigins().then((rows) => setConnectedSites(rows.map((r) => r.origin))).catch(() => {});
   }, []);
 
+  // Security: a revealed secret is bound to the wallet that was active when its
+  // password gate passed. Switching accounts (the Accounts list is on this same
+  // page, and under unlock-all a switch needs no password) would otherwise leave
+  // the panel open and re-render it with the NEW wallet's private key / recovery
+  // phrase — exposing it without its own reveal-auth. Force-hide every revealed
+  // secret and close any open reveal prompt whenever the active wallet changes.
+  useEffect(() => {
+    setShowPrivateKey(false);
+    setShowMnemonic(false);
+    setRevealTarget(null);
+    setRevealPw("");
+    setRevealErr("");
+  }, [wallet?.address]);
+
   async function handleDisconnectSite(origin: string) {
     await revokeOrigin(origin);
     setConnectedSites((prev) => prev.filter((o) => o !== origin));
