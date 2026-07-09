@@ -1263,7 +1263,22 @@ export default function Swap() {
         await approveErc20Exact(signer, fromToken.address, wallet.address, approvalAddr, fromAmtRaw);
       }
       setTxFxDetail(bridgeApproval ? "Bridging (2 of 2)…" : "Bridging…");
-      await simulateOrThrow(signer, { to: txReq.to, data: txReq.data, value });
+      // Best-effort pre-flight ONLY (do not block). Cross-chain bridge calldata
+      // is frequently not eth_call-simulatable on the source chain — messaging-
+      // layer fees, executor/msg.sender checks and deadlines make a naive static
+      // call revert ("missing revert data") even when the real bridge would
+      // succeed — so hard-blocking on it stranded legitimate routes. A same-chain
+      // swap simulates cleanly and keeps its hard block; a bridge relies on the
+      // deterministic guards above (trusted router + approval spender, exact
+      // native-value bound, chain-id assertion), which are the real protection.
+      try {
+        await simulateOrThrow(signer, { to: txReq.to, data: txReq.data, value });
+      } catch (simErr) {
+        console.warn(
+          "[bridge] source-chain pre-flight reverted; proceeding (bridges are often not eth_call-simulatable):",
+          (simErr as Error)?.message,
+        );
+      }
       const tx = await signer.sendTransaction({
         to:       txReq.to,
         data:     txReq.data,
