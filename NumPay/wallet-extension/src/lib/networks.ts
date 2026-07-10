@@ -149,7 +149,9 @@ export const NETWORKS: Record<string, Network> = {
   },
   cronos: {
     id: "cronos", name: "Cronos", chainId: 25,
-    rpcUrl: "https://cronos.drpc.org",
+    // Official Cronos endpoint; last remaining drpc.org entry (same family
+    // that masked broadcast rejections on Arbitrum/Optimism/BSC).
+    rpcUrl: "https://evm.cronos.org",
     symbol: "CRO", decimals: 18,
     explorer: "https://cronoscan.com",
     logo: logoOf("cronos"),

@@ -79,6 +79,17 @@ function nativeFeeReserve(chainId: string): number {
   return NATIVE_FEE_RESERVE[chainId] ?? DEFAULT_FEE_RESERVE;
 }
 
+// ethers "could not coalesce error" embeds the entire signed raw tx + RPC
+// payload in the message when a node returns a nonstandard rejection (dRPC
+// wrapped honest rejections as code 19 "Temporary internal error"). Never
+// render that blob in the error banner; and cap anything else to a sane size.
+function friendlyTxError(raw: string): string {
+  if (/could not coalesce error|temporary internal error/i.test(raw)) {
+    return "The network node reported a temporary error while broadcasting. Check the Activity page before retrying: the transfer may or may not have gone through.";
+  }
+  return raw.length > 300 ? raw.slice(0, 300) + "…" : raw;
+}
+
 // Rollups whose posted L2 gas price does NOT include the L1 data fee charged at
 // execution (OP-stack, Arbitrum, the zk rollups). For these a reserve computed
 // purely from 21k * L2-gas-price would under-reserve, so we never go below the
@@ -581,7 +592,7 @@ export default function Send() {
       }).catch(() => { /* replaced/dropped — the Activity reconciler settles it */ });
       setTxFx("success");
     } catch (e: any) {
-      setError(e.reason || e.message || "Transaction failed");
+      setError(friendlyTxError(e.reason || e.message || "Transaction failed"));
       setTxFx("error");
     } finally {
       setSending(false);
@@ -660,7 +671,7 @@ export default function Send() {
       markBalancesDirty([{ chainId: selectedChainId, tokenAddress: selectedToken?.address, delta: -parseFloat(amount) }]);
       setTxFx("success");
     } catch (e: any) {
-      setError(e.message || "Transaction failed");
+      setError(friendlyTxError(e.message || "Transaction failed"));
       setTxFx("error");
     } finally {
       setSending(false);

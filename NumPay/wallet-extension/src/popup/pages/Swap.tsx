@@ -210,7 +210,11 @@ const SOL_FEE_RESERVE = 0.003;
 // and cached per chain for the popup session; if the fetch fails, fall back to
 // a small flat cushion. Over-reserving a hair only trims MAX; the guard +
 // simulation still protect the actual send.
-const SWAP_GAS_UNITS = 350_000n;
+// Same-chain aggregator swaps cost ~350k gas units on most chains, but
+// Arbitrum prices L1 data in gas units too, so the identical swap quotes
+// 1-3M there — the same inflation that bit bridges (below).
+const SWAP_GAS_UNITS: Record<string, bigint> = { arbitrum: 2_500_000n };
+const SWAP_GAS_UNITS_DEFAULT = 350_000n;
 // A cross-chain bridge needs a much larger reserve than a same-chain swap: the
 // node's admission check holds gasLimit × maxFeePerGas up front (refunding the
 // unused part after mining), and LI.FI quotes ~5.3M gas units on Arbitrum
@@ -246,10 +250,38 @@ async function evmSwapReserve(chainId: string, forBridge = false): Promise<numbe
     if (gp > 0n) _gasPriceCache.set(chainId, gp);
   }
   if (!gp || gp <= 0n) return flatSwapReserve(chainId);
-  const units = forBridge ? (BRIDGE_GAS_UNITS[chainId] ?? BRIDGE_GAS_UNITS_DEFAULT) : SWAP_GAS_UNITS;
+  const units = forBridge
+    ? (BRIDGE_GAS_UNITS[chainId] ?? BRIDGE_GAS_UNITS_DEFAULT)
+    : (SWAP_GAS_UNITS[chainId] ?? SWAP_GAS_UNITS_DEFAULT);
   const feeWei = (units * gp * 12n) / 10n; // +20% headroom
   const v = Number(ethers.formatUnits(feeWei, net.decimals));
   return Number.isFinite(v) && v > 0 ? v : flatSwapReserve(chainId);
+}
+
+// EVM nodes admit a tx only when balance >= value + gasLimit × maxFeePerGas,
+// holding the full limit up front even though the actual charge is far lower
+// (the unused hold is refunded). When we pass an aggregator-quoted gasLimit we
+// skip ethers' estimateGas — the step that would otherwise surface
+// "insufficient funds" readably — so check affordability here and fail with
+// the exact shortfall before anything is signed. Some RPCs (dRPC) masked this
+// rejection as "temporary internal error" garbage.
+async function assertUpfrontAffordable(
+  provider: ethers.Provider, owner: string, value: bigint,
+  quotedGas: bigint, symbol: string, kind: "swap" | "bridge",
+): Promise<void> {
+  if (quotedGas <= 0n) return;
+  const [bal, fd] = await Promise.all([provider.getBalance(owner), provider.getFeeData()]);
+  const gasPrice = fd.maxFeePerGas ?? fd.gasPrice ?? 0n;
+  if (gasPrice <= 0n) return;
+  const upfront = value + quotedGas * gasPrice;
+  if (bal >= upfront) return;
+  const fmt = (w: bigint) =>
+    Number(ethers.formatEther(w)).toFixed(8).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  throw new Error(
+    `Insufficient balance for gas: the network holds ${fmt(quotedGas * gasPrice)} ${symbol} for gas up front ` +
+    `(most is refunded after the ${kind} mines), so this ${kind} needs ${fmt(upfront)} ${symbol} available ` +
+    `but the wallet has ${fmt(bal)}. Lower the amount by about ${fmt(upfront - bal)} ${symbol} and try again.`,
+  );
 }
 
 // The slippage field is free text; sanitize before it reaches any aggregator.
@@ -1133,6 +1165,12 @@ export default function Swap() {
         }
         await assertIsContract(signer.provider!, txData.to);
         assertNativeValue(isNativeSwap, value, srcAmountBn);
+        // ParaSwap is the one swap branch that passes its quoted gasLimit
+        // straight through (no estimateGas), so verify the upfront hold fits.
+        await assertUpfrontAffordable(
+          signer.provider!, wallet.address, value,
+          txData.gas ? BigInt(txData.gas) : 0n, net.symbol, "swap",
+        );
 
         const psApproval = !!(fromToken.address && route.priceRoute?.tokenTransferProxy);
         if (fromToken.address && route.priceRoute?.tokenTransferProxy) {
@@ -1387,29 +1425,13 @@ export default function Swap() {
         }
       }
 
-      // The node's admission check requires value + gasLimit × maxFeePerGas in
-      // the balance UP FRONT, even though the actual charge is far lower and
-      // the unused hold is refunded. A near-MAX native bridge on Arbitrum
-      // cleared the UI reserve but died at broadcast, and some RPCs (dRPC)
-      // mask that rejection as "temporary internal error" garbage. Check
-      // affordability here and fail with the real reason and exact shortfall
-      // before anything is signed.
-      const quotedGas = txReq.gasLimit ? BigInt(txReq.gasLimit) : 0n;
-      if (quotedGas > 0n) {
-        const prov = signer.provider as ethers.JsonRpcProvider;
-        const [bal, fd] = await Promise.all([prov.getBalance(wallet.address), prov.getFeeData()]);
-        const gasPrice = fd.maxFeePerGas ?? fd.gasPrice ?? 0n;
-        const upfront = value + quotedGas * gasPrice;
-        if (gasPrice > 0n && bal < upfront) {
-          const fmt = (w: bigint) =>
-            Number(ethers.formatEther(w)).toFixed(8).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
-          throw new Error(
-            `Insufficient balance for gas: the network holds ${fmt(quotedGas * gasPrice)} ${fromNet.symbol} for gas up front ` +
-            `(most is refunded after the bridge mines), so this bridge needs ${fmt(upfront)} ${fromNet.symbol} available ` +
-            `but the wallet has ${fmt(bal)}. Lower the amount by about ${fmt(upfront - bal)} ${fromNet.symbol} and try again.`,
-          );
-        }
-      }
+      // LI.FI quotes the gasLimit, so ethers never estimates: check the
+      // upfront gas hold ourselves (a near-MAX Arbitrum bridge died at
+      // broadcast with an unreadable dRPC error before this existed).
+      await assertUpfrontAffordable(
+        signer.provider!, wallet.address, value,
+        txReq.gasLimit ? BigInt(txReq.gasLimit) : 0n, fromNet.symbol, "bridge",
+      );
 
       // Approve the bridge contract if spending an ERC-20 (exact amount only).
       const approvalAddr = qData?.estimate?.approvalAddress;
