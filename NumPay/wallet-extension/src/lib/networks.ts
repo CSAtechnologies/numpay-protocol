@@ -67,7 +67,9 @@ export const NETWORKS: Record<string, Network> = {
   },
   optimism: {
     id: "optimism", name: "Optimism", chainId: 10,
-    rpcUrl: "https://optimism.drpc.org",
+    // Official OP Mainnet endpoint, same reasoning as Arbitrum above: drpc.org
+    // masks broadcast rejections as "temporary internal error" (code 19).
+    rpcUrl: "https://mainnet.optimism.io",
     symbol: "ETH", decimals: 18,
     explorer: "https://optimistic.etherscan.io",
     logo: logoOf("optimism"),
