@@ -543,7 +543,9 @@ export default function Dashboard({ onLock }: Props) {
       if (t.manualHidden) { dust.push(t); continue; }
       if (bal <= 0) { dust.push(t); continue; }
       if (t.spamHidden) { dust.push(t); continue; }
-      if (t.usdValue > 0 && t.usdValue < 0.10) { dust.push(t); continue; }
+      // Dust cutoff: below one displayable cent. $0.10 hid real sub-$0.10
+      // balances (a $0.07 L2 ETH balance is spendable money, not dust).
+      if (t.usdValue > 0 && t.usdValue < 0.01) { dust.push(t); continue; }
       visible.push(t);
     }
     visible.sort((a, b) => b.usdValue - a.usdValue);
