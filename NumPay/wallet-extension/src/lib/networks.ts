@@ -58,7 +58,9 @@ export const NETWORKS: Record<string, Network> = {
   },
   arbitrum: {
     id: "arbitrum", name: "Arbitrum One", chainId: 42161,
-    rpcUrl: "https://arbitrum.drpc.org",
+    // Official Offchain Labs endpoint. drpc.org masked broadcast rejections as
+    // "temporary internal error" (code 19), hiding the real reason from users.
+    rpcUrl: "https://arb1.arbitrum.io/rpc",
     symbol: "ETH", decimals: 18,
     explorer: "https://arbiscan.io",
     logo: logoOf("arbitrum"),

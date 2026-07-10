@@ -211,9 +211,16 @@ const SOL_FEE_RESERVE = 0.003;
 // a small flat cushion. Over-reserving a hair only trims MAX; the guard +
 // simulation still protect the actual send.
 const SWAP_GAS_UNITS = 350_000n;
+// A cross-chain bridge needs a much larger reserve than a same-chain swap: the
+// node's admission check holds gasLimit × maxFeePerGas up front (refunding the
+// unused part after mining), and LI.FI quotes ~5.3M gas units on Arbitrum
+// because Arbitrum prices L1 data in gas units. 350k-worth of reserve left a
+// near-MAX native bridge unsendable there. Other chains quote far less.
+const BRIDGE_GAS_UNITS: Record<string, bigint> = { arbitrum: 6_000_000n };
+const BRIDGE_GAS_UNITS_DEFAULT = 800_000n;
 const EVM_SWAP_FLAT_RESERVE = 0.0005;
 const _gasPriceCache = new Map<string, bigint>(); // chainId -> wei per gas
-async function evmSwapReserve(chainId: string): Promise<number> {
+async function evmSwapReserve(chainId: string, forBridge = false): Promise<number> {
   const net = NETWORKS[chainId];
   if (!net) return EVM_SWAP_FLAT_RESERVE;
   let gp = _gasPriceCache.get(chainId);
@@ -226,7 +233,8 @@ async function evmSwapReserve(chainId: string): Promise<number> {
     if (gp > 0n) _gasPriceCache.set(chainId, gp);
   }
   if (!gp || gp <= 0n) return EVM_SWAP_FLAT_RESERVE;
-  const feeWei = (SWAP_GAS_UNITS * gp * 12n) / 10n; // +20% headroom
+  const units = forBridge ? (BRIDGE_GAS_UNITS[chainId] ?? BRIDGE_GAS_UNITS_DEFAULT) : SWAP_GAS_UNITS;
+  const feeWei = (units * gp * 12n) / 10n; // +20% headroom
   const v = Number(ethers.formatUnits(feeWei, net.decimals));
   return Number.isFinite(v) && v > 0 ? v : EVM_SWAP_FLAT_RESERVE;
 }
@@ -522,6 +530,17 @@ function parseSwapError(msg: string, kind: "Swap" | "Bridge" = "Swap"): ParsedSw
       body: msg,
       hint: "The aggregator response failed a local security check, so it was never signed.",
       preSend: true,
+    };
+  }
+  // ethers "could not coalesce error" dumps the whole raw tx + RPC payload into
+  // the message when a node returns a nonstandard error (dRPC wraps rejections
+  // as code 19 "Temporary internal error"). Never show that blob to the user.
+  if (/could not coalesce error|temporary internal error/i.test(msg)) {
+    return {
+      title: "Network Node Error",
+      body: "The network node reported a temporary error while broadcasting the transaction. This is usually a node-side hiccup, not a problem with the transaction itself.",
+      hint: "Check your balance or activity before retrying. If it keeps failing, the balance may not cover the amount plus the full gas hold.",
+      preSend: false,
     };
   }
   return { title: `${kind} Failed`, body: msg, preSend: false };
@@ -1318,6 +1337,30 @@ export default function Swap() {
       }
       assertNativeValue(isNativeBridge, value, BigInt(fromAmtRaw));
 
+      // The node's admission check requires value + gasLimit × maxFeePerGas in
+      // the balance UP FRONT, even though the actual charge is far lower and
+      // the unused hold is refunded. A near-MAX native bridge on Arbitrum
+      // cleared the UI reserve but died at broadcast, and some RPCs (dRPC)
+      // mask that rejection as "temporary internal error" garbage. Check
+      // affordability here and fail with the real reason and exact shortfall
+      // before anything is signed.
+      const quotedGas = txReq.gasLimit ? BigInt(txReq.gasLimit) : 0n;
+      if (quotedGas > 0n) {
+        const prov = signer.provider as ethers.JsonRpcProvider;
+        const [bal, fd] = await Promise.all([prov.getBalance(wallet.address), prov.getFeeData()]);
+        const gasPrice = fd.maxFeePerGas ?? fd.gasPrice ?? 0n;
+        const upfront = value + quotedGas * gasPrice;
+        if (gasPrice > 0n && bal < upfront) {
+          const fmt = (w: bigint) =>
+            Number(ethers.formatEther(w)).toFixed(8).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+          throw new Error(
+            `Insufficient balance for gas: the network holds ${fmt(quotedGas * gasPrice)} ${fromNet.symbol} for gas up front ` +
+            `(most is refunded after the bridge mines), so this bridge needs ${fmt(upfront)} ${fromNet.symbol} available ` +
+            `but the wallet has ${fmt(bal)}. Lower the amount by about ${fmt(upfront - bal)} ${fromNet.symbol} and try again.`,
+          );
+        }
+      }
+
       // Approve the bridge contract if spending an ERC-20 (exact amount only).
       const approvalAddr = qData?.estimate?.approvalAddress;
       const bridgeApproval = !!(fromToken.address && approvalAddr);
@@ -1722,7 +1765,7 @@ export default function Swap() {
                       const isNativeSol = fromToken.chainId === "solana" && !fromToken.address;
                       const isNativeEvm = !fromToken.address && !!NETWORKS[fromToken.chainId];
                       const reserve = isNativeSol ? SOL_FEE_RESERVE
-                        : isNativeEvm ? await evmSwapReserve(fromToken.chainId)
+                        : isNativeEvm ? await evmSwapReserve(fromToken.chainId, isBridge)
                         : 0;
                       const cap = Math.max(0, fromBalance - reserve);
                       const amt = Math.min(fromBalance * p, cap);
