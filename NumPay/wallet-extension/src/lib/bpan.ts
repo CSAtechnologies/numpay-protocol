@@ -165,6 +165,14 @@ export interface BPANResolution {
   pinnedBefore: string | null;
   sourcesAgreed: number;
   sourcesQueried: number;
+  /**
+   * ADVISORY ONLY. True when the finalized read confirmed "no mapping" but the
+   * un-finalized chain head already shows one: the owner wrote the mapping
+   * within the last ~15 minutes and it is still crossing Ethereum finality.
+   * Callers may use this to word the "not found" message honestly; the
+   * pending value itself is never exposed and never becomes a send target.
+   */
+  pendingFinality?: boolean;
 }
 
 function pinKey(number: string, chain: string): string {
@@ -278,6 +286,26 @@ export async function resolveBPANChecked(
     address = r.chosen.length > 0 ? r.chosen : null;
   }
 
+  // Advisory peek at the un-finalized head: a mapping written in the last ~15
+  // minutes exists at "latest" but not yet at "finalized", and telling the
+  // user "no mapping, ask the owner to add one" right after they added one is
+  // actively misleading. This read only changes the wording of the not-found
+  // message — the pending value is never returned, so it can never become a
+  // send target, and a single provider is acceptable for it.
+  let pendingFinality = false;
+  if (!address) {
+    try {
+      const c = getMainnetBPANContract();
+      const keys = chain !== BPAN_EVM_KEY && isEvmBpanChain(chain) ? [chain, BPAN_EVM_KEY] : [chain];
+      for (const k of keys) {
+        const v: string = await withTimeout(
+          c.getWalletMapping(BigInt(number), k, { blockTag: "latest" }), 8000,
+        );
+        if ((v ?? "").trim().length > 0) { pendingFinality = true; break; }
+      }
+    } catch { /* advisory only — fall through to the plain not-found message */ }
+  }
+
   const { agreed, queried: sourcesQueried } = r;
 
   // Trust-on-first-use pin. Compare the agreed address to the last one we saw
@@ -300,7 +328,7 @@ export async function resolveBPANChecked(
     }
   } catch { /* storage unavailable — pin is best-effort, not a hard dependency */ }
 
-  return { address, confidence: "high", changed, pinnedBefore, sourcesAgreed: agreed, sourcesQueried };
+  return { address, confidence: "high", changed, pinnedBefore, sourcesAgreed: agreed, sourcesQueried, pendingFinality };
 }
 
 /**

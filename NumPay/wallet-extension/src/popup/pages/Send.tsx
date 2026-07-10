@@ -443,6 +443,15 @@ export default function Send() {
             });
             setBpanChangeAck(false);
           }
+        } else if (res.pendingFinality) {
+          // The mapping exists at the chain head but has not crossed Ethereum
+          // finality yet (~15 min). Payment destinations only ever resolve
+          // from finalized state, so name the real situation instead of
+          // telling the user to add a mapping they just added.
+          setError(
+            `A ${chainInfo.name} mapping for BPAN ${formatBPAN(clean)} was added recently and is ` +
+            `waiting for network confirmation. This takes about 15 minutes. Try again shortly.`
+          );
         } else {
           setError(
             `No ${chainInfo.name} address mapped to BPAN ${formatBPAN(clean)}. ` +
