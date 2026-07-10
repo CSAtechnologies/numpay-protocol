@@ -8,18 +8,18 @@ import {
   TrendingUpIcon, AssetIcon, RefreshIcon, SwapIcon,
 } from "../components/Icons";
 import TxRow from "../components/TxRow";
-import { NETWORKS } from "@/lib/networks";
-import { type TxRecord, fetchChainHistory, tokenMetaFromList, mergeLoggedTxs, txInvolvesAsset } from "@/lib/txHistory";
-import { loadTxLog, loggedToRecords } from "@/lib/txLog";
-import { getItem, setItem } from "@/lib/storage";
-import { usdToDisplayCurrency } from "@/lib/currency";
+import { NETWORKS } from "@numpay/core/networks";
+import { type TxRecord, fetchChainHistory, tokenMetaFromList, mergeLoggedTxs, txInvolvesAsset } from "@numpay/core/txHistory";
+import { loadTxLog, loggedToRecords } from "@numpay/core/txLog";
+import { getItem, setItem } from "@numpay/core/storage";
+import { usdToDisplayCurrency } from "@numpay/core/currency";
 import {
   type MarketData,
   resolveMarketSource,
   marketSourceKey,
   loadMarketData,
   loadChart,
-} from "@/lib/tokenMarket";
+} from "@numpay/core/tokenMarket";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 

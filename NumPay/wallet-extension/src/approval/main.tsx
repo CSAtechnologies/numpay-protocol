@@ -1,8 +1,9 @@
+import "@/platform/init";
 import React, { useEffect, useState, useRef } from "react";
 import ReactDOM from "react-dom/client";
 import { ethers } from "ethers";
-import { NETWORKS, type Network } from "@/lib/networks";
-import { getCustomChains } from "@/lib/customChains";
+import { NETWORKS, type Network } from "@numpay/core/networks";
+import { getCustomChains } from "@numpay/core/customChains";
 import {
   isLocked,
   unlockActiveVault,
@@ -10,8 +11,8 @@ import {
   getSigner,
   SESSION_KEY,
   type WalletData,
-} from "@/lib/wallet";
-import { setSession, getSession } from "@/lib/storage";
+} from "@numpay/core/wallet";
+import { setSession, getSession } from "@numpay/core/storage";
 import {
   MSG_DAPP_DECISION,
   type DappPending,
@@ -30,7 +31,7 @@ import {
   signSolanaTransaction,
   simulateSolanaTx,
   type SolTxInspection,
-} from "@/lib/chains/solana";
+} from "@numpay/core/chains/solana";
 import { decodeSolSignMessage, bytesToBase64, base64ToBytes } from "@/lib/dapp/solDecode";
 import nacl from "tweetnacl";
 import {

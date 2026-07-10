@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { decryptAllVaults, getActiveId } from "@/lib/wallet";
+import { decryptAllVaults, getActiveId } from "@numpay/core/wallet";
 import { cacheUnlockedWallets } from "../hooks/useWallet";
 import AnimatedLogo from "../components/AnimatedLogo";
 

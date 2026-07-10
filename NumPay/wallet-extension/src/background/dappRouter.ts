@@ -42,9 +42,9 @@ import {
   rpcServesChain,
   buildAddChainCandidate,
 } from "../lib/dapp/chainOps";
-import { setItem } from "../lib/storage";
-import { saveCustomChain } from "../lib/customChains";
-import { NETWORKS } from "../lib/networks";
+import { setItem } from "@numpay/core/storage";
+import { saveCustomChain } from "@numpay/core/customChains";
+import { NETWORKS } from "@numpay/core/networks";
 
 const VAULTS_KEY = "numpay_vaults";
 const ACTIVE_ID_KEY = "numpay_active_id";

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { importFromMnemonic, importFromPrivateKey, encryptAndSave } from "@/lib/wallet";
+import { importFromMnemonic, importFromPrivateKey, encryptAndSave } from "@numpay/core/wallet";
 import { cacheWalletSession } from "../hooks/useWallet";
 import { ArrowLeftIcon } from "../components/Icons";
 import AnimatedLogo from "../components/AnimatedLogo";

@@ -3,7 +3,7 @@ import { useWallet } from "../hooks/useWallet";
 import Layout from "../components/Layout";
 import { ExternalLinkIcon, RefreshIcon, ActivityIcon } from "../components/Icons";
 import TxRow from "../components/TxRow";
-import { NETWORKS } from "@/lib/networks";
+import { NETWORKS } from "@numpay/core/networks";
 import {
   type TxRecord,
   fetchChainHistory,
@@ -11,9 +11,9 @@ import {
   tokenMetaFromList,
   mergeLoggedTxs,
   SUPPORTED,
-} from "@/lib/txHistory";
-import { type LoggedTx, loadTxLog, loggedToRecords } from "@/lib/txLog";
-import { reconcilePending, speedUpTx, cancelTx } from "@/lib/pendingTx";
+} from "@numpay/core/txHistory";
+import { type LoggedTx, loadTxLog, loggedToRecords } from "@numpay/core/txLog";
+import { reconcilePending, speedUpTx, cancelTx } from "@numpay/core/pendingTx";
 
 const NON_EVM_NAMES: Record<string, string> = {
   bitcoin: "Bitcoin", solana: "Solana", sui: "Sui",

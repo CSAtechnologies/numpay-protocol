@@ -1,17 +1,17 @@
 import { useState, useEffect, useMemo, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { fetchDexPrices, fetchTokenLogos } from "@/lib/tokenMarket";
-import { getTokenLogo } from "@/lib/logoCache";
+import { fetchDexPrices, fetchTokenLogos } from "@numpay/core/tokenMarket";
+import { getTokenLogo } from "@numpay/core/logoCache";
 import {
   lockWallet, addEncryptedWallet,
   createWallet, importFromMnemonic, importFromPrivateKey,
   type VaultMeta,
-} from "@/lib/wallet";
-import { NETWORKS, BPAN_CHAINS } from "@/lib/networks";
-import { findOwnedBPANs } from "@/lib/bpan";
-import { type Rates } from "@/lib/currency";
-import { classifyToken } from "@/lib/tokenSpam";
-import { loadHiddenTokens, setTokenHidden, tokenHideKey } from "@/lib/hiddenTokens";
+} from "@numpay/core/wallet";
+import { NETWORKS, BPAN_CHAINS } from "@numpay/core/networks";
+import { findOwnedBPANs } from "@numpay/core/bpan";
+import { type Rates } from "@numpay/core/currency";
+import { classifyToken } from "@numpay/core/tokenSpam";
+import { loadHiddenTokens, setTokenHidden, tokenHideKey } from "@numpay/core/hiddenTokens";
 
 const SYMBOL_TO_COINGECKO: Record<string, string> = {
   ETH: "ethereum", BTC: "bitcoin", SOL: "solana", SUI: "sui",

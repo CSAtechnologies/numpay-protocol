@@ -1,19 +1,19 @@
 import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import { useWallet } from "../hooks/useWallet";
-import { type NonEvmWallet } from "@/lib/chains";
+import { type NonEvmWallet } from "@numpay/core/chains";
 import {
   getBPANContract, isValidBPAN, formatBPAN,
   getAllBPANMappings, isBPANRegistered, getBPANOwner,
   registerBPAN, setWalletMapping, findOwnedBPANs, getOwnedBPANCount,
   type BPANReadTarget,
-} from "@/lib/bpan";
+} from "@numpay/core/bpan";
 import {
   BPAN_MAINNET_CONTRACT, BPAN_SEPOLIA_CONTRACT,
   BPAN_MAINNET_RPC, NETWORKS, BPAN_CHAINS,
-} from "@/lib/networks";
-import { getSigner, isLocked } from "@/lib/wallet";
-import { isValidChainAddress } from "@/lib/addressValidation";
+} from "@numpay/core/networks";
+import { getSigner, isLocked } from "@numpay/core/wallet";
+import { isValidChainAddress } from "@numpay/core/addressValidation";
 import Layout from "../components/Layout";
 import {
   SearchIcon, CheckIcon, ExternalLinkIcon, ChevronDownIcon,

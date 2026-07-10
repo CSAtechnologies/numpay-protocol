@@ -5,26 +5,16 @@
  * Reference: https://github.com/satoshilabs/slips/blob/master/slip-0010.md
  */
 
+import { hmac } from "@noble/hashes/hmac";
+import { sha512 } from "@noble/hashes/sha512";
+
 const ED25519_SEED = "ed25519 seed";
 
-/**
- * HMAC-SHA512 using Web Crypto API.
- */
-/** Safely convert a Uint8Array to a plain ArrayBuffer (avoids SharedArrayBuffer TS errors). */
-function toBuffer(u8: Uint8Array): ArrayBuffer {
-  return u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength) as ArrayBuffer;
-}
-
+// HMAC-SHA512 via @noble/hashes, not crypto.subtle: Hermes (React Native) has
+// no SubtleCrypto, and WebCrypto HMAC protected nothing here anyway (the key
+// material passes through JS either way). Kept async so callers are unchanged.
 async function hmacSha512(key: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
-  const cryptoKey = await crypto.subtle.importKey(
-    "raw",
-    toBuffer(key),
-    { name: "HMAC", hash: "SHA-512" },
-    false,
-    ["sign"]
-  );
-  const sig = await crypto.subtle.sign("HMAC", cryptoKey, toBuffer(data));
-  return new Uint8Array(sig);
+  return hmac(sha512, key, data);
 }
 
 /**

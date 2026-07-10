@@ -20,17 +20,17 @@
 //   when its cache is >12 min old.
 // - fetchRates has its own 15-min cache and is effectively free here.
 
-import { sweepEvmNativeBalances, EVM_CACHE_PFX, NONEVMCACHE_PFX, type ChainBalance } from "../lib/balanceSweep";
+import { sweepEvmNativeBalances, EVM_CACHE_PFX, NONEVMCACHE_PFX, type ChainBalance } from "@numpay/core/balanceSweep";
 import {
   fetchNonEvmBalancesByAddress, fetchSolanaTokens, fetchTronTokens, fetchSuiTokens,
   type NonEvmAddressMap, type NonEvmChain,
-} from "../lib/chains";
-import { sweepAllChainTokens, AUTOTOK_CACHE_PFX } from "../lib/autoTokens";
-import { fetchRates } from "../lib/currency";
-import { getCustomChains } from "../lib/customChains";
-import { getWatchAddresses } from "../lib/watchAddresses";
-import { getItem, setItem } from "../lib/storage";
-import type { Network } from "../lib/networks";
+} from "@numpay/core/chains";
+import { sweepAllChainTokens, AUTOTOK_CACHE_PFX } from "@numpay/core/autoTokens";
+import { fetchRates } from "@numpay/core/currency";
+import { getCustomChains } from "@numpay/core/customChains";
+import { getWatchAddresses } from "@numpay/core/watchAddresses";
+import { getItem, setItem } from "@numpay/core/storage";
+import type { Network } from "@numpay/core/networks";
 
 const ALARM_NAME = "numpay-balance-refresh";
 const NATIVE_STALE_MS = 50_000;        // just under the 1-min alarm period

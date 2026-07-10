@@ -1,6 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { isLocked, touchActivity, lockWallet } from "@/lib/wallet";
+import { isLocked, touchActivity, lockWallet } from "@numpay/core/wallet";
 import { bootData } from "./boot";
 import { CurrencyProvider } from "./contexts/CurrencyContext";
 import { WalletProvider } from "./hooks/useWallet";

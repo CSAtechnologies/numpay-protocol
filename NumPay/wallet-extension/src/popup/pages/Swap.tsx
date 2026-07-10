@@ -3,19 +3,19 @@ import { useLocation } from "react-router-dom";
 import { ethers } from "ethers";
 import { useWallet } from "../hooks/useWallet";
 import { useCurrency } from "../hooks/useCurrency";
-import { usdToDisplayCurrency, getUsdPrice } from "@/lib/currency";
-import { NETWORKS } from "@/lib/networks";
-import { DEFAULT_TOKENS } from "@/lib/tokens";
-import { markBalancesDirty } from "@/lib/balanceBus";
-import { logTx } from "@/lib/txLog";
-import { type NonEvmChain } from "@/lib/chains";
-import { fetchJupiterQuote, executeJupiterSwap, signSimulateSendSolanaTx, resolveSolanaToken, hasTokenAccount, WSOL_MINT, SOLANA_SWAP_TOKENS } from "@/lib/chains/solana";
-import { getSigner, isLocked } from "@/lib/wallet";
-import { getCustomTokens, upsertCustomToken } from "@/lib/customTokens";
+import { usdToDisplayCurrency, getUsdPrice } from "@numpay/core/currency";
+import { NETWORKS } from "@numpay/core/networks";
+import { DEFAULT_TOKENS } from "@numpay/core/tokens";
+import { markBalancesDirty } from "@numpay/core/balanceBus";
+import { logTx } from "@numpay/core/txLog";
+import { type NonEvmChain } from "@numpay/core/chains";
+import { fetchJupiterQuote, executeJupiterSwap, signSimulateSendSolanaTx, resolveSolanaToken, hasTokenAccount, WSOL_MINT, SOLANA_SWAP_TOKENS } from "@numpay/core/chains/solana";
+import { getSigner, isLocked } from "@numpay/core/wallet";
+import { getCustomTokens, upsertCustomToken } from "@numpay/core/customTokens";
 import {
   assertTrustedSpender, assertTrustedRouter, assertChainId,
   assertIsContract, assertNativeValue, simulateOrThrow,
-} from "@/lib/swapGuards";
+} from "@numpay/core/swapGuards";
 import Layout from "../components/Layout";
 import AlertCard from "../components/AlertCard";
 import TxResultOverlay, { type TxFxStatus } from "../components/TxResultOverlay";

@@ -193,7 +193,7 @@ export interface PendingSwitchChain extends PendingBase {
 
 export interface PendingAddChain extends PendingBase {
   type: "addChain";
-  chain: import("../customChains").CustomChain; // validated candidate to save
+  chain: import("@numpay/core/customChains").CustomChain; // validated candidate to save
 }
 
 // Solana connect approval. Unlike EVM connect, the router does not know the

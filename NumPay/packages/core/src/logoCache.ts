@@ -9,7 +9,10 @@
 //
 // It is a tiny subscribable store: setTokenLogo notifies subscribers so icons
 // that already rendered pick up a logo the moment it resolves, and the map is
-// persisted to chrome.storage.local so logos survive a popup reopen.
+// persisted through the platform KVStore (chrome.storage.local on the
+// extension) so logos survive a popup reopen.
+
+import { getItem, setItem } from "./storage";
 
 const STORAGE_KEY = "numpay_token_logos";
 
@@ -45,16 +48,13 @@ export function setTokenLogo(address: string | undefined, url: string | undefine
 }
 
 function persist(): void {
-  try {
-    if (typeof chrome === "undefined" || !chrome.storage?.local) return;
-    if (persistTimer) return; // coalesce a burst of sets into one write
-    persistTimer = setTimeout(() => {
-      persistTimer = null;
-      const obj: Record<string, string> = {};
-      for (const [k, v] of mem) obj[k] = v;
-      try { chrome.storage.local.set({ [STORAGE_KEY]: obj }); } catch { /* ignore */ }
-    }, 500);
-  } catch { /* not in an extension context */ }
+  if (persistTimer) return; // coalesce a burst of sets into one write
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    const obj: Record<string, string> = {};
+    for (const [k, v] of mem) obj[k] = v;
+    void setItem(STORAGE_KEY, JSON.stringify(obj)).catch(() => { /* cache only */ });
+  }, 500);
 }
 
 /** Load persisted logos into memory once, then notify so live icons refresh. */
@@ -62,16 +62,18 @@ export async function primeLogoCache(): Promise<void> {
   if (loaded) return;
   loaded = true;
   try {
-    if (typeof chrome === "undefined" || !chrome.storage?.local) return;
-    const got = await chrome.storage.local.get(STORAGE_KEY);
-    const obj = got?.[STORAGE_KEY] as Record<string, string> | undefined;
-    if (!obj) return;
+    const raw = await getItem(STORAGE_KEY);
+    if (!raw) return;
+    // Pre-extraction builds stored the map as a raw object directly in
+    // chrome.storage.local; the KVStore path stores a JSON string. Accept both
+    // so an upgraded extension keeps its cache.
+    const obj = (typeof raw === "string" ? JSON.parse(raw) : raw) as Record<string, string>;
     let added = false;
     for (const [k, v] of Object.entries(obj)) {
-      if (v && !mem.has(k)) { mem.set(k, v); added = true; }
+      if (typeof v === "string" && v && !mem.has(k)) { mem.set(k, v); added = true; }
     }
     if (added) notify();
-  } catch { /* ignore */ }
+  } catch { /* ignore: cache only */ }
 }
 
 // Warm the cache as soon as this module loads in the popup.

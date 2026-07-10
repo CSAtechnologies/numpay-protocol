@@ -63,7 +63,7 @@ const sign = await bundle("src/lib/dapp/signDecode.ts", "signDecode");
 const tx = await bundle("src/lib/dapp/txDecode.ts", "txDecode");
 const chain = await bundle("src/lib/dapp/chainOps.ts", "chainOps");
 const sol = await bundle("src/lib/dapp/solDecode.ts", "solDecode");
-const solChain = await bundle("src/lib/chains/solana.ts", "solanaChain");
+const solChain = await bundle("../packages/core/src/chains/solana.ts", "solanaChain");
 
 // ── signDecode.decodePersonalSignMessage: never throw, correct utf8 detection ──
 {

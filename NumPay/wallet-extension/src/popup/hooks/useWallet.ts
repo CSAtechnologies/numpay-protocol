@@ -3,16 +3,16 @@ import {
   createContext, useContext, createElement, type ReactNode,
 } from "react";
 import { ethers } from "ethers";
-import { type WalletData, type VaultMeta, setActiveId, updateWalletAvatar, touchActivity, unlockActiveVault, SESSION_KEY } from "@/lib/wallet";
+import { type WalletData, type VaultMeta, setActiveId, updateWalletAvatar, touchActivity, unlockActiveVault, SESSION_KEY } from "@numpay/core/wallet";
 import { notifyDappState } from "@/lib/dapp/notify";
-import { deriveSolanaAddress } from "@/lib/chains/solana";
-import { getItem, setItem, getSession, setSession } from "@/lib/storage";
+import { deriveSolanaAddress } from "@numpay/core/chains/solana";
+import { getItem, setItem, getSession, setSession } from "@numpay/core/storage";
 import {
   balancesDirty, subscribeBalanceBus, overlayVersion, hasPendingOverlays, pendingDeltaFor,
   clearBalanceOverlays,
-} from "@/lib/balanceBus";
-import { NETWORKS, DEFAULT_NETWORK, type Network } from "@/lib/networks";
-import { DEFAULT_TOKENS, getTokenBalance, type Token } from "@/lib/tokens";
+} from "@numpay/core/balanceBus";
+import { NETWORKS, DEFAULT_NETWORK, type Network } from "@numpay/core/networks";
+import { DEFAULT_TOKENS, getTokenBalance, type Token } from "@numpay/core/tokens";
 import {
   deriveNonEvmAddresses,
   fetchNonEvmBalances,
@@ -21,12 +21,12 @@ import {
   fetchSuiTokens,
   type NonEvmWallet,
   type NonEvmChain,
-} from "@/lib/chains";
-import { getCustomTokens } from "@/lib/customTokens";
-import { getCustomChains, type CustomChain } from "@/lib/customChains";
-import { sweepEvmNativeBalances, type ChainBalance } from "@/lib/balanceSweep";
-import { updateWatchAddresses } from "@/lib/watchAddresses";
-import { sweepAllChainTokens } from "@/lib/autoTokens";
+} from "@numpay/core/chains";
+import { getCustomTokens } from "@numpay/core/customTokens";
+import { getCustomChains, type CustomChain } from "@numpay/core/customChains";
+import { sweepEvmNativeBalances, type ChainBalance } from "@numpay/core/balanceSweep";
+import { updateWatchAddresses } from "@numpay/core/watchAddresses";
+import { sweepAllChainTokens } from "@numpay/core/autoTokens";
 import {
   bootData, takeBootBalanceCache, takeBootNonEvmCache, takeBootSession,
   NETWORK_KEY, ACTIVE_CHAIN_KEY, ASSET_FILTER_KEY, EVM_CACHE_PFX, NONEVMCACHE_PFX,

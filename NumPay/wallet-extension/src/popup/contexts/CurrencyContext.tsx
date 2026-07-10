@@ -8,7 +8,7 @@ import {
   getUsdPrice,
   type Currency,
   type Rates,
-} from "@/lib/currency";
+} from "@numpay/core/currency";
 
 interface CurrencyCtx {
   currencyCode: string;

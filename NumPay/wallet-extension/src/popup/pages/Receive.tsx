@@ -4,8 +4,8 @@ import { useLocation } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
 import Layout from "../components/Layout";
 import { CopyIcon, CheckIcon, ChevronDownIcon, ChainIcon } from "../components/Icons";
-import { NETWORKS, DEFAULT_NETWORK } from "@/lib/networks";
-import { chainLogoAsset } from "@/lib/icons/assets";
+import { NETWORKS, DEFAULT_NETWORK } from "@numpay/core/networks";
+import { chainLogoAsset } from "@numpay/core/icons/assets";
 
 interface ReceiveChain {
   id: string;

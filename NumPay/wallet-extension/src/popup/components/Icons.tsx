@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useSyncExternalStore } from "react";
-import { ICON_DATA } from "../../lib/icons/iconData";
-import { ICON_GLYPHS } from "../../lib/icons/iconGlyphs";
-import { VENDORED_TOKENS, VENDORED_CHAINS } from "../../lib/icons/vendoredLogos";
-import { assetUrl } from "../../lib/icons/assets";
-import { NETWORKS } from "../../lib/networks";
-import { subscribeLogos, getTokenLogo } from "../../lib/logoCache";
+import { ICON_DATA } from "@numpay/core/icons/iconData";
+import { ICON_GLYPHS } from "@numpay/core/icons/iconGlyphs";
+import { VENDORED_TOKENS, VENDORED_CHAINS } from "@numpay/core/icons/vendoredLogos";
+import { assetUrl } from "@numpay/core/icons/assets";
+import { NETWORKS } from "@numpay/core/networks";
+import { subscribeLogos, getTokenLogo } from "@numpay/core/logoCache";
 
 // Live-read the shared logo cache: an address whose logo resolves later (from a
 // DexScreener price/market fetch) re-renders the icon so the real logo appears.

@@ -4,7 +4,7 @@
 // (send / receive / swap / bridge); swap and bridge get their own label, colour,
 // and a "from → to" subtitle.
 
-import { type TxRecord, kindOf, type TxKind } from "@/lib/txHistory";
+import { type TxRecord, kindOf, type TxKind } from "@numpay/core/txHistory";
 import { AssetIcon, ExternalLinkIcon } from "./Icons";
 
 function shortAddr(addr: string): string {

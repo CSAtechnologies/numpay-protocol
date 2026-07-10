@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import Layout from "../components/Layout";
-import { NETWORKS } from "@/lib/networks";
-import { BPAN_CHAINS } from "@/lib/networks";
-import { getCustomTokens, addCustomToken, removeCustomToken, type CustomToken } from "@/lib/customTokens";
-import { getCustomChains, saveCustomChain, removeCustomChain, type CustomChain } from "@/lib/customChains";
-import { SOL_RPC } from "@/lib/chains/solana";
+import { NETWORKS } from "@numpay/core/networks";
+import { BPAN_CHAINS } from "@numpay/core/networks";
+import { getCustomTokens, addCustomToken, removeCustomToken, type CustomToken } from "@numpay/core/customTokens";
+import { getCustomChains, saveCustomChain, removeCustomChain, type CustomChain } from "@numpay/core/customChains";
+import { SOL_RPC } from "@numpay/core/chains/solana";
 
 const ERC20_ABI = [
   "function symbol() view returns (string)",

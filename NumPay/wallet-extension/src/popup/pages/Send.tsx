@@ -7,19 +7,19 @@ import { useWallet } from "../hooks/useWallet";
 import {
   isBPANInput, isValidBPAN, resolveBPANChecked, acceptBPANChange,
   BPANConsensusError, BPANInsufficientConfirmationError, formatBPAN,
-} from "@/lib/bpan";
-import { BPAN_CHAINS, DEFAULT_NETWORK, NETWORKS, type BPANChainId, type Network } from "@/lib/networks";
-import { getSigner, isLocked } from "@/lib/wallet";
-import { sendToken, type Token } from "@/lib/tokens";
-import { markBalancesDirty } from "@/lib/balanceBus";
-import { logTx, updateTx } from "@/lib/txLog";
-import { type Contact, loadContacts, saveContact, deleteContact, isSaved } from "@/lib/addressBook";
+} from "@numpay/core/bpan";
+import { BPAN_CHAINS, DEFAULT_NETWORK, NETWORKS, type BPANChainId, type Network } from "@numpay/core/networks";
+import { getSigner, isLocked } from "@numpay/core/wallet";
+import { sendToken, type Token } from "@numpay/core/tokens";
+import { markBalancesDirty } from "@numpay/core/balanceBus";
+import { logTx, updateTx } from "@numpay/core/txLog";
+import { type Contact, loadContacts, saveContact, deleteContact, isSaved } from "@numpay/core/addressBook";
 import {
   sendSolanaTransfer, sendTronTransfer, sendSuiTransfer,
   sendSolanaTokenTransfer, sendTronTokenTransfer, sendSuiTokenTransfer,
-} from "@/lib/chains";
-import { isValidNonEvmAddress } from "@/lib/addressValidation";
-import { classifyToken } from "@/lib/tokenSpam";
+} from "@numpay/core/chains";
+import { isValidNonEvmAddress } from "@numpay/core/addressValidation";
+import { classifyToken } from "@numpay/core/tokenSpam";
 import Layout from "../components/Layout";
 import AlertCard from "../components/AlertCard";
 import TxResultOverlay, { type TxFxStatus } from "../components/TxResultOverlay";
@@ -433,7 +433,7 @@ export default function Send() {
       const seq = ++resolveSeq.current;
       setResolving(true);
       try {
-        const { resolveSns } = await import("@/lib/sns");
+        const { resolveSns } = await import("@numpay/core/sns");
         const addr = await resolveSns(value.trim());
         if (seq !== resolveSeq.current) return; // superseded by a newer keystroke
         if (addr && isValidNonEvmAddress(addr, "solana")) {

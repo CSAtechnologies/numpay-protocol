@@ -1,3 +1,6 @@
+// Platform wiring first: injects env + chrome storage into @numpay/core
+import "@/platform/init";
+
 // NumPay Background Service Worker
 // Handles auto-lock timer and extension lifecycle.
 //

@@ -10,9 +10,9 @@
 //   Tron: native TRX + TRC-20 token transfers.
 //   Bitcoin / Litecoin / XRP / Sui: native only.
 
-import { NETWORKS } from "@/lib/networks";
-import { ALCHEMY_KEY, MORALIS_KEY } from "@/lib/env";
-import { SOL_RPC } from "@/lib/chains/solana";
+import { NETWORKS } from "./networks";
+import { ALCHEMY_KEY, MORALIS_KEY } from "./env";
+import { SOL_RPC } from "./chains/solana";
 
 // send/receive = a plain transfer; swap = token→token on one chain; bridge =
 // same/related asset moved across chains. `type` stays as the raw direction

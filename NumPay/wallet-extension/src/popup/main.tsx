@@ -1,5 +1,8 @@
-// First import on purpose: kicks off the parallel storage preload (session,
-// settings, balance caches) while the rest of the bundle is still evaluating.
+// Platform wiring must beat everything: it injects env + chrome storage into
+// @numpay/core before any core module evaluates (boot reads storage via core).
+import "@/platform/init";
+// Kicks off the parallel storage preload (session, settings, balance caches)
+// while the rest of the bundle is still evaluating.
 import "./boot";
 import React from "react";
 import ReactDOM from "react-dom/client";

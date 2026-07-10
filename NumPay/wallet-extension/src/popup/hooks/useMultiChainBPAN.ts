@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { ethers } from "ethers";
-import { getMainnetBPANContract } from "@/lib/bpan";
-import { NETWORKS, type Network } from "@/lib/networks";
+import { getMainnetBPANContract } from "@numpay/core/bpan";
+import { NETWORKS, type Network } from "@numpay/core/networks";
 
 export interface BPANChainBalance {
   chainId: string;

@@ -2,7 +2,7 @@
 // chain. The page never supplies the endpoint, so it cannot redirect reads to a
 // hostile node. Only methods on the READ_METHODS allowlist reach this.
 
-import { NETWORKS, DEFAULT_NETWORK } from "../networks";
+import { NETWORKS, DEFAULT_NETWORK } from "@numpay/core/networks";
 import { READ_METHODS, ERR, type RpcError } from "./types";
 
 // The EVM chain exposed to dApps. The wallet's active chain may be non-EVM

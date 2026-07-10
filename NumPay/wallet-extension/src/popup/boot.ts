@@ -13,14 +13,14 @@
 // when the popup opened locked it is null, and useWallet re-reads it fresh
 // after the unlock flow writes a new session.
 
-import { hasWallet, isLocked, listVaultMeta, getActiveId, SESSION_KEY, type VaultMeta } from "@/lib/wallet";
-import { getItem, getSession } from "@/lib/storage";
-import { getCustomChains, type CustomChain } from "@/lib/customChains";
+import { hasWallet, isLocked, listVaultMeta, getActiveId, SESSION_KEY, type VaultMeta } from "@numpay/core/wallet";
+import { getItem, getSession } from "@numpay/core/storage";
+import { getCustomChains, type CustomChain } from "@numpay/core/customChains";
 
 // Popup settings keys, owned here; the per-address cache keys live in
 // lib/balanceSweep (shared with the background refresher) and are re-exported
 // so useWallet keeps a single import site.
-import { EVM_CACHE_PFX, NONEVMCACHE_PFX } from "@/lib/balanceSweep";
+import { EVM_CACHE_PFX, NONEVMCACHE_PFX } from "@numpay/core/balanceSweep";
 export { EVM_CACHE_PFX, NONEVMCACHE_PFX };
 export const NETWORK_KEY      = "numpay_network";
 export const ACTIVE_CHAIN_KEY = "numpay_active_chain";

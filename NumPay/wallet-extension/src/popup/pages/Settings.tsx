@@ -3,13 +3,13 @@ import {
   lockWallet, deleteWallet, deleteOneWallet,
   addEncryptedWallet, createWallet, importFromMnemonic, importFromPrivateKey,
   decryptVault, type VaultMeta,
-} from "@/lib/wallet";
-import { CURRENCIES } from "@/lib/currency";
+} from "@numpay/core/wallet";
+import { CURRENCIES } from "@numpay/core/currency";
 import { useWallet } from "../hooks/useWallet";
 import { useCurrency } from "../hooks/useCurrency";
 import { useTheme } from "../hooks/useTheme";
-import { removeItem, removeSession } from "@/lib/storage";
-import { SESSION_KEY } from "@/lib/wallet";
+import { removeItem, removeSession } from "@numpay/core/storage";
+import { SESSION_KEY } from "@numpay/core/wallet";
 import { listOrigins, revoke as revokeOrigin } from "@/lib/dapp/permissions";
 import { notifyDappState } from "@/lib/dapp/notify";
 import Layout from "../components/Layout";

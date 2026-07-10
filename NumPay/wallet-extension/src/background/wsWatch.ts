@@ -25,11 +25,11 @@
 // app) go into a 15-min cooldown instead of hammering reconnects.
 
 import { ethers } from "ethers";
-import { NETWORKS } from "../lib/networks";
-import { ALCHEMY_KEY, HELIUS_KEY } from "../lib/env";
-import { ALCHEMY_CHAINS, AUTOTOK_CACHE_PFX, type AutoToken } from "../lib/autoTokens";
-import { getWatchAddresses, type WatchAddresses } from "../lib/watchAddresses";
-import { getItem, setItem } from "../lib/storage";
+import { NETWORKS } from "@numpay/core/networks";
+import { ALCHEMY_KEY, HELIUS_KEY } from "@numpay/core/env";
+import { ALCHEMY_CHAINS, AUTOTOK_CACHE_PFX, type AutoToken } from "@numpay/core/autoTokens";
+import { getWatchAddresses, type WatchAddresses } from "@numpay/core/watchAddresses";
+import { getItem, setItem } from "@numpay/core/storage";
 import { forceRefreshEvm, forceRefreshNonEvm, hasPopupOpen } from "./balanceRefresher";
 
 const WS_ALARM = "numpay-ws-ensure";

@@ -3,8 +3,8 @@
 // resolve chain requests before/after the approval window. The window only adds
 // the runtime host-permission grant (which needs a user gesture).
 
-import { NETWORKS } from "../networks";
-import { getCustomChains, type CustomChain } from "../customChains";
+import { NETWORKS } from "@numpay/core/networks";
+import { getCustomChains, type CustomChain } from "@numpay/core/customChains";
 import { ERR, type RpcError } from "./types";
 
 function rpcErr(code: number, message: string): RpcError {
