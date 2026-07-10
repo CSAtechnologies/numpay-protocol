@@ -218,11 +218,24 @@ const SWAP_GAS_UNITS = 350_000n;
 // near-MAX native bridge unsendable there. Other chains quote far less.
 const BRIDGE_GAS_UNITS: Record<string, bigint> = { arbitrum: 6_000_000n };
 const BRIDGE_GAS_UNITS_DEFAULT = 800_000n;
-const EVM_SWAP_FLAT_RESERVE = 0.0005;
+// Ceiling for a route's fee-on-top native messaging fee (Stargate/LayerZero
+// style). Real fees are cents on L2s and at most a couple of dollars from L1,
+// so $5 bounds the worst-case loss from a tampered/inflated quote while
+// clearing every legitimate route.
+const BRIDGE_FEE_CAP_USD = 5;
+// Flat fallback when live fee data is unreachable. Ethereum L1 gas is real
+// money; everywhere else a one-size 0.0005 (~$1.25 in ETH) dwarfed the true
+// cost and zeroed MAX for small L2 balances. Under-reserving on the fallback
+// path only means MAX fails at broadcast with an honest insufficient-funds
+// message and the user lowers the amount.
+const EVM_SWAP_FLAT_RESERVE_L1 = 0.0005;
+const EVM_SWAP_FLAT_RESERVE = 0.00005;
+const flatSwapReserve = (chainId: string) =>
+  chainId === "ethereum" ? EVM_SWAP_FLAT_RESERVE_L1 : EVM_SWAP_FLAT_RESERVE;
 const _gasPriceCache = new Map<string, bigint>(); // chainId -> wei per gas
 async function evmSwapReserve(chainId: string, forBridge = false): Promise<number> {
   const net = NETWORKS[chainId];
-  if (!net) return EVM_SWAP_FLAT_RESERVE;
+  if (!net) return flatSwapReserve(chainId);
   let gp = _gasPriceCache.get(chainId);
   if (gp == null) {
     try {
@@ -232,11 +245,11 @@ async function evmSwapReserve(chainId: string, forBridge = false): Promise<numbe
     } catch { gp = 0n; }
     if (gp > 0n) _gasPriceCache.set(chainId, gp);
   }
-  if (!gp || gp <= 0n) return EVM_SWAP_FLAT_RESERVE;
+  if (!gp || gp <= 0n) return flatSwapReserve(chainId);
   const units = forBridge ? (BRIDGE_GAS_UNITS[chainId] ?? BRIDGE_GAS_UNITS_DEFAULT) : SWAP_GAS_UNITS;
   const feeWei = (units * gp * 12n) / 10n; // +20% headroom
   const v = Number(ethers.formatUnits(feeWei, net.decimals));
-  return Number.isFinite(v) && v > 0 ? v : EVM_SWAP_FLAT_RESERVE;
+  return Number.isFinite(v) && v > 0 ? v : flatSwapReserve(chainId);
 }
 
 // The slippage field is free text; sanitize before it reaches any aggregator.
@@ -1324,6 +1337,7 @@ export default function Swap() {
       // bridge must attach exactly the bridged amount, an ERC-20 bridge zero.
       // Previously executeBridge omitted this, leaving the LI.FI native value
       // unbounded.
+      const srcAmountBn = BigInt(fromAmtRaw);
       const isNativeBridge = !fromToken.address;
       // Keep the strict zero-native bound for ERC-20 bridges (loosening it
       // would let a tampered route response attach and drain native), but name
@@ -1335,7 +1349,43 @@ export default function Swap() {
           "This route attaches a native-coin fee to the transaction, which NumPay doesn't support yet. Try a different route.",
         );
       }
-      assertNativeValue(isNativeBridge, value, BigInt(fromAmtRaw));
+      if (isNativeBridge) {
+        if (value < srcAmountBn) {
+          throw new Error(
+            `Blocked for safety: transaction sends ${value} wei but the bridge amount is ${srcAmountBn} wei.`,
+          );
+        }
+        const excess = value - srcAmountBn;
+        if (excess > 0n) {
+          // Some routes (Stargate/LayerZero style) charge a messaging fee ON
+          // TOP of the bridged amount: value = amount + fee, itemized in the
+          // quote's feeCosts with included:false. Accept the excess only when
+          // it exactly matches those quoted native fees AND stays under an
+          // independent USD cap, so a tampered response can neither invent an
+          // unquoted fee nor inflate a quoted one beyond a bounded loss.
+          const isNativeAddr = (a?: string) =>
+            !a || /^0x0{40}$/i.test(a) || /^0xe{40}$/i.test(a);
+          const quotedFee = ((qData?.estimate?.feeCosts ?? []) as any[])
+            .filter((f) => f?.included === false && isNativeAddr(f?.token?.address))
+            .reduce((s: bigint, f: any) => s + BigInt(f?.amount ?? 0), 0n);
+          if (excess !== quotedFee) {
+            throw new Error(
+              `Blocked for safety: transaction attaches ${excess} wei above the bridge amount, ` +
+              `but the route quotes ${quotedFee} wei of native fees.`,
+            );
+          }
+          const px = tokenUsdPrice(fromToken);
+          const capWei = px > 0
+            ? ethers.parseUnits((BRIDGE_FEE_CAP_USD / px).toFixed(8), 18)
+            : srcAmountBn / 4n;
+          if (excess > capWei) {
+            throw new Error(
+              `Blocked for safety: this route's native messaging fee ` +
+              `(${ethers.formatEther(excess)} ${fromNet.symbol}) is unusually high. Try a different route.`,
+            );
+          }
+        }
+      }
 
       // The node's admission check requires value + gasLimit × maxFeePerGas in
       // the balance UP FRONT, even though the actual charge is far lower and

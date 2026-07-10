@@ -67,11 +67,13 @@ const NATIVE_FEE_RESERVE: Record<string, number> = {
   solana: 0.0015, tron: 2, sui: 0.005,
 };
 // ETH L2s (arbitrum, optimism, base, zksync, scroll, linea, blast, ...) and any
-// custom/unknown chain: gas is cheap, so a tiny buffer is enough. 0.0001 ETH is
-// ~$0.30 and comfortably covers an L2 transfer incl. its L1 data fee (was 0.0005
-// ≈ $1.50, which badly over-reserved small L2 balances). A too-small default only
-// means MAX still fails and the user lowers the amount, as today.
-const DEFAULT_FEE_RESERVE = 0.0001;
+// custom/unknown chain: gas is cheap, so a tiny buffer is enough. Post-blob-fee
+// a full L2 transfer incl. its L1 data component runs well under a US cent, so
+// 0.00002 ETH (~$0.05) still carries 5-20x headroom; the old 0.0001 (~$0.25)
+// zeroed MAX for sub-$0.25 balances that could easily afford the real fee. A
+// too-small default only means MAX fails at broadcast and the user lowers the
+// amount, as today.
+const DEFAULT_FEE_RESERVE = 0.00002;
 
 function nativeFeeReserve(chainId: string): number {
   return NATIVE_FEE_RESERVE[chainId] ?? DEFAULT_FEE_RESERVE;
