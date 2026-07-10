@@ -449,7 +449,7 @@ export default function Send() {
           // from finalized state, so name the real situation instead of
           // telling the user to add a mapping they just added.
           setError(
-            `A ${chainInfo.name} mapping for BPAN ${formatBPAN(clean)} was added recently and is ` +
+            `The ${chainInfo.name} mapping for BPAN ${formatBPAN(clean)} was added recently and is ` +
             `waiting for network confirmation. This takes about 15 minutes. Try again shortly.`
           );
         } else {
