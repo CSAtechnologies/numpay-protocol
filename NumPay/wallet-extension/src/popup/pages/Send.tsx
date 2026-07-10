@@ -21,6 +21,7 @@ import {
 import { isValidNonEvmAddress } from "@/lib/addressValidation";
 import { classifyToken } from "@/lib/tokenSpam";
 import Layout from "../components/Layout";
+import AlertCard from "../components/AlertCard";
 import TxResultOverlay, { type TxFxStatus } from "../components/TxResultOverlay";
 import {
   CheckIcon, ExternalLinkIcon, HashIcon, ChevronDownIcon,
@@ -88,6 +89,60 @@ function friendlyTxError(raw: string): string {
     return "The network node reported a temporary error while broadcasting. Check the Activity page before retrying: the transfer may or may not have gone through.";
   }
   return raw.length > 300 ? raw.slice(0, 300) + "…" : raw;
+}
+
+// Map the Send page's raw error strings to a titled card (the same design the
+// swap page uses) so failures read as designed states, not walls of red text.
+// `safe` shows the "nothing was sent" reassurance and is reserved for states
+// where the user plausibly fears money moved; form nudges don't need it.
+interface SendErrorView { title: string; body: string; hint?: string; tone: "danger" | "amber"; safe: boolean }
+function parseSendError(msg: string): SendErrorView {
+  if (/waiting for network confirmation/i.test(msg)) {
+    return { title: "Mapping Not Confirmed Yet", body: msg, tone: "amber", safe: false };
+  }
+  if (/no .* address mapped to bpan/i.test(msg)) {
+    return { title: "No Mapping Found", body: msg, tone: "amber", safe: false };
+  }
+  if (/is not a valid .* address/i.test(msg)) {
+    return { title: "Invalid Mapping", body: msg, tone: "danger", safe: false };
+  }
+  if (/conflicting addresses/i.test(msg)) {
+    return { title: "Do Not Send", body: msg, tone: "danger", safe: true };
+  }
+  if (/independent providers|bpan lookup failed/i.test(msg)) {
+    return { title: "Could Not Verify BPAN", body: msg, tone: "amber", safe: true };
+  }
+  if (/no address is set for/i.test(msg)) {
+    return { title: "Name Not Found", body: msg, tone: "amber", safe: false };
+  }
+  if (/name lookup failed/i.test(msg)) {
+    return { title: "Lookup Failed", body: msg, tone: "amber", safe: false };
+  }
+  if (/address changed/i.test(msg)) {
+    return { title: "Address Changed", body: msg, tone: "amber", safe: false };
+  }
+  if (/insufficient balance|insufficient funds/i.test(msg)) {
+    return {
+      title: "Insufficient Balance", body: msg,
+      hint: "Network fees count against the balance too, so lower the amount slightly.",
+      tone: "danger", safe: true,
+    };
+  }
+  if (/wallet is locked|wallet not loaded/i.test(msg)) {
+    return { title: "Wallet Locked", body: msg, tone: "amber", safe: false };
+  }
+  if (/^enter /i.test(msg)) {
+    return { title: "Check the Details", body: msg, tone: "amber", safe: false };
+  }
+  if (/temporary error while broadcasting/i.test(msg)) {
+    return { title: "Network Node Error", body: msg, tone: "danger", safe: false };
+  }
+  return { title: "Transaction Failed", body: msg, tone: "danger", safe: false };
+}
+
+function SendErrorCard({ message }: { message: string }) {
+  const e = parseSendError(message);
+  return <AlertCard title={e.title} body={e.body} hint={e.hint} tone={e.tone} safe={e.safe} className="mb-3" />;
 }
 
 // Rollups whose posted L2 gas price does NOT include the L1 data fee charged at
@@ -1107,12 +1162,7 @@ export default function Send() {
           )}
 
           {/* Error */}
-          {error && (
-            <div className="flex items-start gap-2 mb-3 px-3 py-2.5 rounded-xl bg-accent-red/5 border border-accent-red/15 animate-fade-in">
-              <AlertIcon size={13} className="text-accent-red mt-0.5 flex-shrink-0" />
-              <p className="text-accent-red text-xs leading-relaxed">{error}</p>
-            </div>
-          )}
+          {error && <SendErrorCard message={error} />}
 
           {/* Send button / success — EVM */}
           {isEvmChain && (
