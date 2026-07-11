@@ -16,8 +16,11 @@ import {
   VaultError, wipeVault, type VaultStatus,
 } from "./src/vault/mobileVault";
 import { runSpike, type SpikeResult } from "./spike/runSpike";
+import { runDevnetTx } from "./spike/devnetTx";
 
-type Mode = "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home" | "spike";
+type Mode =
+  | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
+  | "spike" | "devnet";
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("loading");
@@ -135,10 +138,12 @@ export default function App() {
           argonMs={getLastArgonMs()}
           onLock={async () => { await lock(); setError(""); await refresh(); }}
           onSpike={() => setMode("spike")}
+          onDevnet={() => setMode("devnet")}
           onWipe={async () => { await wipeVault(); setError(""); await refresh(); }}
         />
       )}
       {mode === "spike" && <Spike onBack={() => setMode("home")} />}
+      {mode === "devnet" && <DevnetTx onBack={() => setMode("home")} />}
     </View>
   );
 }
@@ -256,6 +261,7 @@ function Home(p: {
   argonMs: number | null;
   onLock: () => void;
   onSpike: () => void;
+  onDevnet: () => void;
   onWipe: () => void;
 }) {
   const [confirmWipe, setConfirmWipe] = useState(false);
@@ -269,6 +275,7 @@ function Home(p: {
       )}
       <Btn label="Lock" onPress={p.onLock} />
       <Btn label="Run core spike" onPress={p.onSpike} secondary />
+      <Btn label="Devnet tx (Phase 0 gate)" onPress={p.onDevnet} secondary />
       <Btn
         label={confirmWipe ? "Tap again to WIPE vault (seed is the only recovery)" : "Wipe vault (dev)"}
         onPress={() => (confirmWipe ? p.onWipe() : setConfirmWipe(true))}
@@ -301,6 +308,36 @@ function Spike(p: { onBack: () => void }) {
           <Text key={r.name} style={r.pass ? st.ok : st.err}>
             {r.pass ? "PASS" : "FAIL"} {r.name}
           </Text>
+        ))}
+      </ScrollView>
+      <Btn label="Back" onPress={p.onBack} secondary />
+    </View>
+  );
+}
+
+function DevnetTx(p: { onBack: () => void }) {
+  const [lines, setLines] = useState<string[]>([]);
+  const [outcome, setOutcome] = useState<"running" | "pass" | "fail">("running");
+  useEffect(() => {
+    const log = (s: string) => setLines((prev) => [...prev, s]);
+    (async () => {
+      const mn = await getUnlockedMnemonic();
+      if (!mn) throw new Error("Vault is locked.");
+      await runDevnetTx(mn, log);
+    })().then(
+      () => setOutcome("pass"),
+      (e) => { setLines((prev) => [...prev, String(e)]); setOutcome("fail"); }
+    );
+  }, []);
+  return (
+    <View style={{ flex: 1 }}>
+      <Text style={st.h2}>Devnet transaction</Text>
+      <Text style={outcome === "fail" ? st.err : outcome === "pass" ? st.ok : st.dim}>
+        {outcome === "running" ? "running…" : outcome === "pass" ? "CONFIRMED ON-CHAIN" : "FAILED"}
+      </Text>
+      <ScrollView style={{ marginTop: 8, flex: 1 }}>
+        {lines.map((l, i) => (
+          <Text key={i} style={st.mono} selectable>{l}</Text>
         ))}
       </ScrollView>
       <Btn label="Back" onPress={p.onBack} secondary />
