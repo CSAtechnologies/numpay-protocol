@@ -46,7 +46,11 @@ const GOLDRUSH_CHAINS: Record<string, string> = {
 };
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
-const FRESH_SECONDS = 45;
+// 5 min (was 45 s until 2026-07-11): client sweeps run minutes apart, so at
+// 45 s nearly every sweep missed the cache and hit Moralis at 100 CU/call.
+// 5 min only delays NEW-token discovery; balances of known tokens come from
+// client-side RPC reads and are unaffected.
+const FRESH_SECONDS = 300;
 const UPSTREAM_TIMEOUT_MS = 8_000;
 // Some upstreams reject UA-less fetches (workerd sends none) - see prices.ts.
 const USER_AGENT = "numpay-wallet-api/0.3 (+https://numpay-wallet-api.numpay.workers.dev)";

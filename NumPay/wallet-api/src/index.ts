@@ -9,7 +9,7 @@
 import { handlePrices } from "./prices";
 import { handleTokens } from "./tokens";
 
-const VERSION = "0.3.1";
+const VERSION = "0.3.2";
 
 /** Local shape of the Workers rate-limit binding (fixed-window counter). */
 interface RateLimiter {
