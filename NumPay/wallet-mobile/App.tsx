@@ -4,10 +4,12 @@
 // on-device core spike, not product design. FLAG_SECURE on secret screens is
 // a follow-up (needs expo-screen-capture or a config plugin).
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
+  Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View,
 } from "react-native";
+import qrcode from "qrcode-generator";
+import type { NonEvmAddressMap } from "@numpay/core/chains";
 
 import { createWallet, importFromMnemonic } from "@numpay/core/wallet";
 import {
@@ -21,10 +23,13 @@ import { useMobileWallet, type AssetRow } from "./src/wallet/useMobileWallet";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
-  | "spike" | "devnet";
+  | "spike" | "devnet" | "receive";
+
+interface ReceiveAddrs { evm: string; nonEvm: NonEvmAddressMap | null }
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("loading");
+  const [receiveAddrs, setReceiveAddrs] = useState<ReceiveAddrs | null>(null);
   const [status, setStatus] = useState<VaultStatus | null>(null);
   const [pendingMnemonic, setPendingMnemonic] = useState("");
   const [evmAddress, setEvmAddress] = useState("");
@@ -136,11 +141,15 @@ export default function App() {
       {mode === "home" && (
         <Dashboard
           argonMs={getLastArgonMs()}
+          onReceive={(addrs) => { setReceiveAddrs(addrs); setMode("receive"); }}
           onLock={async () => { await lock(); setError(""); await refresh(); }}
           onSpike={() => setMode("spike")}
           onDevnet={() => setMode("devnet")}
           onWipe={async () => { await wipeVault(); setError(""); await refresh(); }}
         />
+      )}
+      {mode === "receive" && receiveAddrs && (
+        <Receive addrs={receiveAddrs} onBack={() => setMode("home")} />
       )}
       {mode === "spike" && <Spike onBack={() => setMode("home")} />}
       {mode === "devnet" && <DevnetTx onBack={() => setMode("home")} />}
@@ -258,6 +267,7 @@ function Locked(p: {
 
 function Dashboard(p: {
   argonMs: number | null;
+  onReceive: (addrs: ReceiveAddrs) => void;
   onLock: () => void;
   onSpike: () => void;
   onDevnet: () => void;
@@ -284,6 +294,10 @@ function Dashboard(p: {
         ))}
       </ScrollView>
 
+      <Btn
+        label="Receive"
+        onPress={() => p.onReceive({ evm: w.evmAddress, nonEvm: w.nonEvmAddresses })}
+      />
       <ScrollView style={{ flex: 1, marginTop: 6 }}>
         {rows.map((r) => (
           <AssetRowView key={r.key} row={r} />
@@ -399,6 +413,87 @@ function DevnetTx(p: { onBack: () => void }) {
   );
 }
 
+// Pure-JS QR: qrcode-generator computes the module matrix, rendered as plain
+// Views. No native module, so no dev-client rebuild for this screen.
+function QrView(p: { value: string }) {
+  const qr = useMemo(() => {
+    const q = qrcode(0, "M"); // type 0 = auto-size for the payload
+    q.addData(p.value);
+    q.make();
+    return q;
+  }, [p.value]);
+  const n = qr.getModuleCount();
+  const cell = Math.max(3, Math.floor(264 / n));
+  return (
+    <View style={st.qrBox}>
+      {Array.from({ length: n }, (_, r) => (
+        <View key={r} style={{ flexDirection: "row" }}>
+          {Array.from({ length: n }, (_, c) => (
+            <View
+              key={c}
+              style={{
+                width: cell,
+                height: cell,
+                backgroundColor: qr.isDark(r, c) ? "#000" : "#fff",
+              }}
+            />
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function Receive(p: { addrs: ReceiveAddrs; onBack: () => void }) {
+  const entries = useMemo(() => {
+    const list = [
+      { id: "evm", label: "EVM", note: "Ethereum, Base, BSC, Polygon and every EVM chain", address: p.addrs.evm },
+    ];
+    const n = p.addrs.nonEvm;
+    if (n) {
+      list.push(
+        { id: "bitcoin", label: "BTC", note: "Bitcoin", address: n.bitcoin },
+        { id: "solana", label: "SOL", note: "Solana", address: n.solana },
+        { id: "sui", label: "SUI", note: "Sui", address: n.sui },
+        { id: "tron", label: "TRX", note: "Tron", address: n.tron },
+        { id: "xrp", label: "XRP", note: "XRP Ledger", address: n.xrp },
+        { id: "litecoin", label: "LTC", note: "Litecoin", address: n.litecoin },
+      );
+    }
+    return list;
+  }, [p.addrs]);
+  const [sel, setSel] = useState("evm");
+  const active = entries.find((e) => e.id === sel) ?? entries[0];
+  return (
+    <View style={{ flex: 1 }}>
+      <Text style={st.h2}>Receive</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={st.chipRow}>
+        {entries.map((e) => (
+          <Chip key={e.id} label={e.label} active={sel === e.id} onPress={() => setSel(e.id)} />
+        ))}
+      </ScrollView>
+      <ScrollView style={{ flex: 1 }}>
+        <Text style={[st.dim, { marginTop: 16 }]}>{active.note}</Text>
+        <View style={{ marginTop: 12 }}>
+          <QrView value={active.address} />
+        </View>
+        <Text style={[st.mono, { marginTop: 14 }]} selectable>
+          {active.address}
+        </Text>
+        <Text style={st.warn}>
+          Only send {active.label === "EVM" ? "EVM-chain assets" : `${active.label} assets`} to
+          this address. Anything else is lost.
+        </Text>
+        <Btn
+          label="Share address"
+          onPress={() => { Share.share({ message: active.address }).catch(() => {}); }}
+        />
+        <Btn label="Back" onPress={p.onBack} secondary />
+      </ScrollView>
+    </View>
+  );
+}
+
 function PinInput(p: { value: string; onChange: (v: string) => void; placeholder: string }) {
   return (
     <TextInput
@@ -451,6 +546,7 @@ const st = StyleSheet.create({
   },
   assetIconText: { color: "#c9beff", fontSize: 11, fontWeight: "700" },
   devBox: { marginTop: 24, marginBottom: 30 },
+  qrBox: { backgroundColor: "#fff", padding: 12, alignSelf: "center", borderRadius: 10 },
   mono: { color: "#e5e1ff", fontFamily: "monospace", fontSize: 13, marginTop: 2 },
   ok: { color: "#4ade80", fontSize: 13 },
   err: { color: "#f87171", fontSize: 14, marginTop: 8 },
