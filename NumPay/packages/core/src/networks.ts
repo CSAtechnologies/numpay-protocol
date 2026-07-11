@@ -8,7 +8,17 @@ import { chainLogoAsset as logoOf } from "./icons/assets";
 // which network the user is currently on.
 export const BPAN_MAINNET_CONTRACT = "0xdB5206e06a7509b9181F0594752CD42cbD7eD371"; // V2
 export const BPAN_SEPOLIA_CONTRACT  = "0xF2C65Bc0e54b5694c13d7c5E5Accf6DD93d7267a"; // V2
-export const BPAN_MAINNET_RPC      = `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
+
+// Alchemy endpoint when a key is injected (extension), verified keyless public
+// RPC otherwise (mobile ships proxy-only with no bundled provider keys; native
+// reads stay client-side per the wallet-api spec). Endpoints verified live
+// 2026-07-11.
+const alchemyOr = (alchemySubdomain: string, keylessUrl: string) =>
+  ALCHEMY_KEY
+    ? `https://${alchemySubdomain}.g.alchemy.com/v2/${ALCHEMY_KEY}`
+    : keylessUrl;
+
+export const BPAN_MAINNET_RPC = alchemyOr("eth-mainnet", "https://ethereum-rpc.publicnode.com");
 
 // Independent Ethereum-mainnet read endpoints used to cross-check a BPAN
 // resolution before it becomes a payment destination (TRUST-1). A single
@@ -20,11 +30,22 @@ export const BPAN_MAINNET_RPC      = `https://eth-mainnet.g.alchemy.com/v2/${ALC
 // covered by the existing *.drpc.org host permission; ethereum-rpc.publicnode.com
 // is added explicitly to the manifest). rpc.flashbots.net was dropped: it 403s
 // eth_call from extension egress IPs, which silently degraded the quorum to two.
-export const BPAN_MAINNET_READ_RPCS: string[] = [
-  BPAN_MAINNET_RPC,
-  "https://eth.drpc.org",
-  "https://ethereum-rpc.publicnode.com",
-];
+// Keyless clients cannot reuse BPAN_MAINNET_RPC here: it already resolves to
+// publicnode, and one provider answering twice must not count as two quorum
+// votes. rpc.mevblocker.io serves `finalized` in lockstep with the others
+// (verified 2026-07-11) and keeps the keyless quorum at three independent
+// providers. Extension list is unchanged (its hosts are in the manifest).
+export const BPAN_MAINNET_READ_RPCS: string[] = ALCHEMY_KEY
+  ? [
+      BPAN_MAINNET_RPC,
+      "https://eth.drpc.org",
+      "https://ethereum-rpc.publicnode.com",
+    ]
+  : [
+      "https://ethereum-rpc.publicnode.com",
+      "https://eth.drpc.org",
+      "https://rpc.mevblocker.io",
+    ];
 
 export interface Network {
   id: string;
@@ -43,7 +64,7 @@ export const NETWORKS: Record<string, Network> = {
   // ── Mainnets ─────────────────────────────────────────────────────────────────
   ethereum: {
     id: "ethereum", name: "Ethereum", chainId: 1,
-    rpcUrl: `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
+    rpcUrl: alchemyOr("eth-mainnet", "https://ethereum-rpc.publicnode.com"),
     symbol: "ETH", decimals: 18,
     explorer: "https://etherscan.io",
     logo: logoOf("ethereum"),
@@ -51,7 +72,7 @@ export const NETWORKS: Record<string, Network> = {
   },
   polygon: {
     id: "polygon", name: "Polygon", chainId: 137,
-    rpcUrl: `https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
+    rpcUrl: alchemyOr("polygon-mainnet", "https://polygon-bor-rpc.publicnode.com"),
     symbol: "POL", decimals: 18,
     explorer: "https://polygonscan.com",
     logo: logoOf("polygon"),
@@ -211,7 +232,7 @@ export const NETWORKS: Record<string, Network> = {
   // ── Testnet ──────────────────────────────────────────────────────────────────
   sepolia: {
     id: "sepolia", name: "Sepolia", chainId: 11155111,
-    rpcUrl: `https://eth-sepolia.g.alchemy.com/v2/${ALCHEMY_KEY}`,
+    rpcUrl: alchemyOr("eth-sepolia", "https://ethereum-sepolia-rpc.publicnode.com"),
     symbol: "ETH", decimals: 18,
     explorer: "https://sepolia.etherscan.io",
     logo: logoOf("ethereum"),

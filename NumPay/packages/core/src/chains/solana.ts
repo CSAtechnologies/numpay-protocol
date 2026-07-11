@@ -14,11 +14,15 @@ import { ALCHEMY_KEY, MORALIS_KEY, HELIUS_KEY } from "../env";
 const SOL_DERIVATION_PATH = "m/44'/501'/0'/0'";
 
 // Prefer Helius for Solana balances + token reads when its key is set; fall back
-// to Alchemy's Solana endpoint otherwise. Single canonical endpoint for every
-// Solana JSON-RPC call below.
+// to Alchemy's Solana endpoint, then to the keyless public RPC when no key is
+// injected at all (mobile ships proxy-only with no bundled provider keys; the
+// public endpoint is rate-limited per IP, fine for per-user reads). Single
+// canonical endpoint for every Solana JSON-RPC call below.
 export const SOL_RPC = HELIUS_KEY
   ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`
-  : `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
+  : ALCHEMY_KEY
+    ? `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`
+    : "https://api.mainnet-beta.solana.com";
 
 /**
  * Derive a Solana address from a BIP39 mnemonic.
