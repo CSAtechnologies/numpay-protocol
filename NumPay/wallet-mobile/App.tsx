@@ -17,6 +17,7 @@ import {
 } from "./src/vault/mobileVault";
 import { runSpike, type SpikeResult } from "./spike/runSpike";
 import { runDevnetTx } from "./spike/devnetTx";
+import { useMobileWallet, type AssetRow } from "./src/wallet/useMobileWallet";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
@@ -133,8 +134,7 @@ export default function App() {
         />
       )}
       {mode === "home" && (
-        <Home
-          evmAddress={evmAddress}
+        <Dashboard
           argonMs={getLastArgonMs()}
           onLock={async () => { await lock(); setError(""); await refresh(); }}
           onSpike={() => setMode("spike")}
@@ -256,31 +256,85 @@ function Locked(p: {
   );
 }
 
-function Home(p: {
-  evmAddress: string;
+function Dashboard(p: {
   argonMs: number | null;
   onLock: () => void;
   onSpike: () => void;
   onDevnet: () => void;
   onWipe: () => void;
 }) {
+  const w = useMobileWallet(true);
   const [confirmWipe, setConfirmWipe] = useState(false);
+  const [filter, setFilter] = useState<string | null>(null);
+  const rows = filter ? w.rows.filter((r) => r.chainId === filter) : w.rows;
   return (
-    <View>
-      <Text style={st.h2}>Unlocked</Text>
-      <Text style={st.dim}>EVM address</Text>
-      <Text style={st.mono}>{p.evmAddress}</Text>
-      {p.argonMs !== null && (
-        <Text style={st.dim}>argon2id PIN stretch: {p.argonMs} ms on this device</Text>
-      )}
-      <Btn label="Lock" onPress={p.onLock} />
-      <Btn label="Run core spike" onPress={p.onSpike} secondary />
-      <Btn label="Devnet tx (Phase 0 gate)" onPress={p.onDevnet} secondary />
-      <Btn
-        label={confirmWipe ? "Tap again to WIPE vault (seed is the only recovery)" : "Wipe vault (dev)"}
-        onPress={() => (confirmWipe ? p.onWipe() : setConfirmWipe(true))}
-        danger
-      />
+    <View style={{ flex: 1 }}>
+      <Text style={st.dim}>Portfolio</Text>
+      <Text style={st.portfolio}>
+        ${w.portfolioUsd.toFixed(2)}
+        {w.loading ? "  …" : ""}
+      </Text>
+      <Text style={st.mono} numberOfLines={1}>{w.evmAddress}</Text>
+      {!!w.error && <Text style={st.err}>{w.error}</Text>}
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={st.chipRow}>
+        <Chip label="All" active={filter === null} onPress={() => setFilter(null)} />
+        {w.chainIds.map((id) => (
+          <Chip key={id} label={id} active={filter === id} onPress={() => setFilter(id)} />
+        ))}
+      </ScrollView>
+
+      <ScrollView style={{ flex: 1, marginTop: 6 }}>
+        {rows.map((r) => (
+          <AssetRowView key={r.key} row={r} />
+        ))}
+        {rows.length === 0 && !w.loading && (
+          <Text style={st.dim}>No assets yet. Receive funds to get started.</Text>
+        )}
+        <View style={st.devBox}>
+          <Text style={st.dim}>
+            Dev{p.argonMs !== null ? ` · argon2 ${p.argonMs} ms` : ""}
+          </Text>
+          <Btn label="Refresh" onPress={w.refresh} secondary />
+          <Btn label="Lock" onPress={p.onLock} secondary />
+          <Btn label="Run core spike" onPress={p.onSpike} secondary />
+          <Btn label="Devnet tx (Phase 0 gate)" onPress={p.onDevnet} secondary />
+          <Btn
+            label={confirmWipe ? "Tap again to WIPE vault (seed is the only recovery)" : "Wipe vault (dev)"}
+            onPress={() => (confirmWipe ? p.onWipe() : setConfirmWipe(true))}
+            danger
+          />
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+function Chip(p: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable style={[st.chip, p.active && st.chipActive]} onPress={p.onPress}>
+      <Text style={[st.chipText, p.active && st.chipTextActive]}>{p.label}</Text>
+    </Pressable>
+  );
+}
+
+function AssetRowView(p: { row: AssetRow }) {
+  const r = p.row;
+  return (
+    <View style={st.assetRow}>
+      <View style={st.assetIcon}>
+        <Text style={st.assetIconText}>{r.symbol.slice(0, 3)}</Text>
+      </View>
+      <View style={{ flex: 1, marginLeft: 10 }}>
+        <Text style={st.body} numberOfLines={1}>{r.name}</Text>
+        <Text style={st.dimSmall}>{r.chainName}</Text>
+      </View>
+      <View style={{ alignItems: "flex-end" }}>
+        <Text style={st.body}>
+          {r.balanceNum.toLocaleString(undefined, { maximumFractionDigits: 6 })} {r.symbol}
+        </Text>
+        <Text style={st.dimSmall}>${r.usdValue.toFixed(2)}</Text>
+      </View>
     </View>
   );
 }
@@ -377,6 +431,26 @@ const st = StyleSheet.create({
   h2: { color: "#e5e1ff", fontSize: 18, fontWeight: "600", marginBottom: 12 },
   body: { color: "#e5e1ff", fontSize: 15 },
   dim: { color: "#8b87a0", fontSize: 13, marginTop: 8 },
+  dimSmall: { color: "#8b87a0", fontSize: 12 },
+  portfolio: { color: "#e5e1ff", fontSize: 32, fontWeight: "700" },
+  chipRow: { marginTop: 14, flexGrow: 0 },
+  chip: {
+    backgroundColor: "#1e1a30", borderRadius: 16, paddingHorizontal: 14,
+    paddingVertical: 7, marginRight: 8,
+  },
+  chipActive: { backgroundColor: "#7c6cf1" },
+  chipText: { color: "#8b87a0", fontSize: 13 },
+  chipTextActive: { color: "#fff" },
+  assetRow: {
+    flexDirection: "row", alignItems: "center", backgroundColor: "#1e1a30",
+    borderRadius: 12, padding: 12, marginTop: 8,
+  },
+  assetIcon: {
+    width: 38, height: 38, borderRadius: 19, backgroundColor: "#2a2542",
+    alignItems: "center", justifyContent: "center",
+  },
+  assetIconText: { color: "#c9beff", fontSize: 11, fontWeight: "700" },
+  devBox: { marginTop: 24, marginBottom: 30 },
   mono: { color: "#e5e1ff", fontFamily: "monospace", fontSize: 13, marginTop: 2 },
   ok: { color: "#4ade80", fontSize: 13 },
   err: { color: "#f87171", fontSize: 14, marginTop: 8 },

@@ -14,8 +14,11 @@ if (typeof g.Buffer === "undefined") g.Buffer = Buffer;
 if (typeof g.process === "undefined") g.process = require("process");
 if (!g.process.env) g.process.env = {};
 
-// The spike runs fully offline (derivation + offline signing only), so no
-// provider keys. The real app will fill this from its config before core loads.
-g.__NUMPAY_ENV__ = {};
+// Mobile ships proxy-only: NO provider keys, ever (plan section on key
+// hygiene). Core's RPC tables fall back to keyless public endpoints when the
+// keys are empty, and price/token reads route through the wallet API proxy.
+g.__NUMPAY_ENV__ = {
+  API_BASE: "https://numpay-wallet-api.numpay.workers.dev",
+};
 
 export {};
