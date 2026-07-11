@@ -21,7 +21,9 @@ import nacl from "tweetnacl";
 import bs58 from "bs58";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { sha256 } from "@noble/hashes/sha256";
+import { argon2id } from "@noble/hashes/argon2";
 import { Keypair, SystemProgram, Transaction } from "@solana/web3.js";
+import argon2 from "react-native-argon2";
 
 import { isValidChainAddress } from "@numpay/core/addressValidation";
 import { deriveNonEvmAddresses } from "@numpay/core/chains";
@@ -181,6 +183,37 @@ export async function runSpike(): Promise<SpikeResult[]> {
         t(`sign: ${chain} secp256k1 sign/verify`, false, String(e));
       }
     }
+  }
+
+  // ── 5. Native argon2 parity (the vault's PIN-stretch KDF) ─────────────────
+  // Proves react-native-argon2 (argon2kt/JNI) maps password, hex salt, and
+  // params exactly like @noble's argon2id, so the vault's native stretch is
+  // the same KDF as the extension vault. Tiny m so the pure-JS reference
+  // finishes quickly; the real-params timing shows up on the home screen.
+  try {
+    const pin = "123456";
+    const salt = new Uint8Array(16).map((_, i) => i * 7 + 3);
+    const saltHex = Array.from(salt, (b) => b.toString(16).padStart(2, "0")).join("");
+    const params = { m: 64, t: 2, p: 1 };
+    const t0 = Date.now();
+    const native = await argon2(pin, saltHex, {
+      mode: "argon2id",
+      iterations: params.t,
+      memory: params.m,
+      parallelism: params.p,
+      hashLength: 32,
+      saltEncoding: "hex",
+    });
+    const nativeMs = Date.now() - t0;
+    const ref = argon2id(new TextEncoder().encode(pin), salt, { ...params, dkLen: 32 });
+    const refHex = Array.from(ref, (b) => b.toString(16).padStart(2, "0")).join("");
+    t(
+      "argon2: native matches @noble reference",
+      native.rawHash === refHex,
+      `native ${nativeMs} ms @ m=64; raw ${native.rawHash.slice(0, 16)}…`
+    );
+  } catch (e) {
+    t("argon2: native matches @noble reference", false, String(e));
   }
 
   const passed = results.filter((r) => r.pass).length;

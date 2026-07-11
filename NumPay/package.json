@@ -9,8 +9,12 @@
     "wallet-mobile"
   ],
   "scripts": {
+    "postinstall": "patch-package",
     "build": "npm run build -w numpay-wallet",
     "test": "npm run test -w numpay-wallet",
     "typecheck": "tsc -p packages/core && tsc -p wallet-extension"
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.1"
   }
 }

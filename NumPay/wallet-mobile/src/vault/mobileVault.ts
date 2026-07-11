@@ -29,7 +29,7 @@
 import * as SecureStore from "expo-secure-store";
 import * as LocalAuthentication from "expo-local-authentication";
 import { gcm } from "@noble/ciphers/aes.js";
-import { argon2id } from "@noble/hashes/argon2";
+import argon2 from "react-native-argon2";
 import {
   getItem, setItem, removeItem,
   getSession, setSession, removeSession,
@@ -46,13 +46,13 @@ const SS_ATTEMPTS = "numpay_pin_attempts";
 const SESSION_MNEMONIC = "numpay_mobile_session";
 const SESSION_ACTIVITY = "numpay_lastActivity";
 
-// ⚠ DEV-ONLY WEAK PARAMETERS — DO NOT SHIP. The target is the extension's
-// { m: 19_456, t: 2, p: 1 }, but pure-JS argon2id at those params measured
-// 166,866 ms on the Pixel7_API35 emulator (2026-07-10): the PIN stretch MUST
-// move to a native argon2 module before this vault leaves the skeleton stage.
-// Lowered here only so the unlock/backoff flow is testable meanwhile.
-const DEV_ARGON2_PARAMS_UNSAFE = { m: 64, t: 2, p: 1 } as const; // m in KiB
-const ARGON2_PARAMS = DEV_ARGON2_PARAMS_UNSAFE;
+// Same parameters as the extension vault (m in KiB). The stretch runs in the
+// native react-native-argon2 module (argon2kt / reference C via JNI); pure-JS
+// argon2id at these params measured 166,866 ms on the Pixel7_API35 emulator
+// (2026-07-10), so a JS fallback is deliberately absent — if the native module
+// is missing, unlock must fail loudly rather than block the JS thread.
+// The spike cross-checks native output against @noble byte-for-byte.
+const ARGON2_PARAMS = { m: 19_456, t: 2, p: 1 } as const;
 
 const FREE_ATTEMPTS = 5;
 const BACKOFF_MS = [30_000, 300_000, 1_800_000] as const; // 30 s / 5 min / 30 min
@@ -90,6 +90,8 @@ export function getLastArgonMs(): number | null {
 
 const b64 = (u: Uint8Array) => Buffer.from(u).toString("base64");
 const unb64 = (s: string) => new Uint8Array(Buffer.from(s, "base64"));
+const hex = (u: Uint8Array) => Buffer.from(u).toString("hex");
+const unhex = (s: string) => new Uint8Array(Buffer.from(s, "hex"));
 const utf8 = (s: string) => new TextEncoder().encode(s);
 
 function rand(n: number): Uint8Array {
@@ -98,11 +100,18 @@ function rand(n: number): Uint8Array {
   return out;
 }
 
-function stretchPin(pin: string, salt: Uint8Array): Uint8Array {
+async function stretchPin(pin: string, salt: Uint8Array): Promise<Uint8Array> {
   const t0 = Date.now();
-  const key = argon2id(utf8(pin), salt, { ...ARGON2_PARAMS, dkLen: 32 });
+  const { rawHash } = await argon2(pin, hex(salt), {
+    mode: "argon2id",
+    iterations: ARGON2_PARAMS.t,
+    memory: ARGON2_PARAMS.m,
+    parallelism: ARGON2_PARAMS.p,
+    hashLength: 32,
+    saltEncoding: "hex",
+  });
   lastArgonMs = Date.now() - t0;
-  return key;
+  return unhex(rawHash);
 }
 
 async function readAttempts(): Promise<AttemptState> {
@@ -182,7 +191,7 @@ export async function createVault(
   // SecureStore.
   const salt = rand(16);
   const wrapIv = rand(12);
-  const pinKey = stretchPin(pin, salt);
+  const pinKey = await stretchPin(pin, salt);
   const wrapped = gcm(pinKey, wrapIv).encrypt(dataKey);
   const wrap: PinWrap = { salt: b64(salt), iv: b64(wrapIv), wrapped: b64(wrapped) };
   await SecureStore.setItemAsync(SS_PIN_WRAP, JSON.stringify(wrap));
@@ -221,7 +230,7 @@ export async function unlockWithPin(pin: string): Promise<string> {
   if (!rawWrap) throw new VaultError("no-vault", "No vault on this device.");
   const wrap = JSON.parse(rawWrap) as PinWrap;
 
-  const pinKey = stretchPin(pin, unb64(wrap.salt));
+  const pinKey = await stretchPin(pin, unb64(wrap.salt));
   let dataKey: Uint8Array;
   try {
     dataKey = gcm(pinKey, unb64(wrap.iv)).decrypt(unb64(wrap.wrapped));
