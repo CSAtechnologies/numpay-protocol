@@ -18,8 +18,8 @@ import { friendlyTxError, parseSendError } from "@numpay/core/sendErrors";
 import { getUsdPrice } from "@numpay/core/currency";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import {
-  estimateEvmNativeFee, explorerTxUrl, sendEvmNative, sendSolNative,
-  solNativeReserve, type EvmFeeEstimate,
+  estimateEvmNativeFee, explorerTxUrl, sendEvmNative, sendNonEvmNative,
+  nonEvmNativeReserve, NON_EVM_SENDABLE, type EvmFeeEstimate,
 } from "../wallet/send";
 import type { MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, radius, type as ts } from "../ui/theme";
@@ -29,25 +29,31 @@ import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
 
 interface BpanChange { number: string; chain: string; oldAddr: string; newAddr: string }
 
-// Non-EVM meta for the chains this slice can send on.
-const SOL = { symbol: "SOL", decimals: 9 };
+const NON_EVM_NAMES: Record<string, string> = { solana: "Solana", tron: "Tron", sui: "Sui" };
+// Fee lines for chains without a live estimate (matches the reserve comments
+// in send.ts: Tron ~1 TRX recipient activation, Sui a few thousandths).
+const NON_EVM_FEE_LINE: Record<string, string> = {
+  solana: "Network fee ~0.000005 SOL",
+  tron: "Network fee up to ~1 TRX (new recipients cost ~1 TRX activation)",
+  sui: "Network fee ~0.003 SUI",
+};
 
 export function SendScreen({ w, onBack }: { w: MobileWalletState; onBack: () => void }) {
   // Sendable chains: every EVM chain the wallet holds native coin on (plus
-  // Ethereum so the screen is never empty), then Solana.
+  // Ethereum so the screen is never empty), then the sendable non-EVM chains.
   const chains = useMemo(() => {
     const evm = w.rows
       .filter((r) => r.isNative && NETWORKS[r.chainId] && (r.balanceNum > 0 || r.chainId === "ethereum"))
       .map((r) => r.chainId);
     if (!evm.includes("ethereum")) evm.unshift("ethereum");
-    return [...evm, "solana"];
+    return [...evm, ...Object.keys(NON_EVM_SENDABLE)];
   }, [w.rows]);
 
   const [chainId, setChainId] = useState("ethereum");
-  const isEvm = chainId !== "solana";
+  const isEvm = !NON_EVM_SENDABLE[chainId];
   const net = NETWORKS[chainId];
-  const symbol = isEvm ? (net?.symbol ?? "ETH") : SOL.symbol;
-  const chainName = isEvm ? (net?.name ?? chainId) : "Solana";
+  const symbol = isEvm ? (net?.symbol ?? "ETH") : NON_EVM_SENDABLE[chainId].symbol;
+  const chainName = isEvm ? (net?.name ?? chainId) : NON_EVM_NAMES[chainId] ?? chainId;
   const balance = w.rows.find((r) => r.isNative && r.chainId === chainId)?.balanceNum ?? 0;
   const price = w.rates ? getUsdPrice(symbol, w.rates) : 0;
 
@@ -165,7 +171,7 @@ export function SendScreen({ w, onBack }: { w: MobileWalletState; onBack: () => 
   function handleMax() {
     const reserve = isEvm
       ? (fee?.reserveNative ?? 0.0012)
-      : solNativeReserve();
+      : nonEvmNativeReserve(chainId);
     const max = Math.max(0, balance - reserve);
     setAmount(max > 0 ? String(Number(max.toFixed(8))) : "0");
   }
@@ -190,7 +196,7 @@ export function SendScreen({ w, onBack }: { w: MobileWalletState; onBack: () => 
     try {
       const hash = isEvm
         ? await sendEvmNative(mnemonic, chainId, destinationAddress, amount)
-        : await sendSolNative(mnemonic, destinationAddress, amount);
+        : await sendNonEvmNative(mnemonic, chainId, destinationAddress, amount);
       setTxHash(hash);
       setTxFx("success");
       w.refresh();
@@ -215,7 +221,7 @@ export function SendScreen({ w, onBack }: { w: MobileWalletState; onBack: () => 
           {chains.map((id) => (
             <Chip
               key={id}
-              label={id === "solana" ? "Solana" : NETWORKS[id]?.name ?? id}
+              label={NON_EVM_NAMES[id] ?? NETWORKS[id]?.name ?? id}
               active={chainId === id}
               onPress={() => switchChain(id)}
               icon={<ChainIcon chainId={id} size={16} />}
@@ -291,7 +297,7 @@ export function SendScreen({ w, onBack }: { w: MobileWalletState; onBack: () => 
           <Text style={st.subText}>
             {isEvm
               ? (fee ? `Network fee ~${fee.feeNative.toPrecision(2)} ${symbol}${feeUsd > 0 ? ` ($${feeUsd.toFixed(2)})` : ""}` : "Estimating fee…")
-              : "Network fee ~0.000005 SOL"}
+              : NON_EVM_FEE_LINE[chainId] ?? ""}
           </Text>
         </View>
 

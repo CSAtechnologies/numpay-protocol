@@ -10,8 +10,13 @@
 import { ethers } from "ethers";
 import { importFromMnemonic, getSigner } from "@numpay/core/wallet";
 import { NETWORKS, type Network } from "@numpay/core/networks";
-import { deriveNonEvmAddresses, sendSolanaTransfer } from "@numpay/core/chains";
-import { logTx, updateTx } from "@numpay/core/txLog";
+import {
+  deriveNonEvmAddresses, sendSolanaTransfer, sendTronTransfer, sendSuiTransfer,
+} from "@numpay/core/chains";
+import { logTx, updateTx, explorerTxUrl } from "@numpay/core/txLog";
+
+// Explorer links come from core so Activity rows and send receipts agree.
+export { explorerTxUrl };
 
 // ── Fee reserve heuristics (ported from the extension Send page) ─────────────
 // Native-coin headroom to leave for the network fee on a MAX send. Rollups'
@@ -56,8 +61,8 @@ export async function estimateEvmNativeFee(chainId: string): Promise<EvmFeeEstim
   }
 }
 
-export function solNativeReserve(): number {
-  return NATIVE_FEE_RESERVE.solana;
+export function nonEvmNativeReserve(chainId: string): number {
+  return NATIVE_FEE_RESERVE[chainId] ?? DEFAULT_FEE_RESERVE;
 }
 
 // Parse a decimal amount string into an integer base-unit bigint without
@@ -123,29 +128,41 @@ export async function sendEvmNative(
   return tx.hash;
 }
 
-// ── Solana native send ────────────────────────────────────────────────────────
-export async function sendSolNative(
+// ── Non-EVM native sends (Solana / Tron / Sui — the chains the extension can
+// send natively; BTC/LTC/XRP stay receive-only there too) ────────────────────
+export const NON_EVM_SENDABLE: Record<string, { symbol: string; decimals: number }> = {
+  solana: { symbol: "SOL", decimals: 9 },
+  tron:   { symbol: "TRX", decimals: 6 },
+  sui:    { symbol: "SUI", decimals: 9 },
+};
+
+export async function sendNonEvmNative(
   mnemonic: string,
+  chainId: string,
   to: string,
   amount: string,
 ): Promise<string> {
-  const lamports = toBaseUnits(amount, 9);
+  const meta = NON_EVM_SENDABLE[chainId];
+  if (!meta) throw new Error(`Native sending is not wired up for ${chainId}`);
+  const base = toBaseUnits(amount, meta.decimals);
   const derived = await deriveNonEvmAddresses(mnemonic);
   const owner = importFromMnemonic(mnemonic).address;
-  const sig = await sendSolanaTransfer(derived.solana.secretKey, to, lamports);
+
+  let hash: string;
+  if (chainId === "solana") {
+    hash = await sendSolanaTransfer(derived.solana.secretKey, to, base);
+  } else if (chainId === "tron") {
+    hash = await sendTronTransfer(derived.tron.privateKey, derived.tron.address, to, base);
+  } else {
+    hash = await sendSuiTransfer(derived.sui.secretKey, derived.sui.address, to, base);
+  }
 
   void logTx({
     owner,
-    hash: sig, chainId: "solana", kind: "send", timestamp: Date.now(),
-    symbol: "SOL", value: amount,
+    hash, chainId, kind: "send", timestamp: Date.now(),
+    symbol: meta.symbol, value: amount,
     counterparty: to,
     status: "confirmed",
   });
-  return sig;
-}
-
-export function explorerTxUrl(chainId: string, hash: string): string {
-  if (chainId === "solana") return `https://solscan.io/tx/${hash}`;
-  const net = NETWORKS[chainId];
-  return net?.explorer ? `${net.explorer.replace(/\/$/, "")}/tx/${hash}` : "";
+  return hash;
 }

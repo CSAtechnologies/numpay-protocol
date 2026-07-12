@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 
 import { createWallet, importFromMnemonic } from "@numpay/core/wallet";
+import { formatBPAN } from "@numpay/core/bpan";
 import {
   createVault, getLastArgonMs, getStatus, getUnlockedMnemonic, lock,
   autoLockCheck, touchActivity, unlockWithBiometrics, unlockWithPin,
@@ -22,10 +23,11 @@ import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SectionLabel } from ".
 import { AssetIcon, ChainBadge, ChainIcon } from "./src/ui/coins";
 import { ReceiveScreen, type ReceiveAddrs } from "./src/screens/ReceiveScreen";
 import { SendScreen } from "./src/screens/SendScreen";
+import { ActivityScreen } from "./src/screens/ActivityScreen";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
-  | "spike" | "devnet" | "receive" | "send";
+  | "spike" | "devnet" | "receive" | "send" | "activity";
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("loading");
@@ -35,7 +37,8 @@ export default function App() {
   const [error, setError] = useState("");
   const [now, setNow] = useState(Date.now()); // drives the lockout countdown
 
-  const unlocked = mode === "home" || mode === "receive" || mode === "send";
+  const unlocked =
+    mode === "home" || mode === "receive" || mode === "send" || mode === "activity";
   const w = useMobileWallet(unlocked);
 
   const refresh = useCallback(async () => {
@@ -143,6 +146,7 @@ export default function App() {
           w={w}
           argonMs={getLastArgonMs()}
           onSend={() => setMode("send")}
+          onActivity={() => setMode("activity")}
           onReceive={() => {
             setReceiveAddrs({ evm: w.evmAddress, nonEvm: w.nonEvmAddresses });
             setMode("receive");
@@ -157,6 +161,9 @@ export default function App() {
         <ReceiveScreen addrs={receiveAddrs} onBack={() => setMode("home")} />
       )}
       {mode === "send" && <SendScreen w={w} onBack={() => setMode("home")} />}
+      {mode === "activity" && (
+        <ActivityScreen owner={w.evmAddress} onBack={() => setMode("home")} />
+      )}
       {mode === "spike" && <Spike onBack={() => setMode("home")} />}
       {mode === "devnet" && <DevnetTx onBack={() => setMode("home")} />}
     </View>
@@ -295,6 +302,7 @@ function Dashboard(p: {
   w: MobileWalletState;
   argonMs: number | null;
   onSend: () => void;
+  onActivity: () => void;
   onReceive: () => void;
   onLock: () => void;
   onSpike: () => void;
@@ -317,23 +325,29 @@ function Dashboard(p: {
         </Pressable>
       </View>
 
-      {/* Portfolio hero */}
+      {/* Portfolio hero. Auto-displays the wallet's BPAN once known (the
+          product's identity rule); the raw address stays as the fallback. */}
       <View style={st.hero}>
         <View style={st.heroLabelRow}>
           <View style={st.greenDot} />
-          <SectionLabel text="Portfolio" style={{ color: colors.brand2 } as object} />
+          <SectionLabel
+            text={w.bpan ? "Your number · Active" : "Portfolio"}
+            style={{ color: colors.brand2 } as object}
+          />
         </View>
-        <Text style={st.portfolio}>
+        {!!w.bpan && <Text style={st.heroBpan}>{formatBPAN(w.bpan)}</Text>}
+        <Text style={[st.portfolio, !!w.bpan && { fontSize: 22, marginTop: 4 }]}>
           ${w.portfolioUsd.toFixed(2)}
           {w.loading ? "  …" : ""}
         </Text>
         <Text style={st.heroAddr} numberOfLines={1}>{w.evmAddress}</Text>
       </View>
 
-      {/* Action circles (Send / Receive) */}
+      {/* Action circles (Send / Receive / Activity) */}
       <View style={st.actions}>
         <ActionCircle label="Send" color={colors.brand} glyph="↑" onPress={p.onSend} />
         <ActionCircle label="Receive" color="#22c55e" glyph="↓" onPress={p.onReceive} />
+        <ActionCircle label="Activity" color="#0ea5e9" glyph="≋" onPress={p.onActivity} />
       </View>
 
       {!!w.error && (
@@ -529,6 +543,12 @@ const st = StyleSheet.create({
     marginTop: 8, fontVariant: ["tabular-nums"],
   },
   heroAddr: { color: colors.muted, fontSize: ts.sub, marginTop: 8, fontFamily: "monospace" },
+  // .m-number: the big monospace BPAN headline (solid brand-tinted fill in RN
+  // for the popup's gradient text).
+  heroBpan: {
+    color: "#d9d2ff", fontSize: ts.hero, fontWeight: "700",
+    fontFamily: "monospace", marginTop: 8, fontVariant: ["tabular-nums"],
+  },
 
   actions: {
     flexDirection: "row", justifyContent: "center", gap: 36,

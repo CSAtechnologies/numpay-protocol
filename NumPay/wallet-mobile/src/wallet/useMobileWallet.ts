@@ -21,6 +21,9 @@ import { importFromMnemonic } from "@numpay/core/wallet";
 import {
   deriveNonEvmAddresses,
   fetchNonEvmBalancesByAddress,
+  fetchSolanaTokens,
+  fetchTronTokens,
+  fetchSuiTokens,
   type NonEvmAddressMap,
   type NonEvmChain,
 } from "@numpay/core/chains";
@@ -29,9 +32,27 @@ import { sweepAllChainTokens, type AutoToken } from "@numpay/core/autoTokens";
 import { fetchRates, getUsdPrice, type Rates } from "@numpay/core/currency";
 import { loadHiddenTokens, tokenHideKey } from "@numpay/core/hiddenTokens";
 import { classifyToken } from "@numpay/core/tokenSpam";
+import { chainNameOf } from "@numpay/core/txLog";
+import { getOwnedBPANCount, findOwnedBPANs } from "@numpay/core/bpan";
+import { getItem, setItem } from "@numpay/core/storage";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 
 const DUST_USD = 0.01; // same cutoff as the extension dashboard
+
+// Hard ceiling on the busy-guarded refresh phase. Found on-device: a hung
+// upstream (no per-call timeout) kept `busy` true for minutes, so the refresh
+// fired by the next unlock bailed silently and the dashboard stayed empty.
+const REFRESH_TIMEOUT_MS = 45_000;
+const DISCOVERY_TIMEOUT_MS = 90_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out`)), ms)
+    ),
+  ]);
+}
 
 export interface AssetRow {
   key: string; // unique per row
@@ -48,6 +69,8 @@ export interface AssetRow {
 export interface MobileWalletState {
   evmAddress: string;
   nonEvmAddresses: NonEvmAddressMap | null;
+  /** First owned BPAN (raw 11 digits), "" when none / not yet known. */
+  bpan: string;
   rows: AssetRow[];
   chainIds: string[]; // chains with anything to show, dashboard filter chips
   portfolioUsd: number;
@@ -57,9 +80,13 @@ export interface MobileWalletState {
   refresh: () => void;
 }
 
+// Non-EVM token fetchers return priceUsd only where the source provides it
+// (Solana); everywhere else the shared symbol→rate table prices majors like
+// USDT/USDC, and the dust rule keeps the rest off (same as the extension).
 function tokenRows(
   byChain: Record<string, AutoToken[]>,
-  hidden: Set<string>
+  hidden: Set<string>,
+  rates: Rates | null
 ): AssetRow[] {
   const rows: AssetRow[] = [];
   for (const [chainId, tokens] of Object.entries(byChain)) {
@@ -67,12 +94,13 @@ function tokenRows(
       if (hidden.has(tokenHideKey(chainId, t.address))) continue;
       if (classifyToken(t).hidden) continue;
       const bal = parseFloat(t.balance) || 0;
-      const usd = (t.priceUsd ?? 0) * bal;
+      const price = t.priceUsd ?? (rates ? getUsdPrice(t.symbol, rates) : 0);
+      const usd = price * bal;
       if (usd < DUST_USD) continue; // dust rule: unpriced or near-zero rows stay off
       rows.push({
         key: `${chainId}:${t.address.toLowerCase()}`,
         chainId,
-        chainName: chainId,
+        chainName: chainNameOf(chainId) ?? chainId,
         symbol: t.symbol,
         name: t.name,
         isNative: false,
@@ -85,8 +113,33 @@ function tokenRows(
   return rows;
 }
 
+// ── Own-BPAN lookup (auto-display rule): cached per wallet, then a count-gated
+// on-chain ownership scan, mirroring the extension's BPAN page bootstrap. ────
+function bpanCacheKey(owner: string): string {
+  return `bpan_numbers_${owner.toLowerCase()}`;
+}
+
+async function loadOwnBPAN(owner: string): Promise<string> {
+  try {
+    const raw = await getItem(bpanCacheKey(owner));
+    const cached: string[] = raw ? JSON.parse(raw) : [];
+    if (cached.length > 0) return cached[0];
+  } catch { /* cache is best-effort */ }
+  try {
+    const count = await getOwnedBPANCount(owner);
+    if (count === 0) return "";
+    const found = await findOwnedBPANs(owner);
+    if (found.length > 0) {
+      await setItem(bpanCacheKey(owner), JSON.stringify(found)).catch(() => {});
+      return found[0];
+    }
+  } catch { /* non-fatal: the dashboard just shows the address */ }
+  return "";
+}
+
 export function useMobileWallet(unlocked: boolean): MobileWalletState {
   const [evmAddress, setEvmAddress] = useState("");
+  const [bpan, setBpan] = useState("");
   const [nonEvmAddresses, setNonEvmAddresses] = useState<NonEvmAddressMap | null>(null);
   const [natives, setNatives] = useState<AssetRow[]>([]);
   const [tokensByChain, setTokensByChain] = useState<Record<string, AutoToken[]>>({});
@@ -95,6 +148,13 @@ export function useMobileWallet(unlocked: boolean): MobileWalletState {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const busy = useRef(false);
+  const discoveryBusy = useRef(false);
+  // Address cache, filled on the first refresh after an unlock. Deriving all
+  // seven chains from the mnemonic is JS-thread CPU (measured ~10 s for the
+  // EVM account alone on a dev-mode emulator) — doing it once per unlock
+  // instead of every refresh is what makes refreshes paint promptly. Only
+  // PUBLIC addresses are cached; keys are re-derived per send.
+  const addrCache = useRef<{ evm: string; addrs: NonEvmAddressMap } | null>(null);
 
   const refresh = useCallback(() => {
     if (!unlocked || busy.current) return;
@@ -102,35 +162,52 @@ export function useMobileWallet(unlocked: boolean): MobileWalletState {
     setLoading(true);
     setError("");
     (async () => {
-      const mnemonic = await getUnlockedMnemonic();
-      if (!mnemonic) throw new Error("locked");
+      // Macrotask yield: everything below runs in microtask continuations,
+      // which Hermes executes BEFORE the pending "loading" state can paint —
+      // without this the dashboard looks dead during the first derivation.
+      await new Promise((r) => setTimeout(r, 0));
 
-      const evm = importFromMnemonic(mnemonic).address;
+      let cached = addrCache.current;
+      if (!cached) {
+        const mnemonic = await getUnlockedMnemonic();
+        if (!mnemonic) throw new Error("locked");
+        const evm = importFromMnemonic(mnemonic).address;
+        setEvmAddress(evm);
+        const derived = await deriveNonEvmAddresses(mnemonic);
+        // Addresses only from here on; the secret keys in `derived` go out of
+        // scope now and are never stored in hook state.
+        cached = {
+          evm,
+          addrs: {
+            bitcoin: derived.bitcoin.address,
+            solana: derived.solana.address,
+            sui: derived.sui.address,
+            tron: derived.tron.address,
+            xrp: derived.xrp.address,
+            litecoin: derived.litecoin.address,
+          },
+        };
+        addrCache.current = cached;
+      }
+      const { evm, addrs } = cached;
       setEvmAddress(evm);
-      const derived = await deriveNonEvmAddresses(mnemonic);
-      // Addresses only from here on; the secret keys in `derived` go out of
-      // scope now and are never stored in hook state.
-      const addrs: NonEvmAddressMap = {
-        bitcoin: derived.bitcoin.address,
-        solana: derived.solana.address,
-        sui: derived.sui.address,
-        tron: derived.tron.address,
-        xrp: derived.xrp.address,
-        litecoin: derived.litecoin.address,
-      };
       setNonEvmAddresses(addrs);
 
-      const [liveRates, hiddenSet] = await Promise.all([
+      const [liveRates, hiddenSet] = await withTimeout(Promise.all([
         fetchRates(),
         loadHiddenTokens(evm.toLowerCase()),
-      ]);
+      ]), REFRESH_TIMEOUT_MS, "Rates fetch");
       setRates(liveRates);
       setHidden(hiddenSet);
 
-      const [evmSweep, nonEvm] = await Promise.all([
+      // Own-BPAN display is independent of balances; let it land whenever the
+      // quorum read finishes (cached after the first success).
+      void loadOwnBPAN(evm).then(setBpan);
+
+      const [evmSweep, nonEvm] = await withTimeout(Promise.all([
         sweepEvmNativeBalances(evm, {}, new Map<string, ChainBalance>()),
         fetchNonEvmBalancesByAddress(addrs),
-      ]);
+      ]), REFRESH_TIMEOUT_MS, "Balance sweep");
 
       const nativeRows: AssetRow[] = [
         ...evmSweep.results.map((c) => ({
@@ -156,10 +233,39 @@ export function useMobileWallet(unlocked: boolean): MobileWalletState {
       ];
       setNatives(nativeRows);
 
-      // Token discovery streams per chain through the proxy; paint as it lands.
-      await sweepAllChainTokens(evm, (chainId, tokens) => {
-        setTokensByChain((prev) => ({ ...prev, [chainId]: tokens }));
-      });
+      // Token discovery paints as it lands but runs OUTSIDE the busy-guarded
+      // phase, with its own single-flight guard: a slow or hung endpoint here
+      // must never block the next refresh (the on-device failure mode was
+      // exactly that — busy stayed true for minutes and the unlock-triggered
+      // refresh bailed silently, leaving the dashboard empty).
+      if (!discoveryBusy.current) {
+        discoveryBusy.current = true;
+        const discovery = Promise.all([
+          sweepAllChainTokens(evm, (chainId, tokens) => {
+            setTokensByChain((prev) => ({ ...prev, [chainId]: tokens }));
+          }),
+          // Non-EVM lists query their public endpoints directly. null =
+          // provider unreachable → keep the last-known list; [] =
+          // authoritative empty.
+          (async () => {
+            const [spl, trc, sui] = await Promise.all([
+              fetchSolanaTokens(addrs.solana).catch(() => null),
+              fetchTronTokens(addrs.tron).catch(() => null),
+              fetchSuiTokens(addrs.sui).catch(() => null),
+            ]);
+            setTokensByChain((prev) => {
+              const next = { ...prev };
+              if (spl) next.solana = spl as AutoToken[];
+              if (trc) next.tron = trc as AutoToken[];
+              if (sui) next.sui = sui as AutoToken[];
+              return next;
+            });
+          })(),
+        ]);
+        void withTimeout(discovery, DISCOVERY_TIMEOUT_MS, "Token discovery")
+          .catch(() => { /* partial lists already painted; next refresh retries */ })
+          .finally(() => { discoveryBusy.current = false; });
+      }
     })()
       .catch((e) => setError(String(e)))
       .finally(() => {
@@ -170,9 +276,10 @@ export function useMobileWallet(unlocked: boolean): MobileWalletState {
 
   useEffect(() => {
     if (unlocked) refresh();
+    else addrCache.current = null; // lock: cached addresses die with the session
   }, [unlocked, refresh]);
 
-  const tokens = tokenRows(tokensByChain, hidden);
+  const tokens = tokenRows(tokensByChain, hidden, rates);
   // Natives with a balance always show; zero-balance natives only clutter a
   // phone screen, but keep ETH so an empty wallet is not a blank page.
   const visibleNatives = natives.filter(
@@ -184,6 +291,7 @@ export function useMobileWallet(unlocked: boolean): MobileWalletState {
 
   return {
     evmAddress,
+    bpan,
     nonEvmAddresses,
     rows,
     chainIds,
