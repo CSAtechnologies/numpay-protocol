@@ -1,15 +1,12 @@
-// Phase 0 skeleton: create/import wallet → 6-digit PIN (+ optional biometrics)
-// → Keystore-backed dual-wrapped vault → unlock with backoff → home.
-// Deliberately minimal UI; the point is the vault/auth machinery and the
-// on-device core spike, not product design. FLAG_SECURE on secret screens is
-// a follow-up (needs expo-screen-capture or a config plugin).
+// NumPay mobile shell: create/import wallet → 6-digit PIN (+ optional
+// biometrics) → Keystore-backed dual-wrapped vault → unlock with backoff →
+// dashboard / receive / send. Visuals come from src/ui (the extension's design
+// tokens + shared components); the vault/auth machinery is unchanged from
+// Phase 0. FLAG_SECURE on secret screens is a follow-up (needs
+// expo-screen-capture or a config plugin).
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View,
-} from "react-native";
-import qrcode from "qrcode-generator";
-import type { NonEvmAddressMap } from "@numpay/core/chains";
+import { useCallback, useEffect, useState } from "react";
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 
 import { createWallet, importFromMnemonic } from "@numpay/core/wallet";
 import {
@@ -19,33 +16,34 @@ import {
 } from "./src/vault/mobileVault";
 import { runSpike, type SpikeResult } from "./spike/runSpike";
 import { runDevnetTx } from "./spike/devnetTx";
-import { useMobileWallet, type AssetRow } from "./src/wallet/useMobileWallet";
+import { useMobileWallet, type AssetRow, type MobileWalletState } from "./src/wallet/useMobileWallet";
+import { colors, radius, type as ts, spacing } from "./src/ui/theme";
+import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SectionLabel } from "./src/ui/components";
+import { AssetIcon, ChainBadge, ChainIcon } from "./src/ui/coins";
+import { ReceiveScreen, type ReceiveAddrs } from "./src/screens/ReceiveScreen";
+import { SendScreen } from "./src/screens/SendScreen";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
-  | "spike" | "devnet" | "receive";
-
-interface ReceiveAddrs { evm: string; nonEvm: NonEvmAddressMap | null }
+  | "spike" | "devnet" | "receive" | "send";
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("loading");
   const [receiveAddrs, setReceiveAddrs] = useState<ReceiveAddrs | null>(null);
   const [status, setStatus] = useState<VaultStatus | null>(null);
   const [pendingMnemonic, setPendingMnemonic] = useState("");
-  const [evmAddress, setEvmAddress] = useState("");
   const [error, setError] = useState("");
   const [now, setNow] = useState(Date.now()); // drives the lockout countdown
+
+  const unlocked = mode === "home" || mode === "receive" || mode === "send";
+  const w = useMobileWallet(unlocked);
 
   const refresh = useCallback(async () => {
     const s = await getStatus();
     setStatus(s);
     const mn = await getUnlockedMnemonic();
-    if (mn) {
-      setEvmAddress(importFromMnemonic(mn).address);
-      setMode("home");
-    } else {
-      setMode(s.exists ? "locked" : "onboard");
-    }
+    if (mn) setMode("home");
+    else setMode(s.exists ? "locked" : "onboard");
   }, []);
 
   useEffect(() => {
@@ -66,8 +64,10 @@ export default function App() {
   return (
     <View style={st.container}>
       <StatusBar style="light" />
-      <Text style={st.title}>NumPay</Text>
       {mode === "loading" && <Text style={st.dim}>loading…</Text>}
+      {(mode === "onboard" || mode === "import" || mode === "reveal" || mode === "pin" || mode === "locked") && (
+        <AuthHeader />
+      )}
       {mode === "onboard" && (
         <Onboard
           onCreate={() => { setPendingMnemonic(createWallet().mnemonic); setMode("reveal"); }}
@@ -80,8 +80,8 @@ export default function App() {
           onBack={() => setMode("onboard")}
           onSubmit={(phrase) => {
             try {
-              const w = importFromMnemonic(phrase);
-              setPendingMnemonic(w.mnemonic);
+              const wa = importFromMnemonic(phrase);
+              setPendingMnemonic(wa.mnemonic);
               setError("");
               setMode("pin");
             } catch {
@@ -140,8 +140,13 @@ export default function App() {
       )}
       {mode === "home" && (
         <Dashboard
+          w={w}
           argonMs={getLastArgonMs()}
-          onReceive={(addrs) => { setReceiveAddrs(addrs); setMode("receive"); }}
+          onSend={() => setMode("send")}
+          onReceive={() => {
+            setReceiveAddrs({ evm: w.evmAddress, nonEvm: w.nonEvmAddresses });
+            setMode("receive");
+          }}
           onLock={async () => { await lock(); setError(""); await refresh(); }}
           onSpike={() => setMode("spike")}
           onDevnet={() => setMode("devnet")}
@@ -149,10 +154,22 @@ export default function App() {
         />
       )}
       {mode === "receive" && receiveAddrs && (
-        <Receive addrs={receiveAddrs} onBack={() => setMode("home")} />
+        <ReceiveScreen addrs={receiveAddrs} onBack={() => setMode("home")} />
       )}
+      {mode === "send" && <SendScreen w={w} onBack={() => setMode("home")} />}
       {mode === "spike" && <Spike onBack={() => setMode("home")} />}
       {mode === "devnet" && <DevnetTx onBack={() => setMode("home")} />}
+    </View>
+  );
+}
+
+// Brand header for the auth screens: the small gradient logo mark + wordmark
+// (the popup's .logo-mark, solid brand fill in RN).
+function AuthHeader() {
+  return (
+    <View style={st.authHeader}>
+      <View style={st.logoMark}><Text style={st.logoMarkText}>N</Text></View>
+      <Text style={st.wordmark}>NumPay</Text>
     </View>
   );
 }
@@ -162,7 +179,7 @@ function Onboard(p: { onCreate: () => void; onImport: () => void }) {
     <View>
       <Text style={st.h2}>Set up your wallet</Text>
       <Btn label="Create new wallet" onPress={p.onCreate} />
-      <Btn label="Import recovery phrase" onPress={p.onImport} secondary />
+      <Btn label="Import recovery phrase" onPress={p.onImport} variant="secondary" />
     </View>
   );
 }
@@ -172,19 +189,18 @@ function Import(p: { error: string; onBack: () => void; onSubmit: (phrase: strin
   return (
     <View>
       <Text style={st.h2}>Import wallet</Text>
-      <TextInput
-        style={[st.input, { height: 90 }]}
+      <Field
+        style={{ height: 90, textAlignVertical: "top" }}
         multiline
         autoCapitalize="none"
         autoCorrect={false}
         placeholder="Recovery phrase (12 or 24 words)"
-        placeholderTextColor="#666"
         value={phrase}
         onChangeText={setPhrase}
       />
       {!!p.error && <Text style={st.err}>{p.error}</Text>}
       <Btn label="Continue" onPress={() => p.onSubmit(phrase.trim())} />
-      <Btn label="Back" onPress={p.onBack} secondary />
+      <Btn label="Back" onPress={p.onBack} variant="secondary" />
     </View>
   );
 }
@@ -193,13 +209,15 @@ function Reveal(p: { mnemonic: string; onNext: () => void }) {
   return (
     <View>
       <Text style={st.h2}>Your recovery phrase</Text>
-      <Text style={st.warn}>
-        Write these words down in order and keep them offline. Your PIN only
-        unlocks this phone's copy. This phrase IS the wallet.
-      </Text>
-      <View style={st.mnemonicBox}>
+      <AlertCard
+        tone="amber"
+        title="This phrase IS the wallet"
+        body="Write these words down in order and keep them offline. Your PIN only unlocks this phone's copy."
+        style={{ marginBottom: 10 }}
+      />
+      <Card style={{ padding: 14 }}>
         <Text style={st.mnemonic}>{p.mnemonic}</Text>
-      </View>
+      </Card>
       <Btn label="I saved it, continue" onPress={p.onNext} />
     </View>
   );
@@ -222,7 +240,11 @@ function PinSetup(p: {
       {p.bioAvailable && (
         <View style={st.rowBetween}>
           <Text style={st.body}>Biometric unlock</Text>
-          <Switch value={bio} onValueChange={setBio} />
+          <Switch
+            value={bio}
+            onValueChange={setBio}
+            trackColor={{ true: colors.brand, false: colors.surface4 }}
+          />
         </View>
       )}
       {!!(localErr || p.error) && <Text style={st.err}>{localErr || p.error}</Text>}
@@ -254,51 +276,85 @@ function Locked(p: {
       <PinInput value={pin} onChange={setPin} placeholder="6-digit PIN" />
       {!!p.error && <Text style={st.err}>{p.error}</Text>}
       {lockedFor > 0 ? (
-        <Text style={st.warn}>
-          Locked out. Try again in {lockedFor >= 60 ? `${Math.ceil(lockedFor / 60)} min` : `${lockedFor} s`}.
-        </Text>
+        <AlertCard
+          tone="amber"
+          title="Locked out"
+          body={`Too many attempts. Try again in ${lockedFor >= 60 ? `${Math.ceil(lockedFor / 60)} min` : `${lockedFor} s`}.`}
+          style={{ marginTop: 10 }}
+        />
       ) : (
         <Btn label="Unlock" onPress={() => { p.onPin(pin); setPin(""); }} />
       )}
-      {p.status.biometricsEnabled && <Btn label="Use biometrics" onPress={p.onBio} secondary />}
+      {p.status.biometricsEnabled && <Btn label="Use biometrics" onPress={p.onBio} variant="secondary" />}
     </View>
   );
 }
 
+// ── Dashboard ─────────────────────────────────────────────────────────────────
 function Dashboard(p: {
+  w: MobileWalletState;
   argonMs: number | null;
-  onReceive: (addrs: ReceiveAddrs) => void;
+  onSend: () => void;
+  onReceive: () => void;
   onLock: () => void;
   onSpike: () => void;
   onDevnet: () => void;
   onWipe: () => void;
 }) {
-  const w = useMobileWallet(true);
+  const { w } = p;
   const [confirmWipe, setConfirmWipe] = useState(false);
   const [filter, setFilter] = useState<string | null>(null);
   const rows = filter ? w.rows.filter((r) => r.chainId === filter) : w.rows;
   return (
     <View style={{ flex: 1 }}>
-      <Text style={st.dim}>Portfolio</Text>
-      <Text style={st.portfolio}>
-        ${w.portfolioUsd.toFixed(2)}
-        {w.loading ? "  …" : ""}
-      </Text>
-      <Text style={st.mono} numberOfLines={1}>{w.evmAddress}</Text>
-      {!!w.error && <Text style={st.err}>{w.error}</Text>}
+      {/* Header: logo mark + wordmark + lock */}
+      <View style={st.homeHeader}>
+        <View style={st.logoMark}><Text style={st.logoMarkText}>N</Text></View>
+        <Text style={st.wordmark}>NumPay</Text>
+        <View style={{ flex: 1 }} />
+        <Pressable onPress={p.onLock} style={st.iconBtn} hitSlop={8}>
+          <Text style={{ color: colors.muted, fontSize: 13 }}>{"🔒"}</Text>
+        </Pressable>
+      </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={st.chipRow}>
+      {/* Portfolio hero */}
+      <View style={st.hero}>
+        <View style={st.heroLabelRow}>
+          <View style={st.greenDot} />
+          <SectionLabel text="Portfolio" style={{ color: colors.brand2 } as object} />
+        </View>
+        <Text style={st.portfolio}>
+          ${w.portfolioUsd.toFixed(2)}
+          {w.loading ? "  …" : ""}
+        </Text>
+        <Text style={st.heroAddr} numberOfLines={1}>{w.evmAddress}</Text>
+      </View>
+
+      {/* Action circles (Send / Receive) */}
+      <View style={st.actions}>
+        <ActionCircle label="Send" color={colors.brand} glyph="↑" onPress={p.onSend} />
+        <ActionCircle label="Receive" color="#22c55e" glyph="↓" onPress={p.onReceive} />
+      </View>
+
+      {!!w.error && (
+        <AlertCard tone="danger" title="Refresh failed" body={w.error} style={{ marginBottom: 8 }} />
+      )}
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, marginBottom: 6 }}>
         <Chip label="All" active={filter === null} onPress={() => setFilter(null)} />
         {w.chainIds.map((id) => (
-          <Chip key={id} label={id} active={filter === id} onPress={() => setFilter(id)} />
+          <Chip
+            key={id}
+            label={id}
+            active={filter === id}
+            onPress={() => setFilter(id)}
+            icon={<ChainIcon chainId={id} size={16} />}
+          />
         ))}
       </ScrollView>
 
-      <Btn
-        label="Receive"
-        onPress={() => p.onReceive({ evm: w.evmAddress, nonEvm: w.nonEvmAddresses })}
-      />
-      <ScrollView style={{ flex: 1, marginTop: 6 }}>
+      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+        <SectionLabel text="Assets" style={{ marginTop: 8, marginBottom: 2 } as object} />
         {rows.map((r) => (
           <AssetRowView key={r.key} row={r} />
         ))}
@@ -306,17 +362,14 @@ function Dashboard(p: {
           <Text style={st.dim}>No assets yet. Receive funds to get started.</Text>
         )}
         <View style={st.devBox}>
-          <Text style={st.dim}>
-            Dev{p.argonMs !== null ? ` · argon2 ${p.argonMs} ms` : ""}
-          </Text>
-          <Btn label="Refresh" onPress={w.refresh} secondary />
-          <Btn label="Lock" onPress={p.onLock} secondary />
-          <Btn label="Run core spike" onPress={p.onSpike} secondary />
-          <Btn label="Devnet tx (Phase 0 gate)" onPress={p.onDevnet} secondary />
+          <SectionLabel text={`Dev${p.argonMs !== null ? ` · argon2 ${p.argonMs} ms` : ""}`} />
+          <Btn label="Refresh" onPress={w.refresh} variant="secondary" />
+          <Btn label="Run core spike" onPress={p.onSpike} variant="secondary" />
+          <Btn label="Devnet tx (Phase 0 gate)" onPress={p.onDevnet} variant="secondary" />
           <Btn
             label={confirmWipe ? "Tap again to WIPE vault (seed is the only recovery)" : "Wipe vault (dev)"}
             onPress={() => (confirmWipe ? p.onWipe() : setConfirmWipe(true))}
-            danger
+            variant="danger"
           />
         </View>
       </ScrollView>
@@ -324,30 +377,42 @@ function Dashboard(p: {
   );
 }
 
-function Chip(p: { label: string; active: boolean; onPress: () => void }) {
+function ActionCircle(p: { label: string; color: string; glyph: string; onPress: () => void }) {
   return (
-    <Pressable style={[st.chip, p.active && st.chipActive]} onPress={p.onPress}>
-      <Text style={[st.chipText, p.active && st.chipTextActive]}>{p.label}</Text>
+    <Pressable onPress={p.onPress} style={({ pressed }) => [st.actionCircle, pressed && { transform: [{ scale: 0.93 }] }]}>
+      <View style={[st.actionIcon, { backgroundColor: p.color }]}>
+        <Text style={{ color: "#fff", fontSize: 20, fontWeight: "700" }}>{p.glyph}</Text>
+      </View>
+      <Text style={st.actionLabel}>{p.label}</Text>
     </Pressable>
   );
 }
 
+// Token/holdings row (.token-row): flat row with hairline divider, house-framed
+// asset icon + chain corner badge, name/chain left, balance/fiat right.
 function AssetRowView(p: { row: AssetRow }) {
   const r = p.row;
   return (
-    <View style={st.assetRow}>
-      <View style={st.assetIcon}>
-        <Text style={st.assetIconText}>{r.symbol.slice(0, 3)}</Text>
+    <View style={st.tokenRow}>
+      <View style={{ width: 32, height: 32 }}>
+        <AssetIcon
+          symbol={r.symbol}
+          logo={r.logo}
+          chainId={r.chainId}
+          address={r.isNative ? undefined : r.key.split(":")[1]}
+          size={32}
+        />
+        {!r.isNative && <ChainBadge chainId={r.chainId} size={13} />}
       </View>
-      <View style={{ flex: 1, marginLeft: 10 }}>
-        <Text style={st.body} numberOfLines={1}>{r.name}</Text>
-        <Text style={st.dimSmall}>{r.chainName}</Text>
+      <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
+        <Text style={st.tokenName} numberOfLines={1}>{r.name}</Text>
+        <Text style={st.tokenSub}>{r.chainName}</Text>
       </View>
       <View style={{ alignItems: "flex-end" }}>
-        <Text style={st.body}>
+        <Text style={st.tokenBal}>
           {r.balanceNum.toLocaleString(undefined, { maximumFractionDigits: 6 })} {r.symbol}
         </Text>
-        <Text style={st.dimSmall}>${r.usdValue.toFixed(2)}</Text>
+        <Text style={st.tokenSub}>${r.usdValue.toFixed(2)}</Text>
       </View>
     </View>
   );
@@ -363,7 +428,7 @@ function Spike(p: { onBack: () => void }) {
   const failed = results?.filter((r) => !r.pass).length ?? 0;
   return (
     <View style={{ flex: 1 }}>
-      <Text style={st.h2}>Core spike</Text>
+      <ScreenHeader title="Core spike" onBack={p.onBack} />
       {!results ? (
         <Text style={st.dim}>running…</Text>
       ) : (
@@ -378,7 +443,6 @@ function Spike(p: { onBack: () => void }) {
           </Text>
         ))}
       </ScrollView>
-      <Btn label="Back" onPress={p.onBack} secondary />
     </View>
   );
 }
@@ -399,7 +463,7 @@ function DevnetTx(p: { onBack: () => void }) {
   }, []);
   return (
     <View style={{ flex: 1 }}>
-      <Text style={st.h2}>Devnet transaction</Text>
+      <ScreenHeader title="Devnet transaction" onBack={p.onBack} />
       <Text style={outcome === "fail" ? st.err : outcome === "pass" ? st.ok : st.dim}>
         {outcome === "running" ? "running…" : outcome === "pass" ? "CONFIRMED ON-CHAIN" : "FAILED"}
       </Text>
@@ -408,163 +472,94 @@ function DevnetTx(p: { onBack: () => void }) {
           <Text key={i} style={st.mono} selectable>{l}</Text>
         ))}
       </ScrollView>
-      <Btn label="Back" onPress={p.onBack} secondary />
-    </View>
-  );
-}
-
-// Pure-JS QR: qrcode-generator computes the module matrix, rendered as plain
-// Views. No native module, so no dev-client rebuild for this screen.
-function QrView(p: { value: string }) {
-  const qr = useMemo(() => {
-    const q = qrcode(0, "M"); // type 0 = auto-size for the payload
-    q.addData(p.value);
-    q.make();
-    return q;
-  }, [p.value]);
-  const n = qr.getModuleCount();
-  const cell = Math.max(3, Math.floor(264 / n));
-  return (
-    <View style={st.qrBox}>
-      {Array.from({ length: n }, (_, r) => (
-        <View key={r} style={{ flexDirection: "row" }}>
-          {Array.from({ length: n }, (_, c) => (
-            <View
-              key={c}
-              style={{
-                width: cell,
-                height: cell,
-                backgroundColor: qr.isDark(r, c) ? "#000" : "#fff",
-              }}
-            />
-          ))}
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function Receive(p: { addrs: ReceiveAddrs; onBack: () => void }) {
-  const entries = useMemo(() => {
-    const list = [
-      { id: "evm", label: "EVM", note: "Ethereum, Base, BSC, Polygon and every EVM chain", address: p.addrs.evm },
-    ];
-    const n = p.addrs.nonEvm;
-    if (n) {
-      list.push(
-        { id: "bitcoin", label: "BTC", note: "Bitcoin", address: n.bitcoin },
-        { id: "solana", label: "SOL", note: "Solana", address: n.solana },
-        { id: "sui", label: "SUI", note: "Sui", address: n.sui },
-        { id: "tron", label: "TRX", note: "Tron", address: n.tron },
-        { id: "xrp", label: "XRP", note: "XRP Ledger", address: n.xrp },
-        { id: "litecoin", label: "LTC", note: "Litecoin", address: n.litecoin },
-      );
-    }
-    return list;
-  }, [p.addrs]);
-  const [sel, setSel] = useState("evm");
-  const active = entries.find((e) => e.id === sel) ?? entries[0];
-  return (
-    <View style={{ flex: 1 }}>
-      <Text style={st.h2}>Receive</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={st.chipRow}>
-        {entries.map((e) => (
-          <Chip key={e.id} label={e.label} active={sel === e.id} onPress={() => setSel(e.id)} />
-        ))}
-      </ScrollView>
-      <ScrollView style={{ flex: 1 }}>
-        <Text style={[st.dim, { marginTop: 16 }]}>{active.note}</Text>
-        <View style={{ marginTop: 12 }}>
-          <QrView value={active.address} />
-        </View>
-        <Text style={[st.mono, { marginTop: 14 }]} selectable>
-          {active.address}
-        </Text>
-        <Text style={st.warn}>
-          Only send {active.label === "EVM" ? "EVM-chain assets" : `${active.label} assets`} to
-          this address. Anything else is lost.
-        </Text>
-        <Btn
-          label="Share address"
-          onPress={() => { Share.share({ message: active.address }).catch(() => {}); }}
-        />
-        <Btn label="Back" onPress={p.onBack} secondary />
-      </ScrollView>
     </View>
   );
 }
 
 function PinInput(p: { value: string; onChange: (v: string) => void; placeholder: string }) {
   return (
-    <TextInput
-      style={st.input}
+    <Field
       keyboardType="number-pad"
       secureTextEntry
       maxLength={6}
       placeholder={p.placeholder}
-      placeholderTextColor="#666"
       value={p.value}
       onChangeText={(v) => p.onChange(v.replace(/\D/g, ""))}
     />
   );
 }
 
-function Btn(p: { label: string; onPress: () => void; secondary?: boolean; danger?: boolean }) {
-  return (
-    <Pressable
-      style={[st.btn, p.secondary && st.btnSecondary, p.danger && st.btnDanger]}
-      onPress={p.onPress}
-    >
-      <Text style={st.btnText}>{p.label}</Text>
-    </Pressable>
-  );
-}
-
 const st = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#12101c", paddingTop: 60, paddingHorizontal: 20 },
-  title: { color: "#c9beff", fontSize: 22, fontWeight: "700", marginBottom: 16 },
-  h2: { color: "#e5e1ff", fontSize: 18, fontWeight: "600", marginBottom: 12 },
-  body: { color: "#e5e1ff", fontSize: 15 },
-  dim: { color: "#8b87a0", fontSize: 13, marginTop: 8 },
-  dimSmall: { color: "#8b87a0", fontSize: 12 },
-  portfolio: { color: "#e5e1ff", fontSize: 32, fontWeight: "700" },
-  chipRow: { marginTop: 14, flexGrow: 0 },
-  chip: {
-    backgroundColor: "#1e1a30", borderRadius: 16, paddingHorizontal: 14,
-    paddingVertical: 7, marginRight: 8,
+  container: {
+    flex: 1,
+    backgroundColor: colors.bg,
+    paddingTop: 56,
+    paddingHorizontal: spacing.screen,
   },
-  chipActive: { backgroundColor: "#7c6cf1" },
-  chipText: { color: "#8b87a0", fontSize: 13 },
-  chipTextActive: { color: "#fff" },
-  assetRow: {
-    flexDirection: "row", alignItems: "center", backgroundColor: "#1e1a30",
-    borderRadius: 12, padding: 12, marginTop: 8,
-  },
-  assetIcon: {
-    width: 38, height: 38, borderRadius: 19, backgroundColor: "#2a2542",
+
+  authHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 20 },
+  homeHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 },
+  logoMark: {
+    width: 28, height: 28, borderRadius: 9,
+    backgroundColor: colors.brand,
     alignItems: "center", justifyContent: "center",
   },
-  assetIconText: { color: "#c9beff", fontSize: 11, fontWeight: "700" },
-  devBox: { marginTop: 24, marginBottom: 30 },
-  qrBox: { backgroundColor: "#fff", padding: 12, alignSelf: "center", borderRadius: 10 },
-  mono: { color: "#e5e1ff", fontFamily: "monospace", fontSize: 13, marginTop: 2 },
-  ok: { color: "#4ade80", fontSize: 13 },
-  err: { color: "#f87171", fontSize: 14, marginTop: 8 },
-  warn: { color: "#fbbf24", fontSize: 14, marginVertical: 8, lineHeight: 20 },
-  mnemonicBox: { backgroundColor: "#1e1a30", borderRadius: 12, padding: 14, marginVertical: 10 },
-  mnemonic: { color: "#e5e1ff", fontSize: 16, lineHeight: 26, fontFamily: "monospace" },
-  input: {
-    backgroundColor: "#1e1a30", color: "#e5e1ff", borderRadius: 10,
-    paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, marginTop: 10,
+  logoMarkText: { color: "#fff", fontWeight: "700", fontSize: 13 },
+  wordmark: { color: colors.textPrimary, fontSize: 16, fontWeight: "700" },
+  iconBtn: {
+    width: 32, height: 32, borderRadius: radius.iconBtn,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
+    alignItems: "center", justifyContent: "center",
   },
+
+  hero: {
+    backgroundColor: colors.surface2,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    borderRadius: radius.hero,
+    padding: spacing.cardPad,
+    marginTop: 6,
+  },
+  heroLabelRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  greenDot: {
+    width: 6, height: 6, borderRadius: 3, backgroundColor: colors.success,
+  },
+  portfolio: {
+    color: colors.textPrimary, fontSize: 32, fontWeight: "700",
+    marginTop: 8, fontVariant: ["tabular-nums"],
+  },
+  heroAddr: { color: colors.muted, fontSize: ts.sub, marginTop: 8, fontFamily: "monospace" },
+
+  actions: {
+    flexDirection: "row", justifyContent: "center", gap: 36,
+    marginTop: 14, marginBottom: 12,
+  },
+  actionCircle: { alignItems: "center", gap: 7, padding: 4 },
+  actionIcon: {
+    width: 50, height: 50, borderRadius: 25,
+    alignItems: "center", justifyContent: "center",
+  },
+  actionLabel: { color: colors.textSecondary, fontSize: ts.small, fontWeight: "500" },
+
+  tokenRow: {
+    flexDirection: "row", alignItems: "center",
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(42, 36, 80, 0.7)",
+  },
+  tokenName: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "500" },
+  tokenSub: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
+  tokenBal: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "500", fontVariant: ["tabular-nums"] },
+
+  h2: { color: colors.textPrimary, fontSize: ts.h2, fontWeight: "600", marginBottom: 12 },
+  body: { color: colors.textPrimary, fontSize: 15 },
+  dim: { color: colors.muted, fontSize: ts.row, marginTop: 8 },
+  devBox: { marginTop: 24, marginBottom: 30 },
+  mono: { color: colors.textPrimary, fontFamily: "monospace", fontSize: ts.row, marginTop: 2 },
+  ok: { color: colors.success, fontSize: ts.row },
+  err: { color: colors.danger, fontSize: ts.body, marginTop: 8 },
+  mnemonic: { color: colors.textPrimary, fontSize: 16, lineHeight: 26, fontFamily: "monospace" },
   rowBetween: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 14,
   },
-  btn: {
-    backgroundColor: "#7c6cf1", borderRadius: 12, paddingVertical: 14,
-    alignItems: "center", marginTop: 14,
-  },
-  btnSecondary: { backgroundColor: "#2a2542" },
-  btnDanger: { backgroundColor: "#5b1f2b" },
-  btnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
 });
