@@ -7,10 +7,21 @@
 // pass through.
 
 let resolve: (packagedPath: string) => string = (p) => p;
+let resolverSet = false;
 
 /** Called once at app startup by the platform layer (see platform.ts). */
 export function setAssetUrlResolver(fn: (packagedPath: string) => string): void {
   resolve = fn;
+  resolverSet = true;
+}
+
+/**
+ * Whether the platform packages logo assets (and injected a resolver for them).
+ * Icon resolution uses this to skip vendored-local candidates on platforms that
+ * don't bundle them (mobile), where the relative path would just 404.
+ */
+export function hasAssetResolver(): boolean {
+  return resolverSet;
 }
 
 export function assetUrl(p: string): string {

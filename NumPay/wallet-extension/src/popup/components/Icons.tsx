@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useSyncExternalStore } from "react";
-import { ICON_DATA } from "@numpay/core/icons/iconData";
 import { ICON_GLYPHS } from "@numpay/core/icons/iconGlyphs";
-import { VENDORED_TOKENS, VENDORED_CHAINS } from "@numpay/core/icons/vendoredLogos";
-import { assetUrl } from "@numpay/core/icons/assets";
+import {
+  tokenIconUrl, chainIconUrl, chainLogoLocal, ETH_L2_CHAINS,
+  tokenFallbackSpec, chainFallbackSpec, fontSizeFor, type FallbackCoinSpec,
+} from "@numpay/core/icons/urls";
 import { NETWORKS } from "@numpay/core/networks";
 import { subscribeLogos, getTokenLogo } from "@numpay/core/logoCache";
 
@@ -329,44 +330,14 @@ export function NavSettingsIcon({ size = 20, className, active }: NavIconProps) 
 // ICON_GLYPHS) is the deterministic FALLBACK when the CDN has no logo.
 
 const FONT = "Geist, 'Helvetica Neue', Arial, 'Noto Sans', system-ui, sans-serif";
-const TOK_BASE = "https://assets.coincap.io/assets/icons/";
-const CHAIN_BASE = "https://icons.llamao.fi/icons/chains/rsz_";
 
-// our network id -> DefiLlama chain slug
-const CHAIN_SLUG: Record<string, string> = {
-  ethereum: "ethereum", sepolia: "ethereum", polygon: "polygon", arbitrum: "arbitrum",
-  optimism: "optimism", base: "base", avalanche: "avalanche", bsc: "binance",
-  zksync: "zksync-era", scroll: "scroll", linea: "linea", mantle: "mantle",
-  blast: "blast", polygonzkevm: "polygon_zkevm", fantom: "fantom", cronos: "cronos",
-  celo: "celo", gnosis: "xdai", moonbeam: "moonbeam", aurora: "aurora", sei: "sei",
-  klaytn: "kaia", metis: "metis", solana: "solana", bitcoin: "bitcoin",
-  tron: "tron", xrp: "ripple", sui: "sui", litecoin: "litecoin",
-};
-
-// ── Deterministic fallback-coin builder (pure, from ICON_DATA + ICON_GLYPHS) ──
-function hashStr(s: string): number {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return h >>> 0;
-}
-function hexToRgb(h: string): number[] {
-  h = h.replace("#", "");
-  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
-  const n = parseInt(h, 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-function relLum(rgb: number[]): number {
-  const a = rgb.map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
-  return 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2];
-}
-function contrastText(disc: string): string { return relLum(hexToRgb(disc)) > 0.42 ? "#16181E" : "#FFFFFF"; }
-function isNearBlack(disc: string): boolean { return relLum(hexToRgb(disc)) < 0.045; }
-function paletteFor(sym: string): string { const p = ICON_DATA.palette; return p[hashStr(sym.toUpperCase()) % p.length]; }
+// ── Deterministic fallback-coin builder ────────────────────────────────────────
+// The spec (disc/mark colours, label, glyph key) comes from the shared resolver
+// in @numpay/core/icons/urls so mobile's native fallback disc matches; only the
+// SVG assembly (incl. the drawn glyph art) lives here.
 function escapeXml(s: string): string {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
-function monogram(sym: string): string { return sym.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4); }
-function fontSizeFor(txt: string): number { const n = txt.length; return n <= 1 ? 60 : n === 2 ? 46 : n === 3 ? 35 : 27; }
 function markText(txt: string, color: string): string {
   const n = txt.length;
   const ls = n >= 4 ? -1.6 : n === 3 ? -0.8 : 0;
@@ -375,60 +346,22 @@ function markText(txt: string, color: string): string {
     '" fill="' + color + '">' + escapeXml(txt) + "</text>";
 }
 
-interface ResolvedRec { disc?: string; mark?: string; glyph?: string; char?: string; mono?: string; }
-
-function buildSvg(rec: ResolvedRec | null | undefined, sym: string): string {
-  const discColor = (rec && rec.disc) || paletteFor(sym);
-  const mark = (rec && rec.mark) || contrastText(discColor);
-  let inner: string;
-  if (rec && rec.glyph && ICON_GLYPHS[rec.glyph]) {
-    inner = ICON_GLYPHS[rec.glyph](mark, discColor);
-  } else if (rec && rec.char) {
-    inner = markText(rec.char, mark);
-  } else {
-    const label = (rec && rec.mono) || monogram(sym);
-    inner = markText(label, mark);
-  }
-  const ring = isNearBlack(discColor)
+function buildSvg(spec: FallbackCoinSpec): string {
+  const inner = spec.glyph && ICON_GLYPHS[spec.glyph]
+    ? ICON_GLYPHS[spec.glyph](spec.textColor, spec.disc)
+    : markText(spec.label, spec.textColor);
+  const ring = spec.needsRing
     ? '<circle cx="64" cy="64" r="59" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1.5"/>'
     : "";
   return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">' +
-    '<circle cx="64" cy="64" r="60" fill="' + discColor + '"/>' + inner + ring + "</svg>";
+    '<circle cx="64" cy="64" r="60" fill="' + spec.disc + '"/>' + inner + ring + "</svg>";
 }
 
 function tokenFallbackSvg(sym: string): string {
-  const u = sym.toUpperCase();
-  const key = ICON_DATA.aliases[u] || u;
-  const brand = ICON_DATA.brand[key] || ICON_DATA.brand[u];
-  return buildSvg(brand, key);
+  return buildSvg(tokenFallbackSpec(sym));
 }
 function chainFallbackSvg(chainId: string): string {
-  const rec = ICON_DATA.chains[chainId];
-  if (!rec) return buildSvg(null, chainId);
-  return buildSvg(rec, rec.label || chainId);
-}
-
-// ── Real-logo URL resolvers ────────────────────────────────────────────────────
-
-export function tokenIconUrl(symbol: string): string {
-  const canon = (ICON_DATA.aliases[symbol.toUpperCase()] || symbol).toUpperCase();
-  const slug = canon.toLowerCase().replace(/[^a-z0-9]/g, "");
-  // Vendored local asset wins — instant, no CDN round-trip. Covers the curated
-  // override logos (blast/scroll/usdc/pol/ton) too, since those were vendored.
-  if (VENDORED_TOKENS.has(slug)) return assetUrl(`token-logos/${slug}.png`);
-  const ov = ICON_DATA.logoOverrides[canon];
-  if (ov) return assetUrl(ov);
-  return TOK_BASE + slug + "@2x.png";
-}
-
-// Local vendored chain logo (instant) or null when not vendored.
-export function chainLogoLocal(chainId: string): string | null {
-  return VENDORED_CHAINS.has(chainId) ? assetUrl(`chain-logos/${chainId}.png`) : null;
-}
-
-export function chainIconUrl(chainId: string): string | null {
-  const s = CHAIN_SLUG[chainId];
-  return s ? CHAIN_BASE + s + "?w=64&h=64" : null;
+  return buildSvg(chainFallbackSpec(chainId));
 }
 
 // Module-level memo of logo URLs that have failed to load, shared across every
@@ -530,15 +463,6 @@ export function ChainIcon({
   );
   return <FramedCoin sources={sources} fallbackSvg={chainFallbackSvg(chainId)} alt={chainId} size={size} />;
 }
-
-// ETH-L2 chains whose native gas token is ETH. Only for these does a native-coin
-// row swap the generic ETH diamond for the CHAIN mark (e.g. Base's Square, the
-// Arbitrum / Optimism logo), since "ETH on Arbitrum" reads more clearly as the
-// chain. Everything else keeps its own symbol logo.
-const ETH_L2_CHAINS = new Set([
-  "arbitrum", "optimism", "base", "zksync",
-  "scroll", "linea", "blast", "polygonzkevm",
-]);
 
 // ── AssetIcon ──────────────────────────────────────────────────────────────────
 // The symbol-keyed brand logo (TokenIcon) is the rule for every asset — token or
