@@ -224,7 +224,11 @@ export default function App() {
         <ActivityScreen owner={w.evmAddress} onBack={() => setMode("home")} />
       )}
       {mode === "bpan" && (
-        <BPANScreen w={w} onBack={() => setMode("home")} />
+        <BPANScreen
+          w={w}
+          onBack={() => setMode("home")}
+          onSessionExpired={() => { void showRelock(); }}
+        />
       )}
       {mode === "spike" && <Spike onBack={() => setMode("home")} />}
       {mode === "devnet" && <DevnetTx onBack={() => setMode("home")} />}
