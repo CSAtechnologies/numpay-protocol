@@ -1,20 +1,19 @@
-// Mobile Swap — EVM same-chain swaps through the shared core engine
-// (@numpay/core/swap): ParaSwap / KyberSwap / Relay quotes with the fee
-// config baked in, guard-checked execution, and the same error copy as the
-// extension. Slice scope: EVM chains only (Jupiter/Solana and bridging
-// follow); pickers offer the chain's native coin, the wallet's discovered
-// tokens, and the curated DEFAULT_TOKENS buy-side list.
+// Mobile Swap — same-chain swaps through the shared core engine
+// (@numpay/core/swap): EVM via ParaSwap / KyberSwap / Relay, Solana via
+// Jupiter, with the fee config baked in, guard-checked execution, and the
+// same error copy as the extension. Pickers offer the chain's native coin,
+// the wallet's discovered tokens, and a curated buy-side list.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { NETWORKS } from "@numpay/core/networks";
 import { getUsdPrice } from "@numpay/core/currency";
 import {
-  evmSwapReserve, parseSwapError, sanitizeSlippagePct,
+  evmSwapReserve, SOL_FEE_RESERVE, parseSwapError, sanitizeSlippagePct,
   type RouteOption, type SwapToken,
 } from "@numpay/core/swap";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
-import { fetchEvmQuotes, swapEvm } from "../wallet/swap";
-import { buildChainTokenList } from "../wallet/tokenList";
+import { fetchEvmQuotes, swapEvm, fetchSolanaSwapQuotes, swapSolana } from "../wallet/swap";
+import { buildChainTokenList, buildSolanaTokenList } from "../wallet/tokenList";
 import { explorerTxUrl } from "../wallet/send";
 import type { MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, radius, type as ts } from "../ui/theme";
@@ -29,22 +28,29 @@ export function SwapScreen({ w, onBack, onSessionExpired }: {
   onBack: () => void;
   onSessionExpired?: () => void;
 }) {
-  // EVM chains only in this slice; funded chains first, ethereum always shown.
+  // Funded EVM chains first, then Ethereum and Solana as always-available
+  // baselines (Jupiter/aggregator quotes are keyless and work without a
+  // balance, so an empty wallet can still price a swap into either).
   const chains = useMemo(() => {
     const funded = w.rows
       .filter((r) => r.isNative && NETWORKS[r.chainId] && r.balanceNum > 0)
       .map((r) => r.chainId);
     if (!funded.includes("ethereum")) funded.push("ethereum");
+    if (!funded.includes("solana")) funded.push("solana");
     return funded;
   }, [w.rows]);
 
   const [chainId, setChainId] = useState(chains[0] ?? "ethereum");
+  const isSolana = chainId === "solana";
   const net = NETWORKS[chainId];
 
-  // Native + held + curated-default tokens for the chain (shared with Bridge).
+  // Native + held + curated tokens for the chain (EVM builder, or the Solana
+  // one — Solana lives outside NETWORKS/DEFAULT_TOKENS).
   const tokenList = useMemo(
-    () => buildChainTokenList(chainId, w.rows, w.tokensByChain),
-    [chainId, w.rows, w.tokensByChain],
+    () => isSolana
+      ? buildSolanaTokenList(w.rows, w.tokensByChain)
+      : buildChainTokenList(chainId, w.rows, w.tokensByChain),
+    [chainId, isSolana, w.rows, w.tokensByChain],
   );
 
   const [fromToken, setFromToken] = useState<SwapToken | null>(null);
@@ -81,15 +87,15 @@ export function SwapScreen({ w, onBack, onSessionExpired }: {
     const seq = ++quoteSeq.current;
     setQuoting(true);
     quoteTimer.current = setTimeout(async () => {
-      const found = await fetchEvmQuotes(
-        chainId, from, to, amt, w.evmAddress, sanitizeSlippagePct(slippage),
-      );
+      const found = isSolana
+        ? await fetchSolanaSwapQuotes(from, to, amt, sanitizeSlippagePct(slippage))
+        : await fetchEvmQuotes(chainId, from, to, amt, w.evmAddress, sanitizeSlippagePct(slippage));
       if (seq !== quoteSeq.current) return;
       setQuoting(false);
       setRoutes(found);
       if (found.length === 0) setError("No routes found. Try a different amount or pair.");
     }, QUOTE_DEBOUNCE_MS);
-  }, [chainId, slippage, w.evmAddress]);
+  }, [chainId, isSolana, slippage, w.evmAddress]);
 
   function handleAmount(v: string) {
     const clean = v.replace(/[^0-9.]/g, "");
@@ -103,7 +109,8 @@ export function SwapScreen({ w, onBack, onSessionExpired }: {
     if (bal <= 0) return;
     let v = bal;
     if (!fromToken.address) {
-      const reserve = await evmSwapReserve(chainId);
+      // Native coin: hold back the network fee (SOL rent+fee, or live EVM gas).
+      const reserve = isSolana ? SOL_FEE_RESERVE : await evmSwapReserve(chainId);
       v = Math.max(0, bal - reserve);
     }
     const s = v > 0 ? String(Number(v.toFixed(8))) : "0";
@@ -142,10 +149,21 @@ export function SwapScreen({ w, onBack, onSessionExpired }: {
     Keyboard.dismiss();
     setSwapping(true); setError(""); setTxHash(""); setTxDetail(""); setTxFx("pending");
     try {
-      const hash = await swapEvm(
-        mnemonic, chainId, route, fromToken, toToken, amount, route.destAmount, slippage,
-        setTxDetail, () => w.refresh(),
-      );
+      let hash: string;
+      if (isSolana) {
+        const solBal = w.rows.find((r) => r.isNative && r.chainId === "solana")?.balanceNum ?? 0;
+        setTxDetail("Confirming your swap on-chain…");
+        hash = await swapSolana(
+          mnemonic, route, fromToken, toToken, amount, route.destAmount, slippage, solBal,
+          // Price moved past slippage during the fresh re-quote: refresh the display.
+          () => scheduleQuote(amount, fromToken, toToken),
+        );
+      } else {
+        hash = await swapEvm(
+          mnemonic, chainId, route, fromToken, toToken, amount, route.destAmount, slippage,
+          setTxDetail, () => w.refresh(),
+        );
+      }
       setTxHash(hash);
       setTxFx("success");
       w.refresh();

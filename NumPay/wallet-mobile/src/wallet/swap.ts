@@ -5,13 +5,16 @@
  * Key material is derived from the vault mnemonic per call and goes out of
  * scope immediately after signing.
  *
- * Slice scope: EVM same-chain swaps. Jupiter/Solana follows.
+ * EVM same-chain swaps run through executeEvmSwap; Solana same-chain swaps
+ * through executeSolanaSwap (Jupiter). Both quote via keyless public APIs.
  */
 import { ethers } from "ethers";
 import { importFromMnemonic, getSigner } from "@numpay/core/wallet";
 import { NETWORKS } from "@numpay/core/networks";
+import { deriveNonEvmAddresses } from "@numpay/core/chains";
 import {
-  executeEvmSwap, fetchParaswapQuote, fetchKyberQuote, fetchRelayQuote,
+  executeEvmSwap, executeSolanaSwap, fetchJupiterSwapQuote,
+  fetchParaswapQuote, fetchKyberQuote, fetchRelayQuote,
   type RouteOption, type SwapToken,
 } from "@numpay/core/swap";
 import { logTx } from "@numpay/core/txLog";
@@ -65,6 +68,47 @@ export async function swapEvm(
   void logTx({
     owner: w.address,
     hash, chainId, kind: "swap", timestamp: Date.now(),
+    symbol: fromToken.symbol, value: fromAmount, assetAddr: fromToken.address?.toLowerCase(), logo: fromToken.logo,
+    toSymbol: toToken.symbol, toValue: receiveAmt, toAssetAddr: toToken.address?.toLowerCase(), toLogo: toToken.logo, toChainId: toToken.chainId,
+  });
+  return hash;
+}
+
+/** Fetch a Jupiter (Solana same-chain) quote as a one-route list, best first. */
+export async function fetchSolanaSwapQuotes(
+  from: SwapToken, to: SwapToken, amount: string, slippagePct: number,
+): Promise<RouteOption[]> {
+  const q = await fetchJupiterSwapQuote(from, to, amount, slippagePct);
+  return q ? [q] : [];
+}
+
+/**
+ * Execute a quoted Solana same-chain swap via Jupiter. Derives the Solana
+ * keypair from the vault mnemonic, runs the core SOL-affordability + staleness
+ * checks, signs, and writes the txLog entry. Returns the tx signature.
+ */
+export async function swapSolana(
+  mnemonic: string,
+  route: RouteOption,
+  fromToken: SwapToken,
+  toToken: SwapToken,
+  fromAmount: string,
+  receiveAmt: string,
+  slippage: string,
+  solBalance: number,
+  onRepriceNeeded?: () => void,
+): Promise<string> {
+  const derived = await deriveNonEvmAddresses(mnemonic);
+  const hash = await executeSolanaSwap(route, {
+    fromToken, toToken, fromAmount,
+    solanaSecretKey: derived.solana.secretKey,
+    solanaAddress: derived.solana.address,
+    solBalance, slippage, onRepriceNeeded,
+  });
+
+  void logTx({
+    owner: importFromMnemonic(mnemonic).address,
+    hash, chainId: "solana", kind: "swap", timestamp: Date.now(),
     symbol: fromToken.symbol, value: fromAmount, assetAddr: fromToken.address?.toLowerCase(), logo: fromToken.logo,
     toSymbol: toToken.symbol, toValue: receiveAmt, toAssetAddr: toToken.address?.toLowerCase(), toLogo: toToken.logo, toChainId: toToken.chainId,
   });
