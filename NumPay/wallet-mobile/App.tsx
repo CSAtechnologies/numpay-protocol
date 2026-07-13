@@ -24,11 +24,12 @@ import { AssetIcon, ChainBadge, ChainIcon } from "./src/ui/coins";
 import { ReceiveScreen, type ReceiveAddrs } from "./src/screens/ReceiveScreen";
 import { SendScreen } from "./src/screens/SendScreen";
 import { SwapScreen } from "./src/screens/SwapScreen";
+import { BridgeScreen } from "./src/screens/BridgeScreen";
 import { ActivityScreen } from "./src/screens/ActivityScreen";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
-  | "spike" | "devnet" | "receive" | "send" | "swap" | "activity";
+  | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity";
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("loading");
@@ -45,7 +46,7 @@ export default function App() {
   const [relocked, setRelocked] = useState(false);
 
   const unlocked =
-    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "activity";
+    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity";
   const w = useMobileWallet(unlocked);
   const unlockedRef = useRef(unlocked);
   unlockedRef.current = unlocked;
@@ -181,6 +182,7 @@ export default function App() {
           argonMs={getLastArgonMs()}
           onSend={() => setMode("send")}
           onSwap={() => setMode("swap")}
+          onBridge={() => setMode("bridge")}
           onActivity={() => setMode("activity")}
           onReceive={() => {
             setReceiveAddrs({ evm: w.evmAddress, nonEvm: w.nonEvmAddresses });
@@ -204,6 +206,13 @@ export default function App() {
       )}
       {mode === "swap" && (
         <SwapScreen
+          w={w}
+          onBack={() => setMode("home")}
+          onSessionExpired={() => { void showRelock(); }}
+        />
+      )}
+      {mode === "bridge" && (
+        <BridgeScreen
           w={w}
           onBack={() => setMode("home")}
           onSessionExpired={() => { void showRelock(); }}
@@ -371,6 +380,7 @@ function Dashboard(p: {
   argonMs: number | null;
   onSend: () => void;
   onSwap: () => void;
+  onBridge: () => void;
   onActivity: () => void;
   onReceive: () => void;
   onLock: () => void;
@@ -417,6 +427,7 @@ function Dashboard(p: {
         <ActionCircle label="Send" color={colors.brand} glyph="↑" onPress={p.onSend} />
         <ActionCircle label="Receive" color="#22c55e" glyph="↓" onPress={p.onReceive} />
         <ActionCircle label="Swap" color="#f59e0b" glyph="⇄" onPress={p.onSwap} />
+        <ActionCircle label="Bridge" color="#8b5cf6" glyph="⇉" onPress={p.onBridge} />
         <ActionCircle label="Activity" color="#0ea5e9" glyph="≋" onPress={p.onActivity} />
       </View>
 
@@ -621,12 +632,13 @@ const st = StyleSheet.create({
   },
 
   actions: {
-    flexDirection: "row", justifyContent: "center", gap: 36,
+    flexDirection: "row", justifyContent: "space-between",
     marginTop: 14, marginBottom: 12,
+    paddingHorizontal: 4,
   },
-  actionCircle: { alignItems: "center", gap: 7, padding: 4 },
+  actionCircle: { alignItems: "center", gap: 7, padding: 2 },
   actionIcon: {
-    width: 50, height: 50, borderRadius: 25,
+    width: 46, height: 46, borderRadius: 23,
     alignItems: "center", justifyContent: "center",
   },
   actionLabel: { color: colors.textSecondary, fontSize: ts.small, fontWeight: "500" },
