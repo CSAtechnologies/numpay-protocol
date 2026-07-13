@@ -10,7 +10,9 @@ import {
 import TxRow from "../components/TxRow";
 import { NETWORKS } from "@numpay/core/networks";
 import { type TxRecord, fetchChainHistory, tokenMetaFromList, mergeLoggedTxs, txInvolvesAsset } from "@numpay/core/txHistory";
-import { loadTxLog, loggedToRecords } from "@numpay/core/txLog";
+import { loadTxLog, loggedToRecords, explorerTxUrl } from "@numpay/core/txLog";
+import { unwrapWsol, WSOL_MINT } from "@numpay/core/chains";
+import { markBalancesDirty } from "@numpay/core/balanceBus";
 import { getItem, setItem } from "@numpay/core/storage";
 import { usdToDisplayCurrency } from "@numpay/core/currency";
 import {
@@ -152,6 +154,34 @@ export default function TokenDetail() {
   const [marketLoading, setMarketLoading] = useState(false);
   const [txs, setTxs] = useState<TxRecord[]>([]);
   const [txLoading, setTxLoading] = useState(false);
+
+  // Unwrap wrapped SOL → native SOL (only offered on the wSOL token page).
+  const isWsol = token?.chainId === "solana" && token?.address?.toLowerCase() === WSOL_MINT.toLowerCase();
+  const [unwrapping, setUnwrapping] = useState(false);
+  const [unwrapMsg, setUnwrapMsg] = useState<{ ok: boolean; text: string; sig?: string } | null>(null);
+
+  const handleUnwrap = useCallback(async () => {
+    if (!nonEvmWallet?.solana) {
+      setUnwrapMsg({ ok: false, text: "Solana wallet unavailable. Unlock NumPay and try again." });
+      return;
+    }
+    setUnwrapping(true);
+    setUnwrapMsg(null);
+    try {
+      const res = await unwrapWsol(nonEvmWallet.solana.secretKey);
+      const sol = Number(res.lamports) / 1e9;
+      setUnwrapMsg({
+        ok: true,
+        text: `Unwrapped ${sol.toLocaleString("en", { maximumFractionDigits: 6 })} SOL to your native balance.`,
+        sig: res.signature,
+      });
+      markBalancesDirty();
+    } catch (e: any) {
+      setUnwrapMsg({ ok: false, text: e?.message || "Unwrap failed. Try again." });
+    } finally {
+      setUnwrapping(false);
+    }
+  }, [nonEvmWallet]);
 
   // Symbol lookup for SPL/token rows on this chain.
   const solTokenMeta = useMemo(
@@ -431,6 +461,44 @@ export default function TokenDetail() {
           </div>
         );
       })()}
+
+      {/* ── Unwrap wSOL → SOL ── */}
+      {isWsol && (
+        <div className="px-4 mb-4">
+          <button
+            onClick={handleUnwrap}
+            disabled={unwrapping || balanceNum <= 0}
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold bg-surface-2 border border-border text-text-primary hover:border-brand-500/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {unwrapping ? "Unwrapping…" : "Unwrap to SOL"}
+          </button>
+          {unwrapMsg && (
+            <div
+              className="mt-2 rounded-xl px-3 py-2.5 text-[11px]"
+              style={{
+                border: unwrapMsg.ok ? "1px solid rgba(34,197,94,0.35)" : "1px solid rgba(239,68,68,0.35)",
+                background: unwrapMsg.ok ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+                color: unwrapMsg.ok ? "#4ade80" : "#f87171",
+              }}
+            >
+              <p>{unwrapMsg.text}</p>
+              {unwrapMsg.ok && unwrapMsg.sig && (
+                <a
+                  href={explorerTxUrl("solana", unwrapMsg.sig)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 mt-1 text-brand-400 hover:underline"
+                >
+                  View transaction <ExternalLinkIcon size={11} />
+                </a>
+              )}
+            </div>
+          )}
+          <p className="text-[10px] text-muted mt-1.5">
+            Wrapped SOL is the token form of SOL. Unwrapping returns it, plus the account rent, to your spendable SOL.
+          </p>
+        </div>
+      )}
 
       {/* ── Market stats ── */}
       {src && market && (

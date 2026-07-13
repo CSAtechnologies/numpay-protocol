@@ -299,6 +299,84 @@ export async function sendSolanaTokenTransfer(
   return result as string;
 }
 
+// ── Unwrap wrapped SOL → native SOL ──────────────────────────────────────────
+// A wrapped-SOL (wSOL) token account is just a normal SPL account whose lamport
+// balance IS the wrapped SOL (plus the ~0.00204 SOL rent-exempt reserve).
+// "Unwrapping" is the SPL CloseAccount instruction: it moves ALL of the
+// account's lamports to a destination and deletes the account, so the wrapped
+// balance and the rent both return to the owner's native SOL. There is no
+// partial unwrap. We close every wSOL account the owner holds (normally just
+// the ATA) in one transaction, with the owner as both authority and destination.
+export interface UnwrapWsolResult {
+  signature: string;
+  /** Total lamports returned to native SOL (wrapped balance + reclaimed rent). */
+  lamports: bigint;
+  /** How many wSOL accounts were closed. */
+  accounts: number;
+}
+
+export async function unwrapWsol(secretKey: Uint8Array): Promise<UnwrapWsolResult> {
+  const fromPubkey = secretKey.slice(32);
+  const owner = bs58.encode(fromPubkey);
+
+  const owned = await solRpc("getTokenAccountsByOwner", [
+    owner, { mint: WSOL_MINT }, { encoding: "jsonParsed" },
+  ]);
+  const list = (owned?.value ?? []) as any[];
+  if (list.length === 0) throw new Error("No wrapped SOL to unwrap.");
+
+  // wSOL is a classic SPL-Token mint, but read the program from the account
+  // itself so a Token-2022 wSOL-style account would still close correctly.
+  const programId = list[0].account?.owner as string | undefined;
+  if (programId !== TOKEN_PROGRAM && programId !== TOKEN_2022_PROGRAM) {
+    throw new Error("Unexpected token program for wrapped SOL.");
+  }
+  const tokenProgram = bs58.decode(programId);
+
+  let lamports = 0n;
+  const accountKeys: Uint8Array[] = [];
+  for (const acc of list) {
+    lamports += BigInt(acc.account?.lamports ?? 0);
+    const pk = bs58.decode(acc.pubkey);
+    if (pk.length !== 32) throw new Error("Invalid wrapped-SOL account address.");
+    accountKeys.push(pk);
+  }
+
+  // Keys, in the required order: writable-signer, writable non-signers, then
+  // readonly non-signers. Index 0 (owner) is the fee payer, the CloseAccount
+  // authority AND the lamport destination; the wSOL accounts are writable; the
+  // token program is the only readonly-unsigned key.
+  const keys = [fromPubkey, ...accountKeys, tokenProgram];
+  const header = new Uint8Array([1, 0, 1]); // 1 signer, 0 readonly-signed, 1 readonly-unsigned
+  const tokenProgramIdx = keys.length - 1;
+
+  // CloseAccount (token program, data [9]): [account, destination, owner].
+  // destination + authority are both index 0 (the owner's native account).
+  const ixs = accountKeys.map((_, i) => concatBytes(
+    new Uint8Array([tokenProgramIdx]),
+    encodeCompactU16(3), new Uint8Array([1 + i, 0, 0]),
+    encodeCompactU16(1), new Uint8Array([9]),
+  ));
+
+  const bh = await solRpc("getLatestBlockhash", [{ commitment: "finalized" }]);
+  const blockhashBytes = bs58.decode(bh.value.blockhash);
+
+  const message = concatBytes(
+    header,
+    encodeCompactU16(keys.length), ...keys,
+    blockhashBytes,
+    encodeCompactU16(ixs.length), ...ixs,
+  );
+
+  const sig = nacl.sign.detached(message, secretKey);
+  const txB64 = bytesToB64(concatBytes(encodeCompactU16(1), sig, message));
+
+  const signature = await solRpc("sendTransaction", [
+    txB64, { encoding: "base64", skipPreflight: false, preflightCommitment: "confirmed" },
+  ]) as string;
+  return { signature, lamports, accounts: accountKeys.length };
+}
+
 // ── Jupiter swap (Solana DEX aggregator) ─────────────────────────────────────
 
 const JUP_SWAP = "https://lite-api.jup.ag/swap/v1";
