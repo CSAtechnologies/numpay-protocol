@@ -89,6 +89,7 @@ export async function sendEvmNative(
   chainId: string,
   to: string,
   amount: string,
+  overrides?: ethers.Overrides,
 ): Promise<string> {
   const net = requireNetwork(chainId);
   const w = importFromMnemonic(mnemonic);
@@ -107,6 +108,7 @@ export async function sendEvmNative(
   const tx = await signer.sendTransaction({
     to,
     value: ethers.parseUnits(amount, net.decimals),
+    ...(overrides ?? {}),
   });
 
   void logTx({

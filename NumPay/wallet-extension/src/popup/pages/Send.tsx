@@ -21,6 +21,7 @@ import {
 import { isValidNonEvmAddress } from "@numpay/core/addressValidation";
 import { friendlyTxError, parseSendError } from "@numpay/core/sendErrors";
 import { classifyToken } from "@numpay/core/tokenSpam";
+import { tierOverrides, tierGwei, fetchFeeInfo, type GasTier, type FeeInfo } from "@numpay/core/gas";
 import Layout from "../components/Layout";
 import AlertCard from "../components/AlertCard";
 import TxResultOverlay, { type TxFxStatus } from "../components/TxResultOverlay";
@@ -102,38 +103,8 @@ const HIDDEN_L1_FEE_CHAINS = new Set([
 // is the backstop; the margin below also absorbs small overages.
 const NATIVE_TRANSFER_GAS = 21_000n;
 
-// ── Gas tiers (EVM) ───────────────────────────────────────────────────────────
-type GasTier = "slow" | "normal" | "fast";
-interface FeeInfo { maxFee?: bigint; prio?: bigint; gasPrice?: bigint; }
-
-const scaleWei = (v: bigint, num: number, den: number) => (v * BigInt(num)) / BigInt(den);
-
-// Ethers overrides for a chosen speed. "normal" returns {} so ethers uses the
-// node's own suggestion. Slow lowers the tip (keeps the fee cap so it still
-// confirms, just with less priority); fast raises the tip and lifts the cap to
-// make room for it. Legacy chains scale gasPrice.
-function tierOverrides(tier: GasTier, f: FeeInfo | null): ethers.Overrides {
-  if (!f || tier === "normal") return {};
-  if (f.maxFee != null && f.prio != null) {
-    if (tier === "slow") return { maxFeePerGas: f.maxFee, maxPriorityFeePerGas: scaleWei(f.prio, 60, 100) };
-    const prio = scaleWei(f.prio, 175, 100);
-    return { maxFeePerGas: f.maxFee + (prio - f.prio), maxPriorityFeePerGas: prio };
-  }
-  if (f.gasPrice != null) {
-    return { gasPrice: tier === "slow" ? scaleWei(f.gasPrice, 85, 100) : scaleWei(f.gasPrice, 130, 100) };
-  }
-  return {};
-}
-
-// The effective per-gas price for a tier, in gwei, for the selector labels.
-function tierGwei(tier: GasTier, f: FeeInfo | null): string {
-  if (!f) return "";
-  const ov = tierOverrides(tier, f);
-  const wei = (ov.maxFeePerGas ?? ov.gasPrice ?? f.maxFee ?? f.gasPrice) as bigint | undefined;
-  if (wei == null) return "";
-  const g = Number(wei) / 1e9;
-  return g < 1 ? g.toFixed(3) : g.toFixed(1);
-}
+// Gas tiers (EVM) — slow/normal/fast override + gwei label logic lives in
+// @numpay/core/gas so the mobile Send screen offers the identical selector.
 
 // An ENS name (foo.eth, sub.foo.eth). Resolved on-chain via Ethereum mainnet, so
 // it is trustless (no third-party API); the resolved 0x address is valid on any
@@ -255,10 +226,8 @@ export default function Send() {
     if (!isEvmChain) { setFeeInfo(null); return; }
     let live = true;
     setGasTier("normal"); setFeeInfo(null);
-    const provider = new ethers.JsonRpcProvider(sendNetwork.rpcUrl, sendNetwork.chainId, { staticNetwork: true });
-    provider.getFeeData()
-      .then((fd) => { if (live) setFeeInfo({ maxFee: fd.maxFeePerGas ?? undefined, prio: fd.maxPriorityFeePerGas ?? undefined, gasPrice: fd.gasPrice ?? undefined }); })
-      .catch(() => { if (live) setFeeInfo(null); });
+    fetchFeeInfo(sendNetwork.rpcUrl, sendNetwork.chainId)
+      .then((f) => { if (live) setFeeInfo(f); });
     return () => { live = false; };
   }, [isEvmChain, sendNetwork.rpcUrl, sendNetwork.chainId]);
 

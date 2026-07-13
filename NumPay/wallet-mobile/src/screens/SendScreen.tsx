@@ -15,6 +15,7 @@ import {
 import { NETWORKS } from "@numpay/core/networks";
 import { isValidNonEvmAddress } from "@numpay/core/addressValidation";
 import { friendlyTxError, parseSendError } from "@numpay/core/sendErrors";
+import { tierOverrides, tierGwei, fetchFeeInfo, type GasTier, type FeeInfo } from "@numpay/core/gas";
 import { getUsdPrice } from "@numpay/core/currency";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import {
@@ -96,6 +97,10 @@ export function SendScreen({ w, onBack, onSessionExpired }: {
   const [txFx, setTxFx] = useState<TxFxStatus | null>(null);
   const [txHash, setTxHash] = useState("");
   const [fee, setFee] = useState<EvmFeeEstimate | null>(null);
+  // Gas tier (EVM). Fee data drives the selector labels and the send overrides;
+  // same slow/normal/fast logic as the extension Send page (@numpay/core/gas).
+  const [gasTier, setGasTier] = useState<GasTier>("normal");
+  const [feeInfo, setFeeInfo] = useState<FeeInfo | null>(null);
   const resolveSeq = useRef(0);
 
   // Fee estimate for the fee row + the MAX reserve.
@@ -106,6 +111,15 @@ export function SendScreen({ w, onBack, onSessionExpired }: {
     estimateEvmNativeFee(chainId).then((f) => { if (live) setFee(f); });
     return () => { live = false; };
   }, [chainId, isEvm]);
+
+  // Fee data for the gas-tier selector (EVM only).
+  useEffect(() => {
+    setGasTier("normal"); setFeeInfo(null);
+    if (!isEvm || !net) return;
+    let live = true;
+    fetchFeeInfo(net.rpcUrl, net.chainId).then((f) => { if (live) setFeeInfo(f); });
+    return () => { live = false; };
+  }, [chainId, isEvm, net]);
 
   function switchChain(id: string) {
     setChainId(id);
@@ -228,7 +242,7 @@ export function SendScreen({ w, onBack, onSessionExpired }: {
     setSending(true); setError(""); setTxHash(""); setTxFx("pending");
     try {
       const hash = isEvm
-        ? await sendEvmNative(mnemonic, chainId, destinationAddress, amount)
+        ? await sendEvmNative(mnemonic, chainId, destinationAddress, amount, tierOverrides(gasTier, feeInfo))
         : await sendNonEvmNative(mnemonic, chainId, destinationAddress, amount);
       setTxHash(hash);
       setTxFx("success");
@@ -334,6 +348,31 @@ export function SendScreen({ w, onBack, onSessionExpired }: {
           </Text>
         </View>
 
+        {/* Gas tier (EVM) */}
+        {isEvm && feeInfo && (
+          <View style={{ marginTop: 14 }}>
+            <View style={st.gasHead}>
+              <Text style={st.gasLabel}>Network fee</Text>
+              <Text style={st.gasUnit}>gwei</Text>
+            </View>
+            <View style={st.gasRow}>
+              {(["slow", "normal", "fast"] as GasTier[]).map((t) => {
+                const on = gasTier === t;
+                return (
+                  <Pressable
+                    key={t}
+                    onPress={() => setGasTier(t)}
+                    style={[st.gasBtn, on && st.gasBtnOn]}
+                  >
+                    <Text style={[st.gasTier, on && st.gasTierOn]}>{t}</Text>
+                    <Text style={st.gasGwei}>{tierGwei(t, feeInfo)}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        )}
+
         {errView && <SendErrorCard view={errView} style={{ marginTop: 12 }} />}
 
         <Btn
@@ -389,4 +428,30 @@ const st = StyleSheet.create({
     gap: 10,
   },
   subText: { color: colors.muted2, fontSize: 10.5 },
+  gasHead: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  gasLabel: { color: colors.textSecondary, fontSize: ts.small, fontWeight: "500" },
+  gasUnit: { color: colors.muted2, fontSize: ts.label },
+  gasRow: { flexDirection: "row", gap: 8 },
+  gasBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: radius.button,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+  },
+  gasBtnOn: { borderColor: colors.brand, backgroundColor: colors.brandTint },
+  gasTier: {
+    fontSize: 11,
+    fontWeight: "600",
+    textTransform: "capitalize",
+    color: colors.textPrimary,
+  },
+  gasTierOn: { color: colors.brand2 },
+  gasGwei: { color: colors.muted2, fontSize: ts.label, fontVariant: ["tabular-nums"], marginTop: 1 },
 });
