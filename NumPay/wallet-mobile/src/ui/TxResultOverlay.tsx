@@ -26,11 +26,13 @@ const PENDING_SUB: Record<TxFxKind, string> = {
 };
 
 export function TxResultOverlay({
-  status, kind, amountLabel, explorerUrl, txHash, errorTitle, errorMessage, onClose,
+  status, kind, amountLabel, detail, explorerUrl, txHash, errorTitle, errorMessage, onClose,
 }: {
   status: TxFxStatus;
   kind: TxFxKind;
   amountLabel?: string;
+  /** Step progress while pending (e.g. "Approving USDC (1 of 2)…"). */
+  detail?: string;
   explorerUrl?: string;
   txHash?: string;
   errorTitle?: string;
@@ -66,7 +68,7 @@ export function TxResultOverlay({
         <Text style={st.title}>{title}</Text>
         {!!amountLabel && !isError && <Text style={st.amount}>{amountLabel}</Text>}
         {isError && !!errorMessage && <Text style={st.errBody}>{errorMessage}</Text>}
-        {isPending && <Text style={st.pendingSub}>{PENDING_SUB[kind]}</Text>}
+        {isPending && <Text style={st.pendingSub}>{detail || PENDING_SUB[kind]}</Text>}
 
         {status === "success" && !!explorerUrl && !!txHash && (
           <Pressable onPress={() => Linking.openURL(explorerUrl).catch(() => {})}>

@@ -73,6 +73,8 @@ export interface MobileWalletState {
   bpan: string;
   rows: AssetRow[];
   chainIds: string[]; // chains with anything to show, dashboard filter chips
+  /** Raw discovered tokens per chain (address/decimals intact) for pickers. */
+  tokensByChain: Record<string, AutoToken[]>;
   portfolioUsd: number;
   rates: Rates | null;
   loading: boolean;
@@ -310,6 +312,7 @@ export function useMobileWallet(unlocked: boolean): MobileWalletState {
     nonEvmAddresses,
     rows,
     chainIds,
+    tokensByChain,
     portfolioUsd,
     rates,
     loading,

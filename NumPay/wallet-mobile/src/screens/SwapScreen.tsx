@@ -1,0 +1,415 @@
+// Mobile Swap — EVM same-chain swaps through the shared core engine
+// (@numpay/core/swap): ParaSwap / KyberSwap / Relay quotes with the fee
+// config baked in, guard-checked execution, and the same error copy as the
+// extension. Slice scope: EVM chains only (Jupiter/Solana and bridging
+// follow); pickers offer the chain's native coin, the wallet's discovered
+// tokens, and the curated DEFAULT_TOKENS buy-side list.
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { NETWORKS } from "@numpay/core/networks";
+import { DEFAULT_TOKENS } from "@numpay/core/tokens";
+import { getUsdPrice } from "@numpay/core/currency";
+import {
+  evmSwapReserve, parseSwapError, sanitizeSlippagePct,
+  type RouteOption, type SwapToken,
+} from "@numpay/core/swap";
+import { classifyToken } from "@numpay/core/tokenSpam";
+import { getUnlockedMnemonic } from "../vault/mobileVault";
+import { fetchEvmQuotes, swapEvm } from "../wallet/swap";
+import { explorerTxUrl } from "../wallet/send";
+import type { MobileWalletState } from "../wallet/useMobileWallet";
+import { colors, radius, type as ts } from "../ui/theme";
+import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
+import { AssetIcon, ChainIcon } from "../ui/coins";
+import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
+
+const QUOTE_DEBOUNCE_MS = 700;
+
+export function SwapScreen({ w, onBack, onSessionExpired }: {
+  w: MobileWalletState;
+  onBack: () => void;
+  onSessionExpired?: () => void;
+}) {
+  // EVM chains only in this slice; funded chains first, ethereum always shown.
+  const chains = useMemo(() => {
+    const funded = w.rows
+      .filter((r) => r.isNative && NETWORKS[r.chainId] && r.balanceNum > 0)
+      .map((r) => r.chainId);
+    if (!funded.includes("ethereum")) funded.push("ethereum");
+    return funded;
+  }, [w.rows]);
+
+  const [chainId, setChainId] = useState(chains[0] ?? "ethereum");
+  const net = NETWORKS[chainId];
+
+  // Build the picker list for the chain: native, held tokens, curated defaults.
+  const tokenList = useMemo((): SwapToken[] => {
+    if (!net) return [];
+    const items: SwapToken[] = [];
+    const seen = new Set<string>();
+    const nativeBal = w.rows.find((r) => r.isNative && r.chainId === chainId)?.balanceNum ?? 0;
+    items.push({
+      symbol: net.symbol, name: net.name, logo: net.logo, decimals: net.decimals,
+      balance: nativeBal > 0 ? String(nativeBal) : "0", chainId, chainName: net.name,
+    });
+    seen.add("");
+    for (const t of (w.tokensByChain[chainId] ?? [])) {
+      const key = t.address.toLowerCase();
+      if (seen.has(key) || classifyToken(t).hidden) continue;
+      seen.add(key);
+      items.push({
+        symbol: t.symbol, name: t.name, logo: t.logo, address: t.address,
+        decimals: t.decimals, balance: t.balance, chainId, chainName: net.name,
+        priceUsd: t.priceUsd, possibleSpam: t.possibleSpam,
+      });
+    }
+    for (const t of ((DEFAULT_TOKENS as any)[String(net.chainId)] ?? []) as any[]) {
+      const key = t.address.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({
+        symbol: t.symbol, name: t.name, logo: t.logo, address: t.address,
+        decimals: t.decimals, balance: "0", chainId, chainName: net.name,
+      });
+    }
+    return items;
+  }, [chainId, net, w.rows, w.tokensByChain]);
+
+  const [fromToken, setFromToken] = useState<SwapToken | null>(null);
+  const [toToken, setToToken] = useState<SwapToken | null>(null);
+  const [picking, setPicking] = useState<"from" | "to" | null>(null);
+  const [amount, setAmount] = useState("");
+  const [slippage, setSlippage] = useState("0.5");
+  const [routes, setRoutes] = useState<RouteOption[]>([]);
+  const [selRoute, setSelRoute] = useState(0);
+  const [quoting, setQuoting] = useState(false);
+  const [error, setError] = useState("");
+  const [swapping, setSwapping] = useState(false);
+  const [txFx, setTxFx] = useState<TxFxStatus | null>(null);
+  const [txDetail, setTxDetail] = useState("");
+  const [txHash, setTxHash] = useState("");
+  const quoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const quoteSeq = useRef(0);
+
+  // Reset the pair when the chain changes: native → first stable-ish default.
+  useEffect(() => {
+    const native = tokenList[0] ?? null;
+    const firstDefault = tokenList.find((t) => t.address) ?? null;
+    setFromToken(native);
+    setToToken(firstDefault);
+    setAmount(""); setRoutes([]); setError(""); setTxHash("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chainId]);
+
+  const scheduleQuote = useCallback((amt: string, from: SwapToken | null, to: SwapToken | null) => {
+    if (quoteTimer.current) clearTimeout(quoteTimer.current);
+    setRoutes([]); setSelRoute(0); setError("");
+    if (!from || !to || !(parseFloat(amt) > 0)) return;
+    if (from.address === to.address && !from.address === !to.address) return;
+    const seq = ++quoteSeq.current;
+    setQuoting(true);
+    quoteTimer.current = setTimeout(async () => {
+      const found = await fetchEvmQuotes(
+        chainId, from, to, amt, w.evmAddress, sanitizeSlippagePct(slippage),
+      );
+      if (seq !== quoteSeq.current) return;
+      setQuoting(false);
+      setRoutes(found);
+      if (found.length === 0) setError("No routes found. Try a different amount or pair.");
+    }, QUOTE_DEBOUNCE_MS);
+  }, [chainId, slippage, w.evmAddress]);
+
+  function handleAmount(v: string) {
+    const clean = v.replace(/[^0-9.]/g, "");
+    setAmount(clean);
+    scheduleQuote(clean, fromToken, toToken);
+  }
+
+  async function handleMax() {
+    if (!fromToken) return;
+    const bal = parseFloat(fromToken.balance) || 0;
+    if (bal <= 0) return;
+    let v = bal;
+    if (!fromToken.address) {
+      const reserve = await evmSwapReserve(chainId);
+      v = Math.max(0, bal - reserve);
+    }
+    const s = v > 0 ? String(Number(v.toFixed(8))) : "0";
+    setAmount(s);
+    scheduleQuote(s, fromToken, toToken);
+  }
+
+  function selectToken(t: SwapToken) {
+    if (picking === "from") {
+      setFromToken(t);
+      scheduleQuote(amount, t, toToken);
+    } else if (picking === "to") {
+      setToToken(t);
+      scheduleQuote(amount, fromToken, t);
+    }
+    setPicking(null);
+  }
+
+  function flip() {
+    const f = fromToken, t = toToken;
+    setFromToken(t); setToToken(f);
+    scheduleQuote(amount, t, f);
+  }
+
+  async function handleSwap() {
+    const route = routes[selRoute];
+    if (!route || !fromToken || !toToken || !(parseFloat(amount) > 0)) return;
+    const bal = parseFloat(fromToken.balance) || 0;
+    if (parseFloat(amount) > bal) { setError("Insufficient balance"); return; }
+    const mnemonic = await getUnlockedMnemonic();
+    if (!mnemonic) {
+      setError("Wallet is locked. Unlock NumPay and try again.");
+      onSessionExpired?.();
+      return;
+    }
+    Keyboard.dismiss();
+    setSwapping(true); setError(""); setTxHash(""); setTxDetail(""); setTxFx("pending");
+    try {
+      const hash = await swapEvm(
+        mnemonic, chainId, route, fromToken, toToken, amount, route.destAmount, slippage,
+        setTxDetail, () => w.refresh(),
+      );
+      setTxHash(hash);
+      setTxFx("success");
+      w.refresh();
+    } catch (e: any) {
+      setError(e?.message || "Swap failed");
+      setTxFx("error");
+    } finally {
+      setSwapping(false);
+    }
+  }
+
+  const price = (t: SwapToken | null): number => {
+    if (!t) return 0;
+    if (t.priceUsd) return t.priceUsd;
+    return w.rates ? getUsdPrice(t.symbol, w.rates) : 0;
+  };
+  const sellUsd = fromToken && parseFloat(amount) > 0 ? parseFloat(amount) * price(fromToken) : 0;
+  const best = routes[selRoute];
+  const buyUsd = best?.destUsd ?? (toToken && best ? parseFloat(best.destAmount) * price(toToken) : 0);
+  const errView = error ? parseSwapError(error) : null;
+
+  // Token picker takes over the screen while active.
+  if (picking) {
+    const balOf = (t: SwapToken) => parseFloat(t.balance) || 0;
+    const sorted = [...tokenList].sort((a, b) => balOf(b) * price(b) - balOf(a) * price(a));
+    return (
+      <View style={{ flex: 1 }}>
+        <ScreenHeader title={picking === "from" ? "Sell" : "Buy"} onBack={() => setPicking(null)} />
+        <ScrollView showsVerticalScrollIndicator={false}>
+          {sorted.map((t) => (
+            <Pressable
+              key={`${t.chainId}:${t.address ?? "native"}`}
+              onPress={() => selectToken(t)}
+              style={st.tokenRow}
+            >
+              <AssetIcon symbol={t.symbol} logo={t.logo} chainId={t.chainId} address={t.address} size={32} />
+              <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
+                <Text style={st.tokenSym} numberOfLines={1}>{t.symbol}</Text>
+                <Text style={st.tokenSub} numberOfLines={1}>{t.name}</Text>
+              </View>
+              {balOf(t) > 0 && (
+                <Text style={st.tokenBal}>
+                  {balOf(t).toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                </Text>
+              )}
+            </Pressable>
+          ))}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ flex: 1 }}>
+      <ScreenHeader title="Swap" onBack={onBack} />
+      <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        {/* Chain selector */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, marginBottom: 4 }}>
+          {chains.map((id) => (
+            <Chip
+              key={id}
+              label={NETWORKS[id]?.name ?? id}
+              active={chainId === id}
+              onPress={() => setChainId(id)}
+              icon={<ChainIcon chainId={id} size={16} />}
+            />
+          ))}
+        </ScrollView>
+
+        {/* SELL */}
+        <SectionLabel text="Sell" style={{ marginTop: 10 } as object} />
+        <Card style={st.sideCard}>
+          <Pressable onPress={() => setPicking("from")} style={st.tokenBtn}>
+            {fromToken && <AssetIcon symbol={fromToken.symbol} logo={fromToken.logo} chainId={chainId} address={fromToken.address} size={28} />}
+            <Text style={st.tokenBtnText}>{fromToken?.symbol ?? "—"}</Text>
+            <Text style={st.chev}>▾</Text>
+          </Pressable>
+          <View style={{ flex: 1 }}>
+            <Field
+              placeholder="0.0"
+              keyboardType="decimal-pad"
+              value={amount}
+              onChangeText={handleAmount}
+              style={{ marginTop: 0, textAlign: "right" }}
+            />
+          </View>
+        </Card>
+        <View style={st.subRow}>
+          <Text style={st.subText}>
+            Balance {parseFloat(fromToken?.balance || "0").toLocaleString(undefined, { maximumFractionDigits: 6 })}
+            {"  "}
+            <Text style={st.maxInline} onPress={() => { void handleMax(); }}>MAX</Text>
+          </Text>
+          <Text style={st.subText}>{sellUsd > 0 ? `≈ $${sellUsd.toFixed(2)}` : " "}</Text>
+        </View>
+
+        {/* Flip */}
+        <Pressable onPress={flip} style={st.flipBtn}>
+          <Text style={{ color: colors.brand2, fontSize: 16, fontWeight: "700" }}>⇅</Text>
+        </Pressable>
+
+        {/* BUY */}
+        <SectionLabel text="Buy" />
+        <Card style={st.sideCard}>
+          <Pressable onPress={() => setPicking("to")} style={st.tokenBtn}>
+            {toToken && <AssetIcon symbol={toToken.symbol} logo={toToken.logo} chainId={chainId} address={toToken.address} size={28} />}
+            <Text style={st.tokenBtnText}>{toToken?.symbol ?? "—"}</Text>
+            <Text style={st.chev}>▾</Text>
+          </Pressable>
+          <View style={{ flex: 1, alignItems: "flex-end", paddingRight: 4 }}>
+            <Text style={st.receiveText}>{best ? best.destAmount : quoting ? "…" : "0"}</Text>
+            {buyUsd > 0 && <Text style={st.subText}>≈ ${buyUsd.toFixed(2)}</Text>}
+          </View>
+        </Card>
+
+        {/* Slippage */}
+        <View style={st.slipRow}>
+          <Text style={st.subText}>Slippage</Text>
+          {["0.1", "0.5", "1"].map((v) => (
+            <Chip key={v} label={`${v}%`} active={slippage === v} onPress={() => setSlippage(v)} />
+          ))}
+        </View>
+
+        {/* Routes */}
+        {routes.length > 0 && (
+          <View style={{ marginTop: 10 }}>
+            <SectionLabel text="Routes" />
+            {routes.map((r, i) => (
+              <Pressable key={r.provider} onPress={() => setSelRoute(i)} style={[st.routeRow, i === selRoute && st.routeSel]}>
+                <Text style={st.routeName}>{r.label}</Text>
+                {r.tag && <Text style={st.routeTag}>{r.tag}</Text>}
+                <View style={{ flex: 1 }} />
+                <View style={{ alignItems: "flex-end" }}>
+                  <Text style={st.routeAmt}>{r.destAmount} {toToken?.symbol}</Text>
+                  <Text style={st.subText}>Gas ~${parseFloat(r.gasCostUSD || "0").toFixed(2)}</Text>
+                </View>
+              </Pressable>
+            ))}
+          </View>
+        )}
+        {quoting && routes.length === 0 && <Text style={[st.subText, { marginTop: 10 }]}>Fetching quotes…</Text>}
+
+        {errView && (
+          <AlertCard
+            tone={errView.preSend ? "amber" : "danger"}
+            title={errView.title}
+            body={errView.body}
+            hint={errView.hint}
+            safe={errView.preSend}
+            style={{ marginTop: 12 }}
+          />
+        )}
+
+        <Btn
+          label={swapping ? "Swapping…" : fromToken && toToken ? `Swap ${fromToken.symbol} for ${toToken.symbol}` : "Swap"}
+          onPress={() => { void handleSwap(); }}
+          disabled={swapping || quoting || !routes.length || !(parseFloat(amount) > 0)}
+          style={{ marginTop: 16, marginBottom: 24 }}
+        />
+      </ScrollView>
+
+      {txFx && (
+        <TxResultOverlay
+          status={txFx}
+          kind="swap"
+          amountLabel={fromToken && toToken ? `${amount} ${fromToken.symbol} → ${best?.destAmount ?? ""} ${toToken.symbol}` : ""}
+          detail={txDetail || undefined}
+          txHash={txHash || undefined}
+          explorerUrl={txHash ? explorerTxUrl(chainId, txHash) : undefined}
+          errorTitle={errView?.title}
+          errorMessage={errView?.body}
+          onClose={() => { if (txFx === "success") onBack(); setTxFx(null); }}
+        />
+      )}
+    </View>
+  );
+}
+
+const st = StyleSheet.create({
+  sideCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    marginTop: 8,
+    gap: 10,
+  },
+  tokenBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: radius.button,
+    backgroundColor: "rgba(124, 109, 240, 0.10)",
+  },
+  tokenBtnText: { color: colors.textPrimary, fontSize: ts.body, fontWeight: "600" },
+  chev: { color: colors.muted, fontSize: 11 },
+  receiveText: { color: colors.textPrimary, fontSize: 20, fontWeight: "600", fontVariant: ["tabular-nums"] },
+  subRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 6, gap: 10 },
+  subText: { color: colors.muted2, fontSize: 10.5 },
+  maxInline: { color: colors.brand2, fontWeight: "700" },
+  flipBtn: {
+    alignSelf: "center",
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
+    alignItems: "center", justifyContent: "center",
+    marginVertical: 8,
+  },
+  slipRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 12 },
+  routeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    marginTop: 6,
+    borderRadius: radius.button,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+    gap: 8,
+  },
+  routeSel: { borderColor: colors.brand },
+  routeName: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "600" },
+  routeTag: {
+    color: colors.brand2, fontSize: 9.5, fontWeight: "700",
+    backgroundColor: "rgba(124, 109, 240, 0.14)",
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6,
+    overflow: "hidden",
+  },
+  routeAmt: { color: colors.textPrimary, fontSize: ts.row, fontVariant: ["tabular-nums"] },
+  tokenRow: {
+    flexDirection: "row", alignItems: "center",
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(42, 36, 80, 0.7)",
+  },
+  tokenSym: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "600" },
+  tokenSub: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
+  tokenBal: { color: colors.textPrimary, fontSize: ts.row, fontVariant: ["tabular-nums"] },
+});

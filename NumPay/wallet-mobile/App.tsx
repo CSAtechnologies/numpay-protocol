@@ -23,11 +23,12 @@ import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SectionLabel } from ".
 import { AssetIcon, ChainBadge, ChainIcon } from "./src/ui/coins";
 import { ReceiveScreen, type ReceiveAddrs } from "./src/screens/ReceiveScreen";
 import { SendScreen } from "./src/screens/SendScreen";
+import { SwapScreen } from "./src/screens/SwapScreen";
 import { ActivityScreen } from "./src/screens/ActivityScreen";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
-  | "spike" | "devnet" | "receive" | "send" | "activity";
+  | "spike" | "devnet" | "receive" | "send" | "swap" | "activity";
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("loading");
@@ -44,7 +45,7 @@ export default function App() {
   const [relocked, setRelocked] = useState(false);
 
   const unlocked =
-    mode === "home" || mode === "receive" || mode === "send" || mode === "activity";
+    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "activity";
   const w = useMobileWallet(unlocked);
   const unlockedRef = useRef(unlocked);
   unlockedRef.current = unlocked;
@@ -179,6 +180,7 @@ export default function App() {
           w={w}
           argonMs={getLastArgonMs()}
           onSend={() => setMode("send")}
+          onSwap={() => setMode("swap")}
           onActivity={() => setMode("activity")}
           onReceive={() => {
             setReceiveAddrs({ evm: w.evmAddress, nonEvm: w.nonEvmAddresses });
@@ -195,6 +197,13 @@ export default function App() {
       )}
       {mode === "send" && (
         <SendScreen
+          w={w}
+          onBack={() => setMode("home")}
+          onSessionExpired={() => { void showRelock(); }}
+        />
+      )}
+      {mode === "swap" && (
+        <SwapScreen
           w={w}
           onBack={() => setMode("home")}
           onSessionExpired={() => { void showRelock(); }}
@@ -361,6 +370,7 @@ function Dashboard(p: {
   w: MobileWalletState;
   argonMs: number | null;
   onSend: () => void;
+  onSwap: () => void;
   onActivity: () => void;
   onReceive: () => void;
   onLock: () => void;
@@ -406,6 +416,7 @@ function Dashboard(p: {
       <View style={st.actions}>
         <ActionCircle label="Send" color={colors.brand} glyph="↑" onPress={p.onSend} />
         <ActionCircle label="Receive" color="#22c55e" glyph="↓" onPress={p.onReceive} />
+        <ActionCircle label="Swap" color="#f59e0b" glyph="⇄" onPress={p.onSwap} />
         <ActionCircle label="Activity" color="#0ea5e9" glyph="≋" onPress={p.onActivity} />
       </View>
 
