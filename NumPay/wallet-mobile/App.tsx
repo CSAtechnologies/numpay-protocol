@@ -26,10 +26,11 @@ import { SendScreen } from "./src/screens/SendScreen";
 import { SwapScreen } from "./src/screens/SwapScreen";
 import { BridgeScreen } from "./src/screens/BridgeScreen";
 import { ActivityScreen } from "./src/screens/ActivityScreen";
+import { BPANScreen } from "./src/screens/BPANScreen";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
-  | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity";
+  | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity" | "bpan";
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("loading");
@@ -46,7 +47,7 @@ export default function App() {
   const [relocked, setRelocked] = useState(false);
 
   const unlocked =
-    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity";
+    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity" || mode === "bpan";
   const w = useMobileWallet(unlocked);
   const unlockedRef = useRef(unlocked);
   unlockedRef.current = unlocked;
@@ -189,6 +190,7 @@ export default function App() {
             setMode("receive");
           }}
           onLock={async () => { await lock(); setError(""); await refresh(); }}
+          onBPAN={() => setMode("bpan")}
           onSpike={() => setMode("spike")}
           onDevnet={() => setMode("devnet")}
           onWipe={async () => { await wipeVault(); setError(""); await refresh(); }}
@@ -220,6 +222,9 @@ export default function App() {
       )}
       {mode === "activity" && (
         <ActivityScreen owner={w.evmAddress} onBack={() => setMode("home")} />
+      )}
+      {mode === "bpan" && (
+        <BPANScreen w={w} onBack={() => setMode("home")} />
       )}
       {mode === "spike" && <Spike onBack={() => setMode("home")} />}
       {mode === "devnet" && <DevnetTx onBack={() => setMode("home")} />}
@@ -383,6 +388,7 @@ function Dashboard(p: {
   onBridge: () => void;
   onActivity: () => void;
   onReceive: () => void;
+  onBPAN: () => void;
   onLock: () => void;
   onSpike: () => void;
   onDevnet: () => void;
@@ -405,14 +411,17 @@ function Dashboard(p: {
       </View>
 
       {/* Portfolio hero. Auto-displays the wallet's BPAN once known (the
-          product's identity rule); the raw address stays as the fallback. */}
-      <View style={st.hero}>
+          product's identity rule); the raw address stays as the fallback.
+          Tapping opens BPAN management (register / map / look up). */}
+      <Pressable onPress={p.onBPAN} style={({ pressed }) => [st.hero, pressed && { opacity: 0.85 }]}>
         <View style={st.heroLabelRow}>
           <View style={st.greenDot} />
           <SectionLabel
             text={w.bpan ? "Your number · Active" : "Portfolio"}
             style={{ color: colors.brand2 } as object}
           />
+          <View style={{ flex: 1 }} />
+          <Text style={st.heroManage}>{w.bpan ? "Manage ›" : "Set up BPAN ›"}</Text>
         </View>
         {!!w.bpan && <Text style={st.heroBpan}>{formatBPAN(w.bpan)}</Text>}
         <Text style={[st.portfolio, !!w.bpan && { fontSize: 22, marginTop: 4 }]}>
@@ -420,7 +429,7 @@ function Dashboard(p: {
           {w.loading ? "  …" : ""}
         </Text>
         <Text style={st.heroAddr} numberOfLines={1}>{w.evmAddress}</Text>
-      </View>
+      </Pressable>
 
       {/* Action circles (Send / Receive / Activity) */}
       <View style={st.actions}>
@@ -616,6 +625,7 @@ const st = StyleSheet.create({
     marginTop: 6,
   },
   heroLabelRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  heroManage: { color: colors.brand2, fontSize: ts.small, fontWeight: "600" },
   greenDot: {
     width: 6, height: 6, borderRadius: 3, backgroundColor: colors.success,
   },
