@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./chains": "./src/chains/index.ts",
+    "./dapp": "./src/dapp/index.ts",
     "./*": "./src/*.ts"
   },
   "dependencies": {

@@ -2,6 +2,12 @@
 // Kept dependency-free so the inpage provider and content bridge (built as
 // standalone IIFE bundles) can import it without pulling in ethers/chrome.
 
+// The platform-free request SHAPES a decoder needs now live in
+// @numpay/core/dapp so the mobile WalletConnect signing sheet shares them.
+// Re-exported here so existing importers of this module are unaffected.
+import type { DappTxRequest } from "@numpay/core/dapp/types";
+export type { DappTxRequest };
+
 // postMessage targets between the page-world provider and the content bridge.
 export const TO_CONTENT = "numpay-content"; // inpage  -> content
 export const TO_INPAGE = "numpay-inpage"; // content -> inpage
@@ -139,19 +145,6 @@ export const DEFERRED_METHODS = new Set<string>([
   "wallet_requestPermissions",
   "wallet_getPermissions",
 ]);
-
-// EIP-1193 transaction object as dApps send it (hex quantities, optional fields).
-export interface DappTxRequest {
-  from?: string;
-  to?: string;
-  value?: string;
-  data?: string;
-  gas?: string;
-  gasPrice?: string;
-  maxFeePerGas?: string;
-  maxPriorityFeePerGas?: string;
-  nonce?: string;
-}
 
 // ── Approval-window pending records (stored in chrome.storage.session) ──────────
 // Discriminated union so one approval window can serve both connect and sign.
