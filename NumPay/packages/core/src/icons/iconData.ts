@@ -50,7 +50,7 @@ export const ICON_DATA: IconData = {
       "MATIC", "POL", "LTC", "BCH", "TON", "ATOM", "NEAR", "APT", "SUI", "SEI",
       "TIA", "INJ", "FTM", "S", "CRO", "ALGO", "EGLD", "FLOW", "HBAR", "ICP",
       "KAS", "XLM", "XMR", "ETC", "FIL", "VET", "RUNE", "KAVA", "ROSE", "ONE",
-      "CELO", "GLMR", "METIS", "MNT", "KLAY", "ZK", "STRK", "MANTA", "BLAST",
+      "CELO", "GLMR", "METIS", "MNT", "KAIA", "ZK", "STRK", "MANTA", "BLAST",
       "SCROLL", "ARB", "OP", "IMX", "ZEC", "DASH", "XTZ", "EOS", "NEO", "THETA",
       "IOTA", "QNT", "CKB", "ASTR", "KSM",
     ],
@@ -137,7 +137,7 @@ export const ICON_DATA: IconData = {
     GLMR: { disc: "#E1147B" },
     METIS: { disc: "#00BFB4", mark: "#0A0A0A" },
     MNT: { disc: "#0A0A0A" },
-    KLAY: { disc: "#F04706" },
+    KAIA: { disc: "#F04706" },
     ZK: { disc: "#1E69FF" },
     STRK: { disc: "#0C0C4F" },
     MANTA: { disc: "#2D44FB" },
@@ -344,7 +344,7 @@ export const ICON_DATA: IconData = {
     moonbeam: { label: "Moonbeam", disc: "#E1147B", mono: "MOON" },
     aurora: { label: "Aurora", disc: "#6FD44B", mark: "#16181E", mono: "AUR" },
     sei: { label: "Sei", disc: "#9E1F19", mono: "SEI" },
-    klaytn: { label: "Klaytn", disc: "#F04706", mono: "KLAY" },
+    klaytn: { label: "Kaia", disc: "#F04706", mono: "KAIA" },
     metis: { label: "Metis", disc: "#00BFB4", mark: "#16181E", mono: "MTS" },
     solana: { label: "Solana", disc: "#0B0E11", glyph: "sol", mark: "#14F195" },
     bitcoin: { label: "Bitcoin", disc: "#F7931A", char: "₿" },
@@ -363,7 +363,7 @@ export const ICON_DATA: IconData = {
   // POL is its own entry (its own brand + override) — do NOT alias it to MATIC.
   aliases: {
     WPOL: "WMATIC", XBT: "BTC", MIOTA: "IOTA",
-    KAIA: "KLAY", RNDR: "RENDER", MATICPOS: "MATIC", USDTE: "USDT",
+    KLAY: "KAIA", RNDR: "RENDER", MATICPOS: "MATIC", USDTE: "USDT",
     USDCE: "USDC", WAVAXE: "WAVAX", ETH2: "ETH",
   },
 };

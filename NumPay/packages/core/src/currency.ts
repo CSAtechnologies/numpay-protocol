@@ -129,7 +129,7 @@ export async function fetchRates(): Promise<Rates> {
     } catch {}
   }
 
-  const coinIds = "ethereum,bitcoin,matic-network,avalanche-2,binancecoin,fantom,mantle,sei-network,solana,sui,tron,ripple,litecoin,tether,crypto-com-chain,celo,xdai,moonbeam,klay-token,metis-token";
+  const coinIds = "ethereum,bitcoin,matic-network,avalanche-2,binancecoin,fantom,mantle,sei-network,solana,sui,tron,ripple,litecoin,tether,crypto-com-chain,celo,xdai,moonbeam,kaia,metis-token";
   const vsCurrencies = CURRENCIES.map((c) => c.code).join(",");
   const url = `https://api.coingecko.com/api/v3/simple/price?ids=${coinIds}&vs_currencies=${vsCurrencies}`;
 
@@ -195,7 +195,8 @@ const SYMBOL_TO_COINGECKO: Record<string, string> = {
   CELO: "celo",
   xDAI: "xdai",
   GLMR: "moonbeam",
-  KLAY: "klay-token",
+  KAIA: "kaia",
+  KLAY: "kaia", // legacy symbol, in case cached data still says KLAY
   METIS: "metis-token",
 };
 

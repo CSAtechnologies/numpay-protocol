@@ -213,12 +213,14 @@ export const NETWORKS: Record<string, Network> = {
     logo: logoOf("sei"),
   },
   klaytn: {
-    id: "klaytn", name: "Klaytn", chainId: 8217,
-    // Klaytn rebranded to Kaia; public-en-cypress.klaytn.net is decommissioned
-    // (dead 12/12 in the 2026-07-06 endpoint sweep). Kaia successor verified
-    // 12/12 with chainId 0x2019. Display name/symbol rebrand handled separately.
+    // Internal id stays "klaytn" (it keys storage, BPAN mappings, fee reserves
+    // and chain maps); only the user-facing name/symbol rebrand to Kaia/KAIA.
+    id: "klaytn", name: "Kaia", chainId: 8217,
+    // Klaytn merged with Finschia to become Kaia; public-en-cypress.klaytn.net
+    // is decommissioned (dead 12/12 in the 2026-07-06 endpoint sweep). Kaia
+    // successor verified 12/12 with chainId 0x2019.
     rpcUrl: "https://public-en.node.kaia.io",
-    symbol: "KLAY", decimals: 18,
+    symbol: "KAIA", decimals: 18,
     explorer: "https://kaiascan.io",
     logo: logoOf("klaytn"),
   },
@@ -295,7 +297,7 @@ export const BPAN_CHAINS = [
   { id: "moonbeam",    name: "Moonbeam",       logo: logoOf("moonbeam"),    isEVM: true  },
   { id: "aurora",      name: "Aurora",         logo: logoOf("aurora"),      isEVM: true  },
   { id: "sei",         name: "Sei",            logo: logoOf("sei"),         isEVM: true  },
-  { id: "klaytn",      name: "Klaytn",         logo: logoOf("klaytn"),      isEVM: true  },
+  { id: "klaytn",      name: "Kaia",           logo: logoOf("klaytn"),      isEVM: true  },
   { id: "metis",       name: "Metis",          logo: logoOf("metis"),       isEVM: true  },
 ] as const;
 

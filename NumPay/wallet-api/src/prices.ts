@@ -23,7 +23,7 @@
 import type { Env } from "./index";
 
 const COIN_IDS =
-  "ethereum,bitcoin,matic-network,avalanche-2,binancecoin,fantom,mantle,sei-network,solana,sui,tron,ripple,litecoin,tether,crypto-com-chain,celo,xdai,moonbeam,klay-token,metis-token";
+  "ethereum,bitcoin,matic-network,avalanche-2,binancecoin,fantom,mantle,sei-network,solana,sui,tron,ripple,litecoin,tether,crypto-com-chain,celo,xdai,moonbeam,kaia,metis-token";
 
 const VS_CURRENCIES =
   "btc,eth,usd,eur,gbp,jpy,cny,krw,inr,cad,aud,chf,sgd,hkd,brl,mxn,ars,clp,cop,pen,sek,nok,dkk,pln,czk,huf,ron,bgn,hrk,isk,rub,uah,try,gel,idr,myr,thb,php,vnd,twd,pkr,bdt,lkr,mmk,nzd,aed,sar,qar,kwd,bhd,omr,ils,egp,zar,ngn,kes,ghs,tzs,ugx,mad,xof,xaf,etb,rwf";
