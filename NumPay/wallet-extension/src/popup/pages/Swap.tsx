@@ -13,8 +13,7 @@ import { fetchJupiterQuote, executeJupiterSwap, signSimulateSendSolanaTx, resolv
 import { getSigner, isLocked } from "@numpay/core/wallet";
 import { getCustomTokens, upsertCustomToken } from "@numpay/core/customTokens";
 import {
-  assertTrustedSpender, assertTrustedRouter, assertChainId,
-  assertIsContract, assertNativeValue, simulateOrThrow,
+  assertTrustedSpender, assertTrustedRouter, assertChainId, simulateOrThrow,
 } from "@numpay/core/swapGuards";
 import Layout from "../components/Layout";
 import AlertCard from "../components/AlertCard";
@@ -30,13 +29,13 @@ import {
 // component and its presentation stay here.
 import {
   type SwapToken, type RouteOption, type BridgeRoute,
-  PARASWAP_API, LIFI_API, LIFI_ROUTES_URL, NATIVE_ADDR, LIFI_NATIVE,
-  PARASWAP_PARTNER, PARASWAP_FEE_BPS, PARASWAP_FEE_RECIPIENT, PARASWAP_DIRECT_TRANSFER, paraswapFeeActive,
+  LIFI_API, LIFI_ROUTES_URL, LIFI_NATIVE,
   LIFI_INTEGRATOR, LIFI_FEE, lifiFeeActive,
-  ERC20_ABI, KYBERSWAP_CHAIN, LIFI_CHAIN_ID, LIFI_NATIVE_TOKEN, chainRank,
+  ERC20_ABI, LIFI_CHAIN_ID, LIFI_NATIVE_TOKEN, chainRank,
   isAddress, isSolanaMint, SOL_FEE_RESERVE, BRIDGE_FEE_CAP_USD,
   evmSwapReserve, assertUpfrontAffordable, sanitizeSlippagePct, approveErc20Exact,
   buildAllSwapTokens, fetchParaswapQuote, fetchKyberQuote, fetchRelayQuote, parseSwapError,
+  executeEvmSwap,
 } from "@numpay/core/swap";
 
 const TAG_STYLE: Record<string, string> = {
@@ -533,188 +532,32 @@ export default function Swap() {
     const net = NETWORKS[fromToken.chainId];
     if (!net) return;
     setSwapping(true); setSwapError(""); setTxHash(""); setTxFxDetail(""); setTxFx("pending");
-    let outHash = "";
     try {
-      const signer    = getSigner(wallet.privateKey, net.rpcUrl);
+      const signer = getSigner(wallet.privateKey, net.rpcUrl);
       // Receipts are detected by polling; the 4s default adds up to ~8s of
       // dead time across the approval + swap waits. This signer is created
       // fresh per swap, so the faster cadence affects nothing else.
       (signer.provider as ethers.JsonRpcProvider).pollingInterval = 1000;
-      const srcAmount = ethers.parseUnits(fromAmount, fromToken.decimals).toString();
-      const srcAmountBn = BigInt(srcAmount);
-      const isNativeSwap = !fromToken.address;
 
-      // Guard 1: confirm the RPC serves the chain we built the route for.
-      await assertChainId(signer, net.chainId);
-
-      if (route.provider === "paraswap") {
-        const txRes = await fetch(`${PARASWAP_API}/transactions/${net.chainId}?ignoreChecks=true`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            srcToken: fromToken.address || NATIVE_ADDR, destToken: toToken.address || NATIVE_ADDR,
-            srcAmount,
-            slippage: Math.round(sanitizeSlippagePct(slippage) * 100),
-            userAddress: wallet.address, priceRoute: route.priceRoute, partner: PARASWAP_PARTNER,
-            // Partner fee must match the values baked into the quoted priceRoute.
-            ...(paraswapFeeActive() ? {
-              partnerAddress: PARASWAP_FEE_RECIPIENT,
-              partnerFeeBps: PARASWAP_FEE_BPS,
-              isDirectFeeTransfer: PARASWAP_DIRECT_TRANSFER,
-            } : {}),
-          }),
-        });
-        if (!txRes.ok) { const e = await txRes.json().catch(() => ({})); throw new Error(e.error || `Build failed (${txRes.status})`); }
-        const txData = await txRes.json();
-
-        const value = txData.value ? BigInt(txData.value) : 0n;
-        // Augustus varies per chain, so bind the send target to the swapper the
-        // signed quote (priceRoute) declared, rather than trusting whatever the
-        // /transactions response returns (SWAP-1). A tampered build that points
-        // `to` at an attacker contract no longer passes the bare contract-code
-        // check. Fall back to contract-code + value + sim where the quote did
-        // not declare a contractAddress.
-        const augustus: string | undefined = route.priceRoute?.contractAddress;
-        if (augustus) {
-          if (txData.to?.toLowerCase() !== augustus.toLowerCase()) {
-            throw new Error(`Blocked for safety: swap target ${txData.to} does not match the quoted ParaSwap contract ${augustus}.`);
-          }
-        }
-        await assertIsContract(signer.provider!, txData.to);
-        assertNativeValue(isNativeSwap, value, srcAmountBn);
-        // ParaSwap is the one swap branch that passes its quoted gasLimit
-        // straight through (no estimateGas), so verify the upfront hold fits.
-        await assertUpfrontAffordable(
-          signer.provider!, wallet.address, value,
-          txData.gas ? BigInt(txData.gas) : 0n, net.symbol, "swap",
-        );
-
-        const psApproval = !!(fromToken.address && route.priceRoute?.tokenTransferProxy);
-        if (fromToken.address && route.priceRoute?.tokenTransferProxy) {
-          // Gate the approval to ParaSwap's proxy for THIS chain (Base differs
-          // from the others). Exact amount only.
-          assertTrustedSpender("paraswap", route.priceRoute.tokenTransferProxy, net.chainId);
-          setTxFxDetail(`Approving ${fromToken.symbol} (1 of 2)…`);
-          await approveErc20Exact(signer, fromToken.address, wallet.address, route.priceRoute.tokenTransferProxy, srcAmount);
-        }
-        setTxFxDetail(psApproval ? "Swapping (2 of 2)…" : "Swapping…");
-        await simulateOrThrow(signer, { to: txData.to, data: txData.data, value });
-        const tx = await signer.sendTransaction({
-          to: txData.to, data: txData.data, value,
-          gasLimit: txData.gas ? BigInt(txData.gas) : undefined,
-        });
-        setTxHash(outHash = tx.hash);
-        // Refresh the instant the receipt lands so the received token appears
-        // without waiting out the poll cadence.
-        void tx.wait().then(() => markBalancesDirty()).catch(() => {});
-      } else if (route.provider === "relay") {
-        // Relay returns ready-to-sign steps (an approval step for ERC-20 input,
-        // then the swap/deposit step). Its router/spender is dynamic per quote,
-        // so it cannot use the chain-constant whitelist that Kyber/ParaSwap do.
-        // Each step is instead bound by: chain-id match, contract-code, a native
-        // value bound, and a pre-broadcast simulation — and steps run in order so
-        // an approval is mined before the swap step is simulated.
-        const steps = route.relaySteps || [];
-        if (!steps.length) throw new Error("Relay returned no execution steps");
-        const relayTotal = steps.reduce(
-          (n: number, s: any) =>
-            n + (s.items || []).filter((it: any) => it?.data?.to && it?.data?.data && it.status !== "complete").length,
-          0,
-        );
-        let relayDone = 0;
-        let lastHash = "";
-        for (const step of steps) {
-          for (const item of (step.items || [])) {
-            const d = item?.data;
-            if (!d?.to || !d?.data) continue;
-            if (item.status === "complete") continue;
-            relayDone++;
-            setTxFxDetail(relayTotal > 1 ? `Confirming step ${relayDone} of ${relayTotal} on-chain…` : "Confirming on-chain…");
-            if (d.chainId != null && Number(d.chainId) !== net.chainId) {
-              throw new Error(`Blocked for safety: Relay step targets chain ${d.chainId}, expected ${net.chainId}.`);
-            }
-            const value = d.value ? BigInt(d.value) : 0n;
-            // Native input: only the deposit step may carry value, never more than
-            // the amount being swapped. ERC-20 input: every step must carry zero.
-            if (isNativeSwap) {
-              if (value > srcAmountBn) {
-                throw new Error(`Blocked for safety: Relay step sends ${value} wei, more than the ${srcAmountBn} wei being swapped.`);
-              }
-            } else if (value !== 0n) {
-              throw new Error(`Blocked for safety: ERC-20 swap step should not send native value, but ${value} wei is attached.`);
-            }
-            // A step that calls the SOURCE TOKEN's contract may only be a
-            // bounded approve/transfer. Relay's spender/solver is dynamic (no
-            // allowlist is possible, unlike Kyber/ParaSwap/LI.FI), so cap what
-            // a tampered step could authorize or move at the amount being
-            // swapped — the user already intends to spend that much. Any other
-            // selector on the token contract is blocked outright.
-            if (fromToken.address && d.to.toLowerCase() === fromToken.address.toLowerCase()) {
-              const sel = String(d.data).slice(0, 10).toLowerCase();
-              const APPROVE = "0x095ea7b3", TRANSFER = "0xa9059cbb";
-              if (sel !== APPROVE && sel !== TRANSFER) {
-                throw new Error("Blocked for safety: unexpected Relay call on the source token contract.");
-              }
-              let amt: bigint;
-              try {
-                const [, rawAmt] = ethers.AbiCoder.defaultAbiCoder().decode(
-                  ["address", "uint256"], "0x" + String(d.data).slice(10),
-                );
-                amt = BigInt(rawAmt);
-              } catch {
-                throw new Error("Blocked for safety: could not decode the Relay token-contract step.");
-              }
-              if (amt > srcAmountBn) {
-                throw new Error("Blocked for safety: Relay step approves/moves more of the token than the amount being swapped.");
-              }
-            }
-            await assertIsContract(signer.provider!, d.to);
-            await simulateOrThrow(signer, { to: d.to, data: d.data, value });
-            const tx = await signer.sendTransaction({ to: d.to, data: d.data, value });
-            await tx.wait();
-            lastHash = tx.hash;
-          }
-        }
-        if (!lastHash) throw new Error("Relay produced no signable transaction");
-        setTxHash(outHash = lastHash);
-      } else {
-        const kyberChain = KYBERSWAP_CHAIN[net.chainId];
-        const buildRes = await fetch(`https://aggregator-api.kyberswap.com/${kyberChain}/api/v1/route/build`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            routeSummary: route.routeSummary, sender: wallet.address, recipient: wallet.address,
-            slippageTolerance: Math.round(sanitizeSlippagePct(slippage) * 100),
-            deadline: Math.floor(Date.now() / 1000) + 1800, source: "numpay",
-          }),
-        });
-        if (!buildRes.ok) throw new Error(`KyberSwap build failed (${buildRes.status})`);
-        const bd = await buildRes.json();
-        if (!bd?.data) throw new Error("No transaction data from KyberSwap");
-        const { routerAddress, data } = bd.data;
-
-        // Router + approval spender are the same chain-constant address — gate both.
-        assertTrustedRouter("kyberswap", routerAddress);
-        const value = !fromToken.address ? srcAmountBn : 0n;
-        assertNativeValue(isNativeSwap, value, srcAmountBn);
-
-        if (fromToken.address) {
-          assertTrustedSpender("kyberswap", routerAddress);
-          setTxFxDetail(`Approving ${fromToken.symbol} (1 of 2)…`);
-          await approveErc20Exact(signer, fromToken.address, wallet.address, routerAddress, srcAmount);
-        }
-        setTxFxDetail(fromToken.address ? "Swapping (2 of 2)…" : "Swapping…");
-        await simulateOrThrow(signer, { to: routerAddress, data, value });
-        const tx = await signer.sendTransaction({ to: routerAddress, data, value });
-        setTxHash(outHash = tx.hash);
-        void tx.wait().then(() => markBalancesDirty()).catch(() => {});
-      }
-      if (outHash) void logTx({
+      // Guards, aggregator build calls, approval and broadcast live in
+      // @numpay/core/swap (shared with mobile). onMined fires when a receipt
+      
+// lands so the received token appears without waiting out the poll.
+      const outHash = await executeEvmSwap(route, {
+        signer, owner: wallet.address, chainId: net.chainId, symbol: net.symbol,
+        fromToken, toToken, fromAmount, slippage,
+        onProgress: setTxFxDetail,
+        onMined: () => markBalancesDirty(),
+      });
+      setTxHash(outHash);
+      void logTx({
         owner: wallet?.address,
         hash: outHash, chainId: fromToken.chainId, kind: "swap", timestamp: Date.now(),
         symbol: fromToken.symbol, value: fromAmount, assetAddr: fromToken.address?.toLowerCase(), logo: fromToken.logo,
         toSymbol: toToken.symbol, toValue: receiveAmt, toAssetAddr: toToken.address?.toLowerCase(), toLogo: toToken.logo, toChainId: toToken.chainId,
       });
       // Overlay the spent side immediately (relay already waited for its
-      // receipts above; paraswap/kyber refresh again when theirs land).
+      // receipts inside core; paraswap/kyber refresh again when theirs land).
       markBalancesDirty([{ chainId: fromToken.chainId, tokenAddress: fromToken.address || undefined, delta: -parseFloat(fromAmount) }]);
       setTxFx("success");
     } catch (e: any) { setSwapError(e.message || "Swap failed"); setTxFx("error"); }

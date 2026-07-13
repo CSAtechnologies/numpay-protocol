@@ -12,6 +12,10 @@ import { NETWORKS } from "./networks";
 import { DEFAULT_TOKENS } from "./tokens";
 import { SOLANA_SWAP_TOKENS } from "./chains/solana";
 import type { NonEvmChain } from "./chains";
+import {
+  assertTrustedSpender, assertTrustedRouter, assertChainId,
+  assertIsContract, assertNativeValue, simulateOrThrow,
+} from "./swapGuards";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -486,6 +490,221 @@ export async function fetchRelayQuote(
       destUsd: parseFloat(data?.details?.currencyOut?.amountUsd) || undefined,
     };
   } catch { return null; }
+}
+
+// ── EVM same-chain swap execution ─────────────────────────────────────────────
+// Extracted from the extension's executeSwap EVM branches; both surfaces call
+// these with their own signer. Every branch runs the swapGuards sequence
+// (chain-id, trusted router/spender, contract-code, native-value bound,
+// pre-broadcast simulation) before anything is signed. Returns the broadcast
+// tx hash; receipt-driven refreshes ride the onMined callback (Relay waits
+// for its receipts inline, so onMined fires before it returns).
+
+export interface EvmSwapContext {
+  signer: ethers.Signer;          // connected to the route's chain RPC
+  owner: string;                  // the wallet address (sender + recipient)
+  chainId: number;                // numeric EVM chain id the route was quoted for
+  symbol: string;                 // native symbol, for error copy
+  fromToken: SwapToken;
+  toToken: SwapToken;
+  fromAmount: string;             // human units of fromToken
+  slippage: string;               // free-text slippage %, sanitized here
+  onProgress?: (label: string) => void;
+  onMined?: () => void;           // a receipt landed (balances can refresh)
+}
+
+export async function executeEvmSwap(route: RouteOption, ctx: EvmSwapContext): Promise<string> {
+  if (route.provider === "paraswap") return executeParaswapSwap(route, ctx);
+  if (route.provider === "relay") return executeRelaySwap(route, ctx);
+  if (route.provider === "kyberswap") return executeKyberSwap(route, ctx);
+  throw new Error(`Not an EVM swap route: ${route.provider}`);
+}
+
+async function executeParaswapSwap(route: RouteOption, ctx: EvmSwapContext): Promise<string> {
+  const { signer, owner, chainId, symbol, fromToken, toToken, fromAmount } = ctx;
+  const srcAmount = ethers.parseUnits(fromAmount, fromToken.decimals).toString();
+  const srcAmountBn = BigInt(srcAmount);
+  const isNativeSwap = !fromToken.address;
+
+  // Guard 1: confirm the RPC serves the chain we built the route for.
+  await assertChainId(signer, chainId);
+
+  const txRes = await fetch(`${PARASWAP_API}/transactions/${chainId}?ignoreChecks=true`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      srcToken: fromToken.address || NATIVE_ADDR, destToken: toToken.address || NATIVE_ADDR,
+      srcAmount,
+      slippage: Math.round(sanitizeSlippagePct(ctx.slippage) * 100),
+      userAddress: owner, priceRoute: route.priceRoute, partner: PARASWAP_PARTNER,
+      // Partner fee must match the values baked into the quoted priceRoute.
+      ...(paraswapFeeActive() ? {
+        partnerAddress: PARASWAP_FEE_RECIPIENT,
+        partnerFeeBps: PARASWAP_FEE_BPS,
+        isDirectFeeTransfer: PARASWAP_DIRECT_TRANSFER,
+      } : {}),
+    }),
+  });
+  if (!txRes.ok) { const e = await txRes.json().catch(() => ({})); throw new Error(e.error || `Build failed (${txRes.status})`); }
+  const txData = await txRes.json();
+
+  const value = txData.value ? BigInt(txData.value) : 0n;
+  // Augustus varies per chain, so bind the send target to the swapper the
+  // signed quote (priceRoute) declared, rather than trusting whatever the
+  // /transactions response returns (SWAP-1). A tampered build that points
+  // `to` at an attacker contract no longer passes the bare contract-code
+  // check. Fall back to contract-code + value + sim where the quote did
+  // not declare a contractAddress.
+  const augustus: string | undefined = route.priceRoute?.contractAddress;
+  if (augustus) {
+    if (txData.to?.toLowerCase() !== augustus.toLowerCase()) {
+      throw new Error(`Blocked for safety: swap target ${txData.to} does not match the quoted ParaSwap contract ${augustus}.`);
+    }
+  }
+  await assertIsContract(signer.provider!, txData.to);
+  assertNativeValue(isNativeSwap, value, srcAmountBn);
+  // ParaSwap is the one swap branch that passes its quoted gasLimit
+  // straight through (no estimateGas), so verify the upfront hold fits.
+  await assertUpfrontAffordable(
+    signer.provider!, owner, value,
+    txData.gas ? BigInt(txData.gas) : 0n, symbol, "swap",
+  );
+
+  const psApproval = !!(fromToken.address && route.priceRoute?.tokenTransferProxy);
+  if (fromToken.address && route.priceRoute?.tokenTransferProxy) {
+    // Gate the approval to ParaSwap's proxy for THIS chain (Base differs
+    // from the others). Exact amount only.
+    assertTrustedSpender("paraswap", route.priceRoute.tokenTransferProxy, chainId);
+    ctx.onProgress?.(`Approving ${fromToken.symbol} (1 of 2)…`);
+    await approveErc20Exact(signer, fromToken.address, owner, route.priceRoute.tokenTransferProxy, srcAmount);
+  }
+  ctx.onProgress?.(psApproval ? "Swapping (2 of 2)…" : "Swapping…");
+  await simulateOrThrow(signer, { to: txData.to, data: txData.data, value });
+  const tx = await signer.sendTransaction({
+    to: txData.to, data: txData.data, value,
+    gasLimit: txData.gas ? BigInt(txData.gas) : undefined,
+  });
+  // Refresh the instant the receipt lands so the received token appears
+  // without waiting out the poll cadence.
+  void tx.wait().then(() => ctx.onMined?.()).catch(() => {});
+  return tx.hash;
+}
+
+async function executeRelaySwap(route: RouteOption, ctx: EvmSwapContext): Promise<string> {
+  const { signer, chainId, fromToken, fromAmount } = ctx;
+  const srcAmountBn = BigInt(ethers.parseUnits(fromAmount, fromToken.decimals).toString());
+  const isNativeSwap = !fromToken.address;
+
+  await assertChainId(signer, chainId);
+
+  // Relay returns ready-to-sign steps (an approval step for ERC-20 input,
+  // then the swap/deposit step). Its router/spender is dynamic per quote,
+  // so it cannot use the chain-constant whitelist that Kyber/ParaSwap do.
+  // Each step is instead bound by: chain-id match, contract-code, a native
+  // value bound, and a pre-broadcast simulation — and steps run in order so
+  // an approval is mined before the swap step is simulated.
+  const steps = route.relaySteps || [];
+  if (!steps.length) throw new Error("Relay returned no execution steps");
+  const relayTotal = steps.reduce(
+    (n: number, s: any) =>
+      n + (s.items || []).filter((it: any) => it?.data?.to && it?.data?.data && it.status !== "complete").length,
+    0,
+  );
+  let relayDone = 0;
+  let lastHash = "";
+  for (const step of steps) {
+    for (const item of (step.items || [])) {
+      const d = item?.data;
+      if (!d?.to || !d?.data) continue;
+      if (item.status === "complete") continue;
+      relayDone++;
+      ctx.onProgress?.(relayTotal > 1 ? `Confirming step ${relayDone} of ${relayTotal} on-chain…` : "Confirming on-chain…");
+      if (d.chainId != null && Number(d.chainId) !== chainId) {
+        throw new Error(`Blocked for safety: Relay step targets chain ${d.chainId}, expected ${chainId}.`);
+      }
+      const value = d.value ? BigInt(d.value) : 0n;
+      // Native input: only the deposit step may carry value, never more than
+      // the amount being swapped. ERC-20 input: every step must carry zero.
+      if (isNativeSwap) {
+        if (value > srcAmountBn) {
+          throw new Error(`Blocked for safety: Relay step sends ${value} wei, more than the ${srcAmountBn} wei being swapped.`);
+        }
+      } else if (value !== 0n) {
+        throw new Error(`Blocked for safety: ERC-20 swap step should not send native value, but ${value} wei is attached.`);
+      }
+      // A step that calls the SOURCE TOKEN's contract may only be a
+      // bounded approve/transfer. Relay's spender/solver is dynamic (no
+      // allowlist is possible, unlike Kyber/ParaSwap/LI.FI), so cap what
+      // a tampered step could authorize or move at the amount being
+      // swapped — the user already intends to spend that much. Any other
+      // selector on the token contract is blocked outright.
+      if (fromToken.address && d.to.toLowerCase() === fromToken.address.toLowerCase()) {
+        const sel = String(d.data).slice(0, 10).toLowerCase();
+        const APPROVE = "0x095ea7b3", TRANSFER = "0xa9059cbb";
+        if (sel !== APPROVE && sel !== TRANSFER) {
+          throw new Error("Blocked for safety: unexpected Relay call on the source token contract.");
+        }
+        let amt: bigint;
+        try {
+          const [, rawAmt] = ethers.AbiCoder.defaultAbiCoder().decode(
+            ["address", "uint256"], "0x" + String(d.data).slice(10),
+          );
+          amt = BigInt(rawAmt);
+        } catch {
+          throw new Error("Blocked for safety: could not decode the Relay token-contract step.");
+        }
+        if (amt > srcAmountBn) {
+          throw new Error("Blocked for safety: Relay step approves/moves more of the token than the amount being swapped.");
+        }
+      }
+      await assertIsContract(signer.provider!, d.to);
+      await simulateOrThrow(signer, { to: d.to, data: d.data, value });
+      const tx = await signer.sendTransaction({ to: d.to, data: d.data, value });
+      await tx.wait();
+      lastHash = tx.hash;
+    }
+  }
+  if (!lastHash) throw new Error("Relay produced no signable transaction");
+  ctx.onMined?.(); // every Relay receipt was awaited inline above
+  return lastHash;
+}
+
+async function executeKyberSwap(route: RouteOption, ctx: EvmSwapContext): Promise<string> {
+  const { signer, owner, chainId, fromToken, fromAmount } = ctx;
+  const srcAmount = ethers.parseUnits(fromAmount, fromToken.decimals).toString();
+  const srcAmountBn = BigInt(srcAmount);
+  const isNativeSwap = !fromToken.address;
+
+  await assertChainId(signer, chainId);
+
+  const kyberChain = KYBERSWAP_CHAIN[chainId];
+  const buildRes = await fetch(`https://aggregator-api.kyberswap.com/${kyberChain}/api/v1/route/build`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      routeSummary: route.routeSummary, sender: owner, recipient: owner,
+      slippageTolerance: Math.round(sanitizeSlippagePct(ctx.slippage) * 100),
+      deadline: Math.floor(Date.now() / 1000) + 1800, source: "numpay",
+    }),
+  });
+  if (!buildRes.ok) throw new Error(`KyberSwap build failed (${buildRes.status})`);
+  const bd = await buildRes.json();
+  if (!bd?.data) throw new Error("No transaction data from KyberSwap");
+  const { routerAddress, data } = bd.data;
+
+  // Router + approval spender are the same chain-constant address — gate both.
+  assertTrustedRouter("kyberswap", routerAddress);
+  const value = !fromToken.address ? srcAmountBn : 0n;
+  assertNativeValue(isNativeSwap, value, srcAmountBn);
+
+  if (fromToken.address) {
+    assertTrustedSpender("kyberswap", routerAddress);
+    ctx.onProgress?.(`Approving ${fromToken.symbol} (1 of 2)…`);
+    await approveErc20Exact(signer, fromToken.address, owner, routerAddress, srcAmount);
+  }
+  ctx.onProgress?.(fromToken.address ? "Swapping (2 of 2)…" : "Swapping…");
+  await simulateOrThrow(signer, { to: routerAddress, data, value });
+  const tx = await signer.sendTransaction({ to: routerAddress, data, value });
+  void tx.wait().then(() => ctx.onMined?.()).catch(() => {});
+  return tx.hash;
 }
 
 // ── Error parsing ─────────────────────────────────────────────────────────────
