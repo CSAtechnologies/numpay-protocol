@@ -10,7 +10,10 @@
 import { ethers } from "ethers";
 import { NETWORKS } from "./networks";
 import { DEFAULT_TOKENS } from "./tokens";
-import { SOLANA_SWAP_TOKENS, signSimulateSendSolanaTx } from "./chains/solana";
+import {
+  SOLANA_SWAP_TOKENS, signSimulateSendSolanaTx,
+  fetchJupiterQuote, executeJupiterSwap, hasTokenAccount, WSOL_MINT,
+} from "./chains/solana";
 import type { NonEvmChain } from "./chains";
 import {
   assertTrustedSpender, assertTrustedRouter, assertChainId,
@@ -705,6 +708,100 @@ async function executeKyberSwap(route: RouteOption, ctx: EvmSwapContext): Promis
   const tx = await signer.sendTransaction({ to: routerAddress, data, value });
   void tx.wait().then(() => ctx.onMined?.()).catch(() => {});
   return tx.hash;
+}
+
+// ── Solana same-chain swap (Jupiter) ──────────────────────────────────────────
+// Extracted from the extension's Jupiter quote + executeSwap branches. Shared
+// with mobile. Execution keeps the SOL-affordability pre-check (fee headroom +
+// per-account rent) and the staleness re-quote, then signs via the shared
+// simulate-and-send Solana path inside executeJupiterSwap.
+
+/** Fetch a Jupiter quote and shape it as a RouteOption (native = WSOL_MINT). */
+export async function fetchJupiterSwapQuote(
+  from: SwapToken, to: SwapToken, amount: string, slippagePct: number,
+): Promise<RouteOption | null> {
+  const inMint  = from.address || WSOL_MINT;
+  const outMint = to.address   || WSOL_MINT;
+  const amountRaw = ethers.parseUnits(amount, from.decimals).toString();
+  const q = await fetchJupiterQuote(inMint, outMint, amountRaw, Math.round(slippagePct * 100));
+  if (!q) return null;
+  return {
+    provider: "jupiter", label: "Jupiter",
+    logo: "https://assets.coingecko.com/coins/images/34188/small/jup.png",
+    destAmount: parseFloat(ethers.formatUnits(q.outAmount, to.decimals)).toFixed(Math.min(to.decimals, 6)),
+    destAmountRaw: q.outAmount, gasCostUSD: "0", tag: "Best",
+    priceRoute: q.raw, // carry the Jupiter quote for the swap build
+    // Jupiter reports one USD value for the trade; the per-side split falls
+    // back to held-token prices when this is absent.
+    srcUsd: parseFloat(q.raw?.swapUsdValue) || undefined,
+  };
+}
+
+export interface SolanaSwapContext {
+  fromToken: SwapToken;
+  toToken: SwapToken;
+  fromAmount: string;
+  solanaSecretKey: Uint8Array;
+  solanaAddress: string;
+  /** Known SOL balance; 0 means "unknown" and skips the pre-block (sim decides). */
+  solBalance: number;
+  slippage: string;
+  /** Called when the quote is re-priced past slippage, so the UI can refresh. */
+  onRepriceNeeded?: () => void;
+}
+
+/**
+ * Execute a Solana same-chain swap via Jupiter and return the tx signature.
+ * Runs the SOL-affordability pre-check and a fresh staleness re-quote before
+ * signing (executeJupiterSwap simulates locally before broadcast).
+ */
+export async function executeSolanaSwap(route: RouteOption, ctx: SolanaSwapContext): Promise<string> {
+  const { fromToken, toToken, fromAmount, solBalance } = ctx;
+
+  // Compute what THIS swap actually needs in SOL (Jupiter 6024 fails
+  // otherwise): a bounded fee (base + priority capped at 0.001 SOL), plus
+  // ~0.002 SOL rent per token account that must be created — the temporary
+  // wrapped-SOL account when SOL is on either side (refunded after the swap),
+  // and the output token account if it doesn't exist.
+  const FEE_HEADROOM = 0.0015;
+  const ATA_RENT     = 0.00204;
+  let requiredSol = FEE_HEADROOM;
+  if (!fromToken.address || !toToken.address) requiredSol += ATA_RENT;
+  if (toToken.address) {
+    const exists = await hasTokenAccount(ctx.solanaAddress, toToken.address);
+    if (exists === false) requiredSol += ATA_RENT;
+  }
+  const totalNeeded = (!fromToken.address ? parseFloat(fromAmount) : 0) + requiredSol;
+  // solBalance of 0 may just mean the balance fetch failed; in that case let
+  // the pre-broadcast simulation be the judge instead of false-blocking.
+  if (solBalance > 0 && totalNeeded > solBalance) {
+    throw new Error(
+      `This swap needs ~${requiredSol.toFixed(4)} SOL for the network fee and account rent` +
+      (!fromToken.address ? ` on top of the ${fromAmount} SOL being swapped` : "") +
+      `, but the wallet has ${solBalance.toFixed(4)} SOL. Lower the amount or add a little SOL.`
+    );
+  }
+
+  // Jupiter quotes go stale within seconds; a stale quote fails the
+  // pre-broadcast simulation (slippage/blockhash). Re-quote now and use the
+  // fresh route — but abort if the price dropped more than the user's slippage
+  // versus what was on screen.
+  const inMint    = fromToken.address || WSOL_MINT;
+  const outMint   = toToken.address   || WSOL_MINT;
+  const amountRaw = ethers.parseUnits(fromAmount, fromToken.decimals).toString();
+  const slipBps   = Math.round(sanitizeSlippagePct(ctx.slippage) * 100);
+  let quoteToUse  = route.priceRoute;
+  const fresh = await fetchJupiterQuote(inMint, outMint, amountRaw, slipBps);
+  if (fresh) {
+    const shown = BigInt(route.destAmountRaw || "0");
+    const now   = BigInt(fresh.outAmount);
+    if (shown > 0n && now < shown - (shown * BigInt(slipBps)) / 10000n) {
+      ctx.onRepriceNeeded?.();
+      throw new Error("The price moved since this quote was shown. Review the updated rate and try again.");
+    }
+    quoteToUse = fresh.raw;
+  }
+  return executeJupiterSwap(ctx.solanaSecretKey, ctx.solanaAddress, quoteToUse);
 }
 
 // ── LI.FI cross-chain bridge ──────────────────────────────────────────────────

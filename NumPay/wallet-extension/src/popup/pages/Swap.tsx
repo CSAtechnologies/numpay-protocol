@@ -9,7 +9,7 @@ import { DEFAULT_TOKENS } from "@numpay/core/tokens";
 import { markBalancesDirty } from "@numpay/core/balanceBus";
 import { logTx } from "@numpay/core/txLog";
 import { type NonEvmChain } from "@numpay/core/chains";
-import { fetchJupiterQuote, executeJupiterSwap, resolveSolanaToken, hasTokenAccount, WSOL_MINT, SOLANA_SWAP_TOKENS } from "@numpay/core/chains/solana";
+import { resolveSolanaToken } from "@numpay/core/chains/solana";
 import { getSigner, isLocked } from "@numpay/core/wallet";
 import { getCustomTokens, upsertCustomToken } from "@numpay/core/customTokens";
 import Layout from "../components/Layout";
@@ -31,6 +31,7 @@ import {
   evmSwapReserve, sanitizeSlippagePct,
   buildAllSwapTokens, fetchParaswapQuote, fetchKyberQuote, fetchRelayQuote, parseSwapError,
   executeEvmSwap, fetchBridgeRoutes, executeBridge as executeBridgeCore,
+  fetchJupiterSwapQuote, executeSolanaSwap,
 } from "@numpay/core/swap";
 
 const TAG_STYLE: Record<string, string> = {
@@ -256,27 +257,12 @@ export default function Swap() {
         setLoadingBridge(false);
       }
     } else if (from.chainId === "solana" && to.chainId === "solana") {
-      // ── Solana same-chain swap via Jupiter ──────────────────────────────
+      // Solana same-chain swap via Jupiter (quote fetch in core).
       setLoadingQuote(true); setQuoteError(""); setRouteOptions([]); setSelectedRoute(0);
       try {
-        const inMint  = from.address || WSOL_MINT;
-        const outMint = to.address   || WSOL_MINT;
-        const amountRaw = ethers.parseUnits(amt, from.decimals).toString();
-        const q = await fetchJupiterQuote(inMint, outMint, amountRaw, Math.round(sanitizeSlippagePct(slippage) * 100));
-        if (q) {
-          setRouteOptions([{
-            provider: "jupiter", label: "Jupiter",
-            logo: "https://assets.coingecko.com/coins/images/34188/small/jup.png",
-            destAmount: parseFloat(ethers.formatUnits(q.outAmount, to.decimals)).toFixed(Math.min(to.decimals, 6)),
-            destAmountRaw: q.outAmount, gasCostUSD: "0", tag: "Best",
-            priceRoute: q.raw, // carry the Jupiter quote for the swap build
-            // Jupiter reports one USD value for the trade; the per-side split
-            // falls back to held-token prices when this is absent.
-            srcUsd: parseFloat(q.raw?.swapUsdValue) || undefined,
-          }]);
-        } else {
-          setQuoteError("No Jupiter route found for this pair");
-        }
+        const q = await fetchJupiterSwapQuote(from, to, amt, sanitizeSlippagePct(slippage));
+        if (q) setRouteOptions([q]);
+        else setQuoteError("No Jupiter route found for this pair");
       } catch (e: any) {
         setQuoteError(e.message || "Quote failed");
       } finally {
@@ -411,60 +397,19 @@ export default function Swap() {
     if (!wallet || !route || !fromAmount) return;
     if (await isLocked()) { setSwapError("Wallet is locked. Reopen NumPay to unlock, then try again."); return; }
 
-    // ── Solana swap via Jupiter ─────────────────────────────────────────────
+    // ── Solana swap via Jupiter (pre-checks + execution in core) ────────────
     if (route.provider === "jupiter") {
       if (!nonEvmWallet?.solana) { setSwapError("Solana wallet not ready"); return; }
       setSwapping(true); setSwapError(""); setTxHash(""); setTxFxDetail(""); setTxFx("pending");
       try {
-        // Compute what THIS swap actually needs in SOL (Jupiter 6024 fails
-        // otherwise): a bounded fee (base + priority capped at 0.001 SOL),
-        // plus ~0.002 SOL rent per token account that must be created — the
-        // temporary wrapped-SOL account when SOL is on either side (refunded
-        // after the swap), and the output token account if it doesn't exist.
-        const FEE_HEADROOM = 0.0015;
-        const ATA_RENT     = 0.00204;
-        const solBal = nonEvmChains.find((c) => c.id === "solana")?.balance ?? 0;
-        let requiredSol = FEE_HEADROOM;
-        if (!fromToken.address || !toToken.address) requiredSol += ATA_RENT;
-        if (toToken.address) {
-          const exists = await hasTokenAccount(nonEvmWallet.solana.address, toToken.address);
-          if (exists === false) requiredSol += ATA_RENT;
-        }
-        const totalNeeded = (!fromToken.address ? parseFloat(fromAmount) : 0) + requiredSol;
-        // solBal of 0 may just mean the balance fetch failed; in that case let
-        // the pre-broadcast simulation be the judge instead of false-blocking.
-        if (solBal > 0 && totalNeeded > solBal) {
-          throw new Error(
-            `This swap needs ~${requiredSol.toFixed(4)} SOL for the network fee and account rent` +
-            (!fromToken.address ? ` on top of the ${fromAmount} SOL being swapped` : "") +
-            `, but the wallet has ${solBal.toFixed(4)} SOL. Lower the amount or add a little SOL.`
-          );
-        }
-
-        // Jupiter quotes go stale within seconds; a stale quote fails the
-        // pre-broadcast simulation (slippage/blockhash). Re-quote now and use
-        // the fresh route — but abort if the price dropped more than the
-        // user's slippage versus what was on screen.
-        const inMint    = fromToken.address || WSOL_MINT;
-        const outMint   = toToken.address   || WSOL_MINT;
-        const amountRaw = ethers.parseUnits(fromAmount, fromToken.decimals).toString();
-        const slipBps   = Math.round(sanitizeSlippagePct(slippage) * 100);
-        let quoteToUse  = route.priceRoute;
-        const fresh = await fetchJupiterQuote(inMint, outMint, amountRaw, slipBps);
-        if (fresh) {
-          const shown = BigInt(route.destAmountRaw || "0");
-          const now   = BigInt(fresh.outAmount);
-          if (shown > 0n && now < shown - (shown * BigInt(slipBps)) / 10000n) {
-            scheduleQuote(fromAmount, fromToken, toToken); // refresh the displayed rate
-            throw new Error("The price moved since this quote was shown. Review the updated rate and try again.");
-          }
-          quoteToUse = fresh.raw;
-        }
-        const txid = await executeJupiterSwap(
-          nonEvmWallet.solana.secretKey,
-          nonEvmWallet.solana.address,
-          quoteToUse,
-        );
+        const txid = await executeSolanaSwap(route, {
+          fromToken, toToken, fromAmount,
+          solanaSecretKey: nonEvmWallet.solana.secretKey,
+          solanaAddress: nonEvmWallet.solana.address,
+          solBalance: nonEvmChains.find((c) => c.id === "solana")?.balance ?? 0,
+          slippage,
+          onRepriceNeeded: () => scheduleQuote(fromAmount, fromToken, toToken),
+        });
         setTxHash(txid);
         void logTx({
           owner: wallet?.address,
