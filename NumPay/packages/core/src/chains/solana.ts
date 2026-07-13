@@ -1115,9 +1115,10 @@ export async function fetchSolanaTokens(address: string): Promise<Array<{
 
 /**
  * Fetch Solana balance using JSON-RPC.
- * Returns balance in SOL.
+ * Returns balance in SOL, or null when the source failed — 0 must only ever
+ * mean a verified empty account (callers keep last-known on null).
  */
-export async function fetchSolanaBalance(address: string): Promise<number> {
+export async function fetchSolanaBalance(address: string): Promise<number | null> {
   try {
     const resp = await fetch(SOL_RPC, {
       method: "POST",
@@ -1129,11 +1130,12 @@ export async function fetchSolanaBalance(address: string): Promise<number> {
         params: [address],
       }),
     });
-    if (!resp.ok) return 0;
+    if (!resp.ok) return null;
     const data = await resp.json();
+    if (data.error || !data.result) return null;
     const lamports = data.result?.value || 0;
     return lamports / 1e9; // lamports to SOL
   } catch {
-    return 0;
+    return null;
   }
 }

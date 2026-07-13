@@ -41,12 +41,13 @@ export function deriveBitcoinAddress(mnemonic: string): {
 
 /**
  * Fetch Bitcoin balance using Blockstream's public API (no key needed).
- * Returns balance in BTC.
+ * Returns balance in BTC, or null when the source failed — 0 must only ever
+ * mean a verified empty account (callers keep last-known on null).
  */
-export async function fetchBitcoinBalance(address: string): Promise<number> {
+export async function fetchBitcoinBalance(address: string): Promise<number | null> {
   try {
     const resp = await fetch(`https://blockstream.info/api/address/${address}`);
-    if (!resp.ok) return 0;
+    if (!resp.ok) return null;
     const data = await resp.json();
     // chain_stats has confirmed balance, mempool_stats has unconfirmed
     const confirmedSats =
@@ -58,6 +59,6 @@ export async function fetchBitcoinBalance(address: string): Promise<number> {
     const totalSats = confirmedSats + unconfirmedSats;
     return totalSats / 1e8; // satoshis to BTC
   } catch {
-    return 0;
+    return null;
   }
 }

@@ -460,10 +460,12 @@ function assertSuiBalanceChanges(
 }
 
 /**
- * Fetch Sui balance using JSON-RPC.
- * Returns balance in SUI.
+ * Fetch Sui balance using JSON-RPC (totalBalance covers coin objects AND
+ * address balances). Returns balance in SUI, or null when every RPC failed —
+ * 0 must only ever mean a verified empty account (callers keep last-known on
+ * null; returning 0 here zeroed real balances during network blips).
  */
-export async function fetchSuiBalance(address: string): Promise<number> {
+export async function fetchSuiBalance(address: string): Promise<number | null> {
   const body = JSON.stringify({
     jsonrpc: "2.0", id: 1,
     method: "suix_getBalance",
@@ -478,11 +480,12 @@ export async function fetchSuiBalance(address: string): Promise<number> {
       });
       if (!resp.ok) continue;
       const data = await resp.json();
+      if (data.error || !data.result) continue;
       const mist = parseInt(data.result?.totalBalance || "0", 10);
       return mist / 1e9; // MIST to SUI
     } catch {}
   }
-  return 0;
+  return null;
 }
 
 /**

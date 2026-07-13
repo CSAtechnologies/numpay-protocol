@@ -257,7 +257,9 @@ export async function sendTronTokenTransfer(
   );
 }
 
-export async function fetchTronBalance(address: string): Promise<number> {
+// Returns balance in TRX, or null when every source failed — 0 must only ever
+// mean a verified empty/unactivated account (callers keep last-known on null).
+export async function fetchTronBalance(address: string): Promise<number | null> {
   // Primary: Trongrid REST API
   try {
     const resp = await fetch(`https://api.trongrid.io/v1/accounts/${address}`, {
@@ -270,7 +272,8 @@ export async function fetchTronBalance(address: string): Promise<number> {
     }
   } catch {}
 
-  // Fallback: Trongrid wallet RPC (direct node endpoint)
+  // Fallback: Trongrid wallet RPC (direct node endpoint). An answering node
+  // with no account object = unactivated address, a definitive 0.
   try {
     const resp = await fetch("https://api.trongrid.io/wallet/getaccount", {
       method: "POST",
@@ -284,7 +287,7 @@ export async function fetchTronBalance(address: string): Promise<number> {
     }
   } catch {}
 
-  return 0;
+  return null;
 }
 
 const TW = "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains";

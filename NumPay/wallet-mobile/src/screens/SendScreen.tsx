@@ -30,15 +30,42 @@ import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
 interface BpanChange { number: string; chain: string; oldAddr: string; newAddr: string }
 
 const NON_EVM_NAMES: Record<string, string> = { solana: "Solana", tron: "Tron", sui: "Sui" };
-// Fee lines for chains without a live estimate (matches the reserve comments
-// in send.ts: Tron ~1 TRX recipient activation, Sui a few thousandths).
-const NON_EVM_FEE_LINE: Record<string, string> = {
-  solana: "Network fee ~0.000005 SOL",
-  tron: "Network fee up to ~1 TRX (new recipients cost ~1 TRX activation)",
-  sui: "Network fee ~0.003 SUI",
-};
+// Typical fee for chains without a live estimate (matches the reserve
+// comments in send.ts: Tron ~1 TRX recipient activation, Sui a few
+// thousandths).
+const NON_EVM_FEE_NATIVE: Record<string, number> = { solana: 0.000005, tron: 1, sui: 0.003 };
 
-export function SendScreen({ w, onBack }: { w: MobileWalletState; onBack: () => void }) {
+// Fixed-notation amount for fee lines. toPrecision(2) rendered tiny rollup
+// fees as scientific notation ("~2.3e-7 ETH", observed on Base).
+function fmtFeeNative(n: number): string {
+  if (!(n > 0)) return "0";
+  if (n >= 1) return n.toFixed(4).replace(/\.?0+$/, "");
+  const decimals = Math.min(12, Math.ceil(-Math.log10(n)) + 1); // 2 significant digits
+  return n.toFixed(decimals).replace(/\.?0+$/, "");
+}
+
+// Fiat tail for a fee line: "$0.00" says nothing, so sub-cent fees read
+// "(<$0.01)" instead.
+function feeUsdLabel(usd: number): string {
+  if (!(usd > 0)) return "";
+  return usd < 0.005 ? " (<$0.01)" : ` ($${usd.toFixed(2)})`;
+}
+
+function nonEvmFeeLine(chainId: string, price: number): string {
+  const usd = price > 0 ? (NON_EVM_FEE_NATIVE[chainId] ?? 0) * price : 0;
+  switch (chainId) {
+    case "solana": return `Network fee ~0.000005 SOL${feeUsdLabel(usd)}`;
+    case "tron":   return `Network fee up to ~1 TRX${feeUsdLabel(usd)} (new recipients cost ~1 TRX activation)`;
+    case "sui":    return `Network fee ~0.003 SUI${feeUsdLabel(usd)}`;
+    default:       return "";
+  }
+}
+
+export function SendScreen({ w, onBack, onSessionExpired }: {
+  w: MobileWalletState;
+  onBack: () => void;
+  onSessionExpired?: () => void;
+}) {
   // Sendable chains: every EVM chain the wallet holds native coin on (plus
   // Ethereum so the screen is never empty), then the sendable non-EVM chains.
   const chains = useMemo(() => {
@@ -186,7 +213,13 @@ export function SendScreen({ w, onBack }: { w: MobileWalletState; onBack: () => 
     if (!amount || !(amt > 0)) { setError("Enter an amount greater than zero"); return; }
     if (amt > balance) { setError("Insufficient balance"); return; }
     const mnemonic = await getUnlockedMnemonic();
-    if (!mnemonic) { setError("Wallet is locked. Unlock NumPay and try again."); return; }
+    if (!mnemonic) {
+      // Session expired under us — surface the re-auth overlay immediately
+      // instead of waiting for the 30 s auto-lock poll to swap the screen.
+      setError("Wallet is locked. Unlock NumPay and try again.");
+      onSessionExpired?.();
+      return;
+    }
 
     // Deliberate acceptance of a changed mapping advances the trust pin (H-03).
     if (bpanChange) await acceptBPANChange(bpanChange.number, bpanChange.chain, bpanChange.newAddr);
@@ -296,8 +329,8 @@ export function SendScreen({ w, onBack }: { w: MobileWalletState; onBack: () => 
           <Text style={st.subText}>{amountUsd > 0 ? `≈ $${amountUsd.toFixed(2)}` : " "}</Text>
           <Text style={st.subText}>
             {isEvm
-              ? (fee ? `Network fee ~${fee.feeNative.toPrecision(2)} ${symbol}${feeUsd > 0 ? ` ($${feeUsd.toFixed(2)})` : ""}` : "Estimating fee…")
-              : NON_EVM_FEE_LINE[chainId] ?? ""}
+              ? (fee ? `Network fee ~${fmtFeeNative(fee.feeNative)} ${symbol}${feeUsdLabel(feeUsd)}` : "Estimating fee…")
+              : nonEvmFeeLine(chainId, price)}
           </Text>
         </View>
 

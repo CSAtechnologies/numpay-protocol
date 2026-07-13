@@ -5,7 +5,7 @@
 // Phase 0. FLAG_SECURE on secret screens is a follow-up (needs
 // expo-screen-capture or a config plugin).
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 
 import { createWallet, importFromMnemonic } from "@numpay/core/wallet";
@@ -36,10 +36,18 @@ export default function App() {
   const [pendingMnemonic, setPendingMnemonic] = useState("");
   const [error, setError] = useState("");
   const [now, setNow] = useState(Date.now()); // drives the lockout countdown
+  // Session expired while a wallet screen was open. Rendered as an opaque
+  // overlay ON TOP of the mounted tree instead of swapping mode: the mnemonic
+  // is already wiped from RAM (only non-secret screen state survives), and
+  // after re-auth the user resumes exactly where they were — a mid-send
+  // expiry used to silently unmount the form and its error card.
+  const [relocked, setRelocked] = useState(false);
 
   const unlocked =
     mode === "home" || mode === "receive" || mode === "send" || mode === "activity";
   const w = useMobileWallet(unlocked);
+  const unlockedRef = useRef(unlocked);
+  unlockedRef.current = unlocked;
 
   const refresh = useCallback(async () => {
     const s = await getStatus();
@@ -49,19 +57,65 @@ export default function App() {
     else setMode(s.exists ? "locked" : "onboard");
   }, []);
 
+  const showRelock = useCallback(async () => {
+    setStatus(await getStatus());
+    setRelocked(true);
+  }, []);
+
   useEffect(() => {
     refresh().catch((e) => setError(String(e)));
     const tick = setInterval(() => setNow(Date.now()), 1000);
     const auto = setInterval(() => {
-      autoLockCheck().then((locked) => { if (locked) refresh(); });
+      autoLockCheck().then((locked) => {
+        if (!locked) return;
+        if (unlockedRef.current) showRelock();
+        else refresh();
+      });
     }, 30_000);
     return () => { clearInterval(tick); clearInterval(auto); };
-  }, [refresh]);
+  }, [refresh, showRelock]);
+
+  // Navigating counts as activity; without this the 15-min auto-lock is a
+  // hard timer from unlock and fires mid-use (observed killing an in-progress
+  // send).
+  useEffect(() => {
+    if (unlocked && !relocked) void touchActivity();
+  }, [mode, unlocked, relocked]);
 
   const onUnlocked = async () => {
     setError("");
     await touchActivity();
     await refresh();
+  };
+
+  // Shared PIN/biometric handlers for the cold lock screen (mode "locked",
+  // `after` = refresh) and the session-expiry overlay (`after` = dismiss).
+  const pinUnlock = async (pin: string, after: () => void | Promise<void>) => {
+    try {
+      await unlockWithPin(pin);
+      setError("");
+      await touchActivity();
+      await after();
+    } catch (e) {
+      if (e instanceof VaultError) {
+        setError(
+          e.code === "locked" || (e.code === "wrong-pin" && e.lockUntil)
+            ? "Too many attempts."
+            : `Wrong PIN (${e.failedAttempts} failed).`
+        );
+      } else setError(String(e));
+      setStatus(await getStatus());
+    }
+  };
+  const bioUnlock = async (after: () => void | Promise<void>) => {
+    try {
+      await unlockWithBiometrics();
+      setError("");
+      await touchActivity();
+      await after();
+    } catch (e) {
+      setError(e instanceof VaultError ? e.message : String(e));
+    }
   };
 
   return (
@@ -116,29 +170,8 @@ export default function App() {
           status={status}
           now={now}
           error={error}
-          onPin={async (pin) => {
-            try {
-              await unlockWithPin(pin);
-              await onUnlocked();
-            } catch (e) {
-              if (e instanceof VaultError) {
-                setError(
-                  e.code === "locked" || (e.code === "wrong-pin" && e.lockUntil)
-                    ? "Too many attempts."
-                    : `Wrong PIN (${e.failedAttempts} failed).`
-                );
-              } else setError(String(e));
-              setStatus(await getStatus());
-            }
-          }}
-          onBio={async () => {
-            try {
-              await unlockWithBiometrics();
-              await onUnlocked();
-            } catch (e) {
-              setError(e instanceof VaultError ? e.message : String(e));
-            }
-          }}
+          onPin={(pin) => { void pinUnlock(pin, refresh); }}
+          onBio={() => { void bioUnlock(refresh); }}
         />
       )}
       {mode === "home" && (
@@ -160,12 +193,38 @@ export default function App() {
       {mode === "receive" && receiveAddrs && (
         <ReceiveScreen addrs={receiveAddrs} onBack={() => setMode("home")} />
       )}
-      {mode === "send" && <SendScreen w={w} onBack={() => setMode("home")} />}
+      {mode === "send" && (
+        <SendScreen
+          w={w}
+          onBack={() => setMode("home")}
+          onSessionExpired={() => { void showRelock(); }}
+        />
+      )}
       {mode === "activity" && (
         <ActivityScreen owner={w.evmAddress} onBack={() => setMode("home")} />
       )}
       {mode === "spike" && <Spike onBack={() => setMode("home")} />}
       {mode === "devnet" && <DevnetTx onBack={() => setMode("home")} />}
+
+      {/* Session-expiry re-auth overlay (see the `relocked` comment above). */}
+      {relocked && status && (
+        <View style={st.lockOverlay}>
+          <AuthHeader />
+          <AlertCard
+            tone="amber"
+            title="Session expired"
+            body="NumPay locked itself after inactivity. Unlock to pick up where you left off."
+            style={{ marginBottom: 12 }}
+          />
+          <Locked
+            status={status}
+            now={now}
+            error={error}
+            onPin={(pin) => { void pinUnlock(pin, () => setRelocked(false)); }}
+            onBio={() => { void bioUnlock(() => setRelocked(false)); }}
+          />
+        </View>
+      )}
     </View>
   );
 }
@@ -571,6 +630,14 @@ const st = StyleSheet.create({
   tokenSub: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
   tokenBal: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "500", fontVariant: ["tabular-nums"] },
 
+  lockOverlay: {
+    position: "absolute",
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: colors.bg,
+    paddingTop: 56,
+    paddingHorizontal: spacing.screen,
+    zIndex: 10,
+  },
   h2: { color: colors.textPrimary, fontSize: ts.h2, fontWeight: "600", marginBottom: 12 },
   body: { color: colors.textPrimary, fontSize: 15 },
   dim: { color: colors.muted, fontSize: ts.row, marginTop: 8 },

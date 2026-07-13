@@ -155,6 +155,12 @@ export function useMobileWallet(unlocked: boolean): MobileWalletState {
   // instead of every refresh is what makes refreshes paint promptly. Only
   // PUBLIC addresses are cached; keys are re-derived per send.
   const addrCache = useRef<{ evm: string; addrs: NonEvmAddressMap } | null>(null);
+  // Last successful balance rows. Core's sweep/fetch retention ("a failed
+  // read never zeroes a row") only engages when the caller passes the
+  // previous results back in — without these, one network blip painted every
+  // real balance as 0 (observed on-device 2026-07-13).
+  const prevEvmByChain = useRef(new Map<string, ChainBalance>());
+  const prevNonEvm = useRef<NonEvmChain[] | undefined>(undefined);
 
   const refresh = useCallback(() => {
     if (!unlocked || busy.current) return;
@@ -205,9 +211,11 @@ export function useMobileWallet(unlocked: boolean): MobileWalletState {
       void loadOwnBPAN(evm).then(setBpan);
 
       const [evmSweep, nonEvm] = await withTimeout(Promise.all([
-        sweepEvmNativeBalances(evm, {}, new Map<string, ChainBalance>()),
-        fetchNonEvmBalancesByAddress(addrs),
+        sweepEvmNativeBalances(evm, {}, prevEvmByChain.current),
+        fetchNonEvmBalancesByAddress(addrs, prevNonEvm.current),
       ]), REFRESH_TIMEOUT_MS, "Balance sweep");
+      prevEvmByChain.current = new Map(evmSweep.results.map((c) => [c.networkId, c]));
+      prevNonEvm.current = nonEvm;
 
       const nativeRows: AssetRow[] = [
         ...evmSweep.results.map((c) => ({
@@ -276,7 +284,14 @@ export function useMobileWallet(unlocked: boolean): MobileWalletState {
 
   useEffect(() => {
     if (unlocked) refresh();
-    else addrCache.current = null; // lock: cached addresses die with the session
+    else {
+      // Lock: cached addresses die with the session, and so does balance
+      // retention — a wipe→import could unlock a DIFFERENT wallet next, which
+      // must not inherit this one's last-known rows.
+      addrCache.current = null;
+      prevEvmByChain.current = new Map();
+      prevNonEvm.current = undefined;
+    }
   }, [unlocked, refresh]);
 
   const tokens = tokenRows(tokensByChain, hidden, rates);

@@ -57,7 +57,9 @@ export function deriveXrpAddress(mnemonic: string): {
   return { address: xrpBase58Encode(full), privateKey: hdNode.privateKey };
 }
 
-export async function fetchXrpBalance(address: string): Promise<number> {
+// Returns balance in XRP, or null when the source failed — 0 must only ever
+// mean a verified unfunded account (callers keep last-known on null).
+export async function fetchXrpBalance(address: string): Promise<number | null> {
   // account_info returns only the balance (~0.5 kB).
   //
   // We deliberately do NOT fall back to XRPScan's REST account endpoint
@@ -80,9 +82,11 @@ export async function fetchXrpBalance(address: string): Promise<number> {
       const data = await resp.json();
       const drops: string | undefined = data.result?.account_data?.Balance;
       if (drops) return parseInt(drops, 10) / 1_000_000;
-      // actNotFound (unfunded / never-activated) → 0, no giant-payload fallback.
+      // actNotFound (unfunded / never-activated) → definitive 0, no
+      // giant-payload fallback. Any other answer shape is unknown → null.
+      if (data.result?.error === "actNotFound") return 0;
     }
   } catch {}
 
-  return 0;
+  return null;
 }

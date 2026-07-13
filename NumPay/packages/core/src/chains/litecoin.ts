@@ -27,15 +27,17 @@ export function deriveLitecoinAddress(mnemonic: string): {
   return { address, privateKey: hdNode.privateKey };
 }
 
-export async function fetchLitecoinBalance(address: string): Promise<number> {
+// Returns balance in LTC, or null when the source failed — 0 must only ever
+// mean a verified empty account (callers keep last-known on null).
+export async function fetchLitecoinBalance(address: string): Promise<number | null> {
   try {
     const resp = await fetch(`https://litecoinspace.org/api/address/${address}`);
-    if (!resp.ok) return 0;
+    if (!resp.ok) return null;
     const data = await resp.json();
     const confirmed   = (data.chain_stats?.funded_txo_sum   || 0) - (data.chain_stats?.spent_txo_sum   || 0);
     const unconfirmed = (data.mempool_stats?.funded_txo_sum || 0) - (data.mempool_stats?.spent_txo_sum || 0);
     return (confirmed + unconfirmed) / 1e8; // litoshis → LTC
   } catch {
-    return 0;
+    return null;
   }
 }
