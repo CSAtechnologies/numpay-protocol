@@ -10,7 +10,7 @@
 import { ethers } from "ethers";
 import { NETWORKS } from "./networks";
 import { DEFAULT_TOKENS } from "./tokens";
-import { SOLANA_SWAP_TOKENS } from "./chains/solana";
+import { SOLANA_SWAP_TOKENS, signSimulateSendSolanaTx } from "./chains/solana";
 import type { NonEvmChain } from "./chains";
 import {
   assertTrustedSpender, assertTrustedRouter, assertChainId,
@@ -703,6 +703,237 @@ async function executeKyberSwap(route: RouteOption, ctx: EvmSwapContext): Promis
   ctx.onProgress?.(fromToken.address ? "Swapping (2 of 2)…" : "Swapping…");
   await simulateOrThrow(signer, { to: routerAddress, data, value });
   const tx = await signer.sendTransaction({ to: routerAddress, data, value });
+  void tx.wait().then(() => ctx.onMined?.()).catch(() => {});
+  return tx.hash;
+}
+
+// ── LI.FI cross-chain bridge ──────────────────────────────────────────────────
+// Extracted from the extension's fetchQuotesForPair (bridge branch) and
+// executeBridge. Shared with mobile. The /advanced/routes list is display
+// data; execution re-fetches /quote for the actual transactionRequest and
+// runs the deterministic guards (trusted diamond router + approval spender,
+// exact native-value bound with a quoted+capped messaging-fee allowance,
+// chain-id assertion, upfront gas hold). Bridge calldata is often not
+// eth_call-simulatable on the source chain, so simulation is best-effort only.
+
+/**
+ * Resolve the correct wallet address and LI.FI token address for one side of a
+ * bridge. `solanaAddress` is required only when either side is Solana.
+ */
+export function lifiSide(token: SwapToken, evmAddress: string, solanaAddress?: string): {
+  lifiChainId: number | undefined; address: string; tokenAddress: string;
+} {
+  const isSol = token.chainId === "solana";
+  return {
+    lifiChainId: LIFI_CHAIN_ID[token.chainId],
+    address: isSol ? (solanaAddress ?? "") : evmAddress,
+    tokenAddress: token.address || LIFI_NATIVE_TOKEN[token.chainId] || LIFI_NATIVE,
+  };
+}
+
+/**
+ * Fetch up to 4 display routes for a cross-chain bridge (/advanced/routes).
+ * Returns [] with no throw when the pair is unsupported or nothing routes, so
+ * callers can show an inline message.
+ */
+export async function fetchBridgeRoutes(
+  from: SwapToken, to: SwapToken, amount: string,
+  evmAddress: string, slippagePct: number, solanaAddress?: string,
+): Promise<{ routes: BridgeRoute[]; error?: string }> {
+  const f = lifiSide(from, evmAddress, solanaAddress);
+  const t = lifiSide(to, evmAddress, solanaAddress);
+  if (!f.lifiChainId || !t.lifiChainId) {
+    return { routes: [], error: `Bridge not supported for ${from.chainName} → ${to.chainName} yet` };
+  }
+  try {
+    const res = await fetch(LIFI_ROUTES_URL, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fromChainId:      f.lifiChainId,
+        toChainId:        t.lifiChainId,
+        fromTokenAddress: f.tokenAddress,
+        toTokenAddress:   t.tokenAddress,
+        fromAmount:       ethers.parseUnits(amount, from.decimals).toString(),
+        fromAddress: f.address, toAddress: t.address,
+        options: {
+          slippage: slippagePct / 100, order: "RECOMMENDED",
+          integrator: LIFI_INTEGRATOR,
+          // Fee baked into the routes so the shown bridge receive is post-fee.
+          ...(lifiFeeActive() ? { fee: parseFloat(LIFI_FEE) } : {}),
+        },
+      }),
+    });
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      throw new Error(`Bridge API error (${res.status})${errBody ? ": " + errBody.slice(0, 120) : ""}`);
+    }
+    const data = await res.json();
+    if (!data?.routes?.length) {
+      return { routes: [], error: "No bridge routes found. Try a larger amount or different token pair." };
+    }
+    return {
+      routes: data.routes.slice(0, 4).map((r: any) => ({
+        id: r.id, gasCostUSD: r.gasCostUSD || "0", tags: r.tags || [],
+        toAmount: r.toAmountMin || r.toAmount || "0", steps: r.steps || [],
+        fromAmountUSD: r.fromAmountUSD, toAmountUSD: r.toAmountUSD,
+      })),
+    };
+  } catch (e: any) {
+    return { routes: [], error: e?.message || "Failed to fetch bridge routes" };
+  }
+}
+
+export interface BridgeContext {
+  fromToken: SwapToken;
+  toToken: SwapToken;
+  fromAmount: string;
+  evmAddress: string;         // EVM wallet address (used for EVM sides + logging)
+  // EVM source: a signer on the source chain. Solana source: the keypair.
+  evmSigner?: ethers.Signer;
+  solanaSecretKey?: Uint8Array;
+  solanaAddress?: string;
+  // Live USD price of the source token, for the native messaging-fee cap.
+  fromTokenUsdPrice: number;
+  onProgress?: (label: string) => void;
+  onMined?: () => void;
+}
+
+/**
+ * Execute a cross-chain bridge and return the source-chain tx hash / signature.
+ * EVM and Solana source paths, guard-checked. The caller writes the txLog
+ * entry (kind "bridge") — this returns only the hash.
+ */
+export async function executeBridge(ctx: BridgeContext): Promise<string> {
+  const { fromToken, toToken, fromAmount, evmAddress } = ctx;
+  const fromNet = NETWORKS[fromToken.chainId];
+  const isSolanaSource = fromToken.chainId === "solana";
+  if (!fromNet && !isSolanaSource) throw new Error("Bridge execution is only supported from EVM chains and Solana");
+  if (isSolanaSource && (!ctx.solanaSecretKey || !ctx.solanaAddress)) throw new Error("Solana wallet not ready");
+
+  // /advanced/routes gives display data only; /quote gives the actual transactionRequest
+  const f = lifiSide(fromToken, evmAddress, ctx.solanaAddress);
+  const t = lifiSide(toToken, evmAddress, ctx.solanaAddress);
+  const fromAmtRaw = ethers.parseUnits(fromAmount, fromToken.decimals).toString();
+
+  let quoteUrl = `${LIFI_API}/quote?fromChain=${f.lifiChainId}&toChain=${t.lifiChainId}` +
+    `&fromToken=${encodeURIComponent(f.tokenAddress)}&toToken=${encodeURIComponent(t.tokenAddress)}` +
+    `&fromAmount=${fromAmtRaw}&fromAddress=${f.address}&toAddress=${t.address}&integrator=${LIFI_INTEGRATOR}`;
+  // Must match the fee used when the routes were fetched.
+  if (lifiFeeActive()) quoteUrl += `&fee=${LIFI_FEE}`;
+  const qRes = await fetch(quoteUrl);
+  if (!qRes.ok) {
+    const err = await qRes.text().catch(() => "");
+    throw new Error(`Could not build transaction (${qRes.status})${err ? ": " + err.slice(0, 120) : ""}`);
+  }
+  const qData = await qRes.json();
+  const txReq = qData?.transactionRequest;
+
+  // ── Solana source: LI.FI returns a pre-built base64 v0 transaction (no
+  // to/value fields — the SVM equivalent of the EVM calldata). The shared
+  // signer enforces sole-signer + fee-payer binding and simulates locally
+  // before broadcast, same guards as Jupiter swaps. No approval step:
+  // SPL transfers are moved directly by the transaction itself.
+  if (isSolanaSource) {
+    if (!txReq?.data) throw new Error("Bridge provider returned incomplete transaction data");
+    ctx.onProgress?.("Bridging…");
+    const sig = await signSimulateSendSolanaTx(ctx.solanaSecretKey!, ctx.solanaAddress!, txReq.data);
+    ctx.onMined?.();
+    return sig;
+  }
+
+  if (!txReq?.to || !txReq?.data) throw new Error("Bridge provider returned incomplete transaction data");
+  const signer = ctx.evmSigner;
+  if (!signer) throw new Error("EVM signer not provided for bridge");
+  await assertChainId(signer, fromNet.chainId);
+
+  // The LI.FI diamond (router + approval target) is chain-constant — gate it.
+  assertTrustedRouter("lifi", txReq.to);
+  const value = txReq.value ? BigInt(txReq.value) : 0n;
+  // Bound the native value the same way swaps are (SWAP-1): a native-token
+  // bridge must attach exactly the bridged amount, an ERC-20 bridge zero.
+  const srcAmountBn = BigInt(fromAmtRaw);
+  const isNativeBridge = !fromToken.address;
+  // Keep the strict zero-native bound for ERC-20 bridges (loosening it would
+  // let a tampered route response attach and drain native), but name the
+  // actual situation when a route legitimately wants a native messaging fee
+  // (some LayerZero/Axelar-style routes) instead of the generic swap wording.
+  if (!isNativeBridge && value > 0n) {
+    throw new Error(
+      "This route attaches a native-coin fee to the transaction, which NumPay doesn't support yet. Try a different route.",
+    );
+  }
+  if (isNativeBridge) {
+    if (value < srcAmountBn) {
+      throw new Error(`Blocked for safety: transaction sends ${value} wei but the bridge amount is ${srcAmountBn} wei.`);
+    }
+    const excess = value - srcAmountBn;
+    if (excess > 0n) {
+      // Some routes (Stargate/LayerZero style) charge a messaging fee ON TOP
+      // of the bridged amount: value = amount + fee, itemized in the quote's
+      // feeCosts with included:false. Accept the excess only when it exactly
+      // matches those quoted native fees AND stays under an independent USD
+      // cap, so a tampered response can neither invent an unquoted fee nor
+      // inflate a quoted one beyond a bounded loss.
+      const isNativeAddr = (a?: string) => !a || /^0x0{40}$/i.test(a) || /^0xe{40}$/i.test(a);
+      const quotedFee = ((qData?.estimate?.feeCosts ?? []) as any[])
+        .filter((c) => c?.included === false && isNativeAddr(c?.token?.address))
+        .reduce((s: bigint, c: any) => s + BigInt(c?.amount ?? 0), 0n);
+      if (excess !== quotedFee) {
+        throw new Error(
+          `Blocked for safety: transaction attaches ${excess} wei above the bridge amount, ` +
+          `but the route quotes ${quotedFee} wei of native fees.`,
+        );
+      }
+      const px = ctx.fromTokenUsdPrice;
+      const capWei = px > 0
+        ? ethers.parseUnits((BRIDGE_FEE_CAP_USD / px).toFixed(8), 18)
+        : srcAmountBn / 4n;
+      if (excess > capWei) {
+        throw new Error(
+          `Blocked for safety: this route's native messaging fee ` +
+          `(${ethers.formatEther(excess)} ${fromNet.symbol}) is unusually high. Try a different route.`,
+        );
+      }
+    }
+  }
+
+  // LI.FI quotes the gasLimit, so ethers never estimates: check the upfront
+  // gas hold ourselves (a near-MAX Arbitrum bridge died at broadcast with an
+  // unreadable dRPC error before this existed).
+  await assertUpfrontAffordable(
+    signer.provider!, evmAddress, value,
+    txReq.gasLimit ? BigInt(txReq.gasLimit) : 0n, fromNet.symbol, "bridge",
+  );
+
+  // Approve the bridge contract if spending an ERC-20 (exact amount only).
+  const approvalAddr = qData?.estimate?.approvalAddress;
+  const bridgeApproval = !!(fromToken.address && approvalAddr);
+  if (fromToken.address && approvalAddr) {
+    assertTrustedSpender("lifi", approvalAddr);
+    ctx.onProgress?.(`Approving ${fromToken.symbol} (1 of 2)…`);
+    await approveErc20Exact(signer, fromToken.address, evmAddress, approvalAddr, fromAmtRaw);
+  }
+  ctx.onProgress?.(bridgeApproval ? "Bridging (2 of 2)…" : "Bridging…");
+  // Best-effort pre-flight ONLY (do not block). Cross-chain bridge calldata is
+  // frequently not eth_call-simulatable on the source chain — messaging-layer
+  // fees, executor/msg.sender checks and deadlines make a naive static call
+  // revert ("missing revert data") even when the real bridge would succeed —
+  // so hard-blocking on it stranded legitimate routes. A same-chain swap
+  // simulates cleanly and keeps its hard block; a bridge relies on the
+  // deterministic guards above (trusted router + approval spender, exact
+  // native-value bound, chain-id assertion), which are the real protection.
+  try {
+    await simulateOrThrow(signer, { to: txReq.to, data: txReq.data, value });
+  } catch (simErr) {
+    console.warn(
+      "[bridge] source-chain pre-flight reverted; proceeding (bridges are often not eth_call-simulatable):",
+      (simErr as Error)?.message,
+    );
+  }
+  const tx = await signer.sendTransaction({
+    to: txReq.to, data: txReq.data, value,
+    gasLimit: txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined,
+  });
   void tx.wait().then(() => ctx.onMined?.()).catch(() => {});
   return tx.hash;
 }
