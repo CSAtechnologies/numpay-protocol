@@ -120,7 +120,7 @@ const ERC20_META_ABI = [
 // only an answering source may remove a token from the cache.
 async function fetchAlchemyERC20s(chainId: string, address: string): Promise<AutoToken[] | null> {
   const sub = ALCHEMY_CHAINS[chainId];
-  if (!sub) return null;
+  if (!sub || !ALCHEMY_KEY) return null;
   const url = `https://${sub}.g.alchemy.com/v2/${ALCHEMY_KEY}`;
 
   try {

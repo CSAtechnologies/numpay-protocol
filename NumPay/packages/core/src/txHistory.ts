@@ -190,7 +190,7 @@ function tronAddrToHex(addr: string): string {
 
 async function fetchAlchemy(chainId: string, address: string): Promise<TxRecord[]> {
   const sub = ALCHEMY_NETS[chainId];
-  if (!sub) return [];
+  if (!sub || !ALCHEMY_KEY) return [];
   const net = NETWORKS[chainId];
   const url = `https://${sub}.g.alchemy.com/v2/${ALCHEMY_KEY}`;
   const opts = { method: "POST", headers: { "Content-Type": "application/json" } };

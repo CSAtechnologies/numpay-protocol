@@ -14,6 +14,28 @@ if (typeof g.Buffer === "undefined") g.Buffer = Buffer;
 if (typeof g.process === "undefined") g.process = require("process");
 if (!g.process.env) g.process.env = {};
 
+// Hermes' Intl has no PluralRules; @mysten/sui constructs one at module scope
+// (client/utils.mjs, only to format "1st/2nd/3rd" in Move abort messages).
+// Minimal en-US shim: cardinal "one/other", ordinal "one/two/few/other".
+if (typeof g.Intl === "undefined") g.Intl = {};
+if (typeof g.Intl.PluralRules === "undefined") {
+  g.Intl.PluralRules = class PluralRules {
+    private readonly ordinal: boolean;
+    constructor(_locales?: unknown, options?: { type?: string }) {
+      this.ordinal = options?.type === "ordinal";
+    }
+    select(n: number): string {
+      if (!this.ordinal) return n === 1 ? "one" : "other";
+      const mod10 = Math.abs(n) % 10;
+      const mod100 = Math.abs(n) % 100;
+      if (mod10 === 1 && mod100 !== 11) return "one";
+      if (mod10 === 2 && mod100 !== 12) return "two";
+      if (mod10 === 3 && mod100 !== 13) return "few";
+      return "other";
+    }
+  };
+}
+
 // Mobile ships proxy-only: NO provider keys, ever (plan section on key
 // hygiene). Core's RPC tables fall back to keyless public endpoints when the
 // keys are empty, and price/token reads route through the wallet API proxy.

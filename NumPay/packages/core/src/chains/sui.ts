@@ -9,6 +9,8 @@ import { derivePath } from "./slip10";
 import nacl from "tweetnacl";
 import { ethers } from "ethers";
 import { blake2b } from "@noble/hashes/blake2b";
+import { Transaction } from "@mysten/sui/transactions";
+import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
 
 // Sui BIP44 derivation path
 const SUI_DERIVATION_PATH = "m/44'/784'/0'/0'/0'";
@@ -86,13 +88,50 @@ async function suiRpc(rpc: string, method: string, params: any[]): Promise<any> 
 const SUI_GAS_BUDGET = 10_000_000n;
 
 /**
+ * Build an unsigned transfer client-side with the official Sui SDK, trying
+ * each RPC in turn. `tx.coin({ balance })` draws from address balances when
+ * available and falls back to owned coin objects, so funds received via the
+ * accumulator (address-balance) mechanism are spendable — the legacy
+ * `unsafe_paySui` node builder cannot fetch the compat-layer fake-coin
+ * reservations at all ("unable to fetch object", observed 2026-07-13).
+ * Recipient and amount are fixed in the command list here on the client; the
+ * node is only consulted to resolve inputs, gas payment, and gas price.
+ */
+async function buildSuiSend(
+  fromAddress: string,
+  toAddress: string,
+  amount: bigint,
+  coinType: string | null,
+  gasBudget: bigint,
+): Promise<{ rpc: string; txBytes: Uint8Array; txBytesB64: string }> {
+  let buildErr: Error | null = null;
+  for (const candidate of SUI_RPCS) {
+    try {
+      const client = new SuiJsonRpcClient({ url: candidate, network: "mainnet" });
+      const tx = new Transaction();
+      tx.setSender(fromAddress);
+      tx.setGasBudget(gasBudget);
+      tx.transferObjects(
+        [tx.coin(coinType ? { balance: amount, type: coinType } : { balance: amount })],
+        toAddress,
+      );
+      const txBytes = await tx.build({ client });
+      let bin = "";
+      for (let i = 0; i < txBytes.length; i++) bin += String.fromCharCode(txBytes[i]);
+      return { rpc: candidate, txBytes, txBytesB64: btoa(bin) };
+    } catch (e: any) {
+      buildErr = e instanceof Error ? e : new Error(String(e));
+    }
+  }
+  throw buildErr ?? new Error("Could not reach a Sui node");
+}
+
+/**
  * Send native SUI and return the transaction digest.
  *
- * Uses the same "node builds, we sign" approach as the Tron path so the only
- * client-side crypto is the well-defined Sui intent signature:
- *   1. Gather SUI coin objects covering amount + gas (`suix_getCoins`).
- *   2. The node builds the unsigned transfer (`unsafe_paySui`, which merges and
- *      splits the input coins and uses the first as the gas coin).
+ *   1. Build the transfer client-side (SDK, see buildSuiSend) on the first
+ *      reachable RPC.
+ *   2. Dry-run on the same node and assert the effects match user intent.
  *   3. Intent-sign: digest = BLAKE2b-256([0,0,0] || txBytes); Ed25519 over the
  *      digest; serialized signature = flag(0x00) || sig(64) || pubkey(32).
  *   4. Execute once (`sui_executeTransactionBlock`).
@@ -113,56 +152,43 @@ export async function sendSuiTransfer(
 ): Promise<string> {
   if (amountMist <= 0n) throw new Error("Enter an amount greater than zero");
 
-  // ── Phase 1: find a working RPC and build the unsigned transfer ──────────
-  let rpc = "";
-  let txBytesB64 = "";
-  let buildErr: Error | null = null;
+  // ── Phase 0: friendly affordability pre-check (coins + address balance) ──
+  let known: bigint | null = null;
   for (const candidate of SUI_RPCS) {
     try {
-      const coins = await suiRpc(candidate, "suix_getCoins", [fromAddress, "0x2::sui::SUI", null, 50]);
-      const list: any[] = coins?.data ?? [];
-      if (list.length === 0) throw new Error("No SUI coins available to spend");
-      list.sort((a, b) => (BigInt(b.balance) > BigInt(a.balance) ? 1 : -1));
-
-      const needed = amountMist + SUI_GAS_BUDGET;
-      const selected: string[] = [];
-      let sum = 0n;
-      for (const c of list) {
-        selected.push(c.coinObjectId);
-        sum += BigInt(c.balance);
-        if (sum >= needed) break;
-      }
-      if (sum < needed) throw new Error("Insufficient SUI to cover the amount plus network gas");
-
-      const built = await suiRpc(candidate, "unsafe_paySui", [
-        fromAddress, selected, [toAddress], [amountMist.toString()], SUI_GAS_BUDGET.toString(),
-      ]);
-      if (!built?.txBytes) throw new Error("Could not build the Sui transaction");
-      rpc = candidate;
-      txBytesB64 = built.txBytes;
+      const bal = await suiRpc(candidate, "suix_getBalance", [fromAddress, "0x2::sui::SUI"]);
+      known = BigInt(bal?.totalBalance ?? "0");
       break;
-    } catch (e: any) {
-      buildErr = e instanceof Error ? e : new Error(String(e));
-    }
+    } catch {}
   }
-  if (!txBytesB64) throw buildErr ?? new Error("Could not reach a Sui node");
+  if (known !== null && known < amountMist + SUI_GAS_BUDGET) {
+    throw new Error("Insufficient SUI to cover the amount plus network gas");
+  }
 
-  // ── Phase 1.5: dry-run and bind the node-built bytes to user intent ───────
-  // The node builds `txBytes`; we must not intent-sign it blind (SWAP-3). A
-  // hostile/compromised RPC could redirect the recipient, enlarge the amount,
-  // or select different owned coins — all within the signer's own authority, so
-  // the signature would be valid. Dry-run returns the exact balance changes the
-  // transaction would cause; assert they match what the user asked for before
-  // signing. Sui protocol already prevents spending objects we don't own.
+  // ── Phase 1: build the unsigned transfer client-side ─────────────────────
+  const { rpc, txBytes, txBytesB64 } = await buildSuiSend(
+    fromAddress, toAddress, amountMist, null, SUI_GAS_BUDGET,
+  );
+
+  // ── Phase 1.5: dry-run and bind the built bytes to user intent ───────────
+  // The commands are authored client-side, but input/gas resolution consults
+  // the node (SWAP-3 defense-in-depth): a hostile RPC could still poison the
+  // resolved inputs within the signer's own authority. Dry-run returns the
+  // exact effects; assert they match what the user asked for before signing.
+  // Address-balance movements are reported as accumulatorEvents, NOT
+  // balanceChanges, so the assert must consider both.
   const dry = await suiRpc(rpc, "sui_dryRunTransactionBlock", [txBytesB64]);
   const dryStatus = dry?.effects?.status?.status;
   if (dryStatus !== "success") {
     throw new Error(dry?.effects?.status?.error || "Sui dry-run failed; transaction was not signed.");
   }
-  assertSuiBalanceChanges(dry?.balanceChanges ?? [], fromAddress, toAddress, amountMist);
+  assertSuiBalanceChanges(
+    dry?.balanceChanges ?? [],
+    dry?.accumulatorEvents ?? dry?.effects?.accumulatorEvents ?? [],
+    fromAddress, toAddress, amountMist,
+  );
 
   // ── Phase 2: intent-sign (once) ──────────────────────────────────────────
-  const txBytes = Uint8Array.from(atob(txBytesB64), (c) => c.charCodeAt(0));
   const intentMessage = new Uint8Array(3 + txBytes.length);
   intentMessage.set([0, 0, 0], 0); // intent: TransactionData / V0 / Sui
   intentMessage.set(txBytes, 3);
@@ -201,8 +227,9 @@ const SUI_TOKEN_GAS_BUDGET = 20_000_000n;
 
 /**
  * Send a non-SUI coin (any coinType) and return the transaction digest. Same
- * "node builds, we verify the dry-run, we sign once" flow as the native path,
- * via unsafe_pay with the token coins as inputs and a SEPARATE SUI coin for gas.
+ * "build client-side, verify the dry-run, sign once" flow as the native path;
+ * the SDK resolves token inputs and SUI gas from coin objects and address
+ * balances alike.
  *
  * @param secretKey   tweetnacl 64-byte secret key (seed || pubkey).
  * @param fromAddress Sender (0x...).
@@ -223,54 +250,41 @@ export async function sendSuiTokenTransfer(
     return sendSuiTransfer(secretKey, fromAddress, toAddress, amount);
   }
 
-  // ── Phase 1: build the unsigned transfer on a working RPC ────────────────
-  let rpc = "";
-  let txBytesB64 = "";
-  let buildErr: Error | null = null;
+  // ── Phase 0: friendly affordability pre-checks (coins + address balance) ─
   for (const candidate of SUI_RPCS) {
     try {
-      const coins = await suiRpc(candidate, "suix_getCoins", [fromAddress, coinType, null, 50]);
-      const list: any[] = coins?.data ?? [];
-      if (list.length === 0) throw new Error("No coins of this type available to spend");
-      list.sort((a, b) => (BigInt(b.balance) > BigInt(a.balance) ? 1 : -1));
-      const inputCoins: string[] = [];
-      let sum = 0n;
-      for (const c of list) {
-        inputCoins.push(c.coinObjectId);
-        sum += BigInt(c.balance);
-        if (sum >= amount) break;
+      const tokenBal = await suiRpc(candidate, "suix_getBalance", [fromAddress, coinType]);
+      if (BigInt(tokenBal?.totalBalance ?? "0") < amount) {
+        throw new Error("Insufficient token balance for this transfer");
       }
-      if (sum < amount) throw new Error("Insufficient token balance for this transfer");
-
-      // Gas is paid from a SEPARATE SUI coin (must not be an input coin).
-      const gasCoins = await suiRpc(candidate, "suix_getCoins", [fromAddress, "0x2::sui::SUI", null, 50]);
-      const gasList: any[] = gasCoins?.data ?? [];
-      gasList.sort((a, b) => (BigInt(b.balance) > BigInt(a.balance) ? 1 : -1));
-      const gas = gasList.find((c) => BigInt(c.balance) >= SUI_TOKEN_GAS_BUDGET);
-      if (!gas) throw new Error("You need a little SUI to pay the network gas for this transfer.");
-
-      const built = await suiRpc(candidate, "unsafe_pay", [
-        fromAddress, inputCoins, [toAddress], [amount.toString()], gas.coinObjectId, SUI_TOKEN_GAS_BUDGET.toString(),
-      ]);
-      if (!built?.txBytes) throw new Error("Could not build the Sui token transfer");
-      rpc = candidate;
-      txBytesB64 = built.txBytes;
+      const suiBal = await suiRpc(candidate, "suix_getBalance", [fromAddress, "0x2::sui::SUI"]);
+      if (BigInt(suiBal?.totalBalance ?? "0") < SUI_TOKEN_GAS_BUDGET) {
+        throw new Error("You need a little SUI to pay the network gas for this transfer.");
+      }
       break;
     } catch (e: any) {
-      buildErr = e instanceof Error ? e : new Error(String(e));
+      // Re-throw our own verdicts; a transport failure just tries the next RPC.
+      if (e instanceof Error && /Insufficient token|network gas/.test(e.message)) throw e;
     }
   }
-  if (!txBytesB64) throw buildErr ?? new Error("Could not reach a Sui node");
 
-  // ── Phase 1.5: dry-run and bind the node-built bytes to user intent ──────
+  // ── Phase 1: build the unsigned transfer client-side ─────────────────────
+  const { rpc, txBytes, txBytesB64 } = await buildSuiSend(
+    fromAddress, toAddress, amount, coinType, SUI_TOKEN_GAS_BUDGET,
+  );
+
+  // ── Phase 1.5: dry-run and bind the built bytes to user intent ───────────
   const dry = await suiRpc(rpc, "sui_dryRunTransactionBlock", [txBytesB64]);
   if (dry?.effects?.status?.status !== "success") {
     throw new Error(dry?.effects?.status?.error || "Sui dry-run failed; transaction was not signed.");
   }
-  assertSuiTokenBalanceChanges(dry?.balanceChanges ?? [], fromAddress, toAddress, coinType, amount);
+  assertSuiTokenBalanceChanges(
+    dry?.balanceChanges ?? [],
+    dry?.accumulatorEvents ?? dry?.effects?.accumulatorEvents ?? [],
+    fromAddress, toAddress, coinType, amount,
+  );
 
   // ── Phase 2: intent-sign (once) ──────────────────────────────────────────
-  const txBytes = Uint8Array.from(atob(txBytesB64), (c) => c.charCodeAt(0));
   const intentMessage = new Uint8Array(3 + txBytes.length);
   intentMessage.set([0, 0, 0], 0);
   intentMessage.set(txBytes, 3);
@@ -305,14 +319,32 @@ function normCoinType(ct: string): string {
   return a.toLowerCase() + "::" + rest.join("::");
 }
 
+// Accumulator events report ADDRESS-BALANCE movements, which never appear in
+// balanceChanges. Shape (dry-run and effects alike):
+//   { address, ty: "0x2::balance::Balance<coinType>", operation: "split"|"merge",
+//     value: { integer } }
+// split = funds leave the address's balance, merge = funds arrive.
+function parseAccumulatorEvent(ev: any): { address: string; coinType: string; op: string; amount: bigint } | null {
+  const address: string | undefined = ev?.address;
+  const ty: string = String(ev?.ty ?? "");
+  const m = ty.match(/Balance<(.+)>/);
+  if (!address || !m) return null;
+  let amount = 0n;
+  try { amount = BigInt(ev?.value?.integer ?? ev?.value ?? 0); } catch {}
+  return { address, coinType: m[1], op: String(ev?.operation ?? ""), amount };
+}
+
 /**
- * Assert the dry-run balance changes match a transfer of exactly `amount` of
- * `coinType` to `toAddress` and nothing else. Gas is spent from the sender's
- * own SUI (owner === from), which is allowed; any gain by a third party, a
- * wrong asset reaching the recipient, or a wrong amount is rejected.
+ * Assert the dry-run effects match a transfer of exactly `amount` of
+ * `coinType` to `toAddress` and nothing else. Considers both classic
+ * balanceChanges (coin objects) and accumulatorEvents (address balances).
+ * Gas is spent from the sender's own SUI, which is allowed; any gain by a
+ * third party, a wrong asset reaching the recipient, or a wrong amount is
+ * rejected. A self-send (to === from) cannot express a "recipient gain", so
+ * it instead requires that no third party gains anything.
  */
 function assertSuiTokenBalanceChanges(
-  changes: any[], fromAddress: string, toAddress: string, coinType: string, amount: bigint,
+  changes: any[], accEvents: any[], fromAddress: string, toAddress: string, coinType: string, amount: bigint,
 ): void {
   const norm = (a: string) => a.toLowerCase();
   const to = norm(toAddress);
@@ -335,22 +367,49 @@ function assertSuiTokenBalanceChanges(
     }
   }
 
-  if (recipientGain !== amount) {
+  for (const raw of accEvents) {
+    const ev = parseAccumulatorEvent(raw);
+    if (!ev) continue;
+    const o = norm(ev.address);
+    const evCoin = normCoinType(ev.coinType);
+    if (ev.op === "merge") {
+      if (o === to && o !== from) {
+        if (evCoin !== wantCoin) {
+          throw new Error("Blocked for safety: Sui transaction sends an unexpected asset to the recipient.");
+        }
+        recipientGain += ev.amount;
+      } else if (o !== from) {
+        throw new Error("Blocked for safety: Sui transaction sends funds to an unexpected address.");
+      }
+    } else if (ev.op === "split" && o !== from) {
+      // Only the sender's own balance may be drawn from.
+      throw new Error("Blocked for safety: Sui transaction spends from an unexpected address.");
+    } else if (o === from && evCoin !== wantCoin && evCoin !== normCoinType("0x2::sui::SUI")) {
+      throw new Error("Blocked for safety: Sui transaction moves an unexpected asset.");
+    }
+  }
+
+  if (to !== from && recipientGain !== amount) {
     throw new Error(
-      `Blocked for safety: the node-built transfer would move ${recipientGain} to the recipient, not the ${amount} you entered.`,
+      `Blocked for safety: the built transfer would move ${recipientGain} to the recipient, not the ${amount} you entered.`,
     );
   }
 }
 
 /**
- * Assert the dry-run balance changes match a native SUI transfer of exactly
- * `amountMist` to `toAddress` and nothing else. Throws on any mismatch:
- *  - a non-SUI asset moving (native paySui only touches SUI),
- *  - any unexpected third party gaining funds,
+ * Assert the dry-run effects match a native SUI transfer of exactly
+ * `amountMist` to `toAddress` and nothing else. Considers both classic
+ * balanceChanges (coin objects) and accumulatorEvents (address balances).
+ * Throws on any mismatch:
+ *  - a non-SUI asset moving (a native transfer only touches SUI),
+ *  - any unexpected third party gaining or being drawn from,
  *  - the recipient's gain differing from the intended amount.
+ * A self-send (to === from) cannot express a "recipient gain", so it instead
+ * requires that no third party gains anything.
  */
 function assertSuiBalanceChanges(
   changes: any[],
+  accEvents: any[],
   fromAddress: string,
   toAddress: string,
   amountMist: bigint,
@@ -358,12 +417,13 @@ function assertSuiBalanceChanges(
   const norm = (a: string) => a.toLowerCase();
   const to = norm(toAddress);
   const from = norm(fromAddress);
+  const nativeCoin = normCoinType("0x2::sui::SUI");
   let recipientGain = 0n;
 
   for (const ch of changes) {
     const owner: string | undefined = ch?.owner?.AddressOwner;
     if (!owner) continue; // shared/object owner, not an address balance
-    if (ch.coinType !== "0x2::sui::SUI") {
+    if (normCoinType(ch.coinType) !== nativeCoin) {
       throw new Error("Blocked for safety: Sui transaction moves a non-SUI asset.");
     }
     const amount = BigInt(ch.amount);
@@ -375,9 +435,26 @@ function assertSuiBalanceChanges(
     }
   }
 
-  if (recipientGain !== amountMist) {
+  for (const raw of accEvents) {
+    const ev = parseAccumulatorEvent(raw);
+    if (!ev) continue;
+    if (normCoinType(ev.coinType) !== nativeCoin) {
+      throw new Error("Blocked for safety: Sui transaction moves a non-SUI asset.");
+    }
+    const o = norm(ev.address);
+    if (ev.op === "merge") {
+      if (o === to && o !== from) recipientGain += ev.amount;
+      else if (o !== from) {
+        throw new Error("Blocked for safety: Sui transaction sends funds to an unexpected address.");
+      }
+    } else if (ev.op === "split" && o !== from) {
+      throw new Error("Blocked for safety: Sui transaction spends from an unexpected address.");
+    }
+  }
+
+  if (to !== from && recipientGain !== amountMist) {
     throw new Error(
-      `Blocked for safety: the node-built Sui transfer would move ${recipientGain} MIST to the recipient, not the ${amountMist} MIST you entered.`,
+      `Blocked for safety: the built Sui transfer would move ${recipientGain} MIST to the recipient, not the ${amountMist} MIST you entered.`,
     );
   }
 }
