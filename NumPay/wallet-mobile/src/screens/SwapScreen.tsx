@@ -7,15 +7,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { NETWORKS } from "@numpay/core/networks";
-import { DEFAULT_TOKENS } from "@numpay/core/tokens";
 import { getUsdPrice } from "@numpay/core/currency";
 import {
   evmSwapReserve, parseSwapError, sanitizeSlippagePct,
   type RouteOption, type SwapToken,
 } from "@numpay/core/swap";
-import { classifyToken } from "@numpay/core/tokenSpam";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import { fetchEvmQuotes, swapEvm } from "../wallet/swap";
+import { buildChainTokenList } from "../wallet/tokenList";
 import { explorerTxUrl } from "../wallet/send";
 import type { MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, radius, type as ts } from "../ui/theme";
@@ -42,38 +41,11 @@ export function SwapScreen({ w, onBack, onSessionExpired }: {
   const [chainId, setChainId] = useState(chains[0] ?? "ethereum");
   const net = NETWORKS[chainId];
 
-  // Build the picker list for the chain: native, held tokens, curated defaults.
-  const tokenList = useMemo((): SwapToken[] => {
-    if (!net) return [];
-    const items: SwapToken[] = [];
-    const seen = new Set<string>();
-    const nativeBal = w.rows.find((r) => r.isNative && r.chainId === chainId)?.balanceNum ?? 0;
-    items.push({
-      symbol: net.symbol, name: net.name, logo: net.logo, decimals: net.decimals,
-      balance: nativeBal > 0 ? String(nativeBal) : "0", chainId, chainName: net.name,
-    });
-    seen.add("");
-    for (const t of (w.tokensByChain[chainId] ?? [])) {
-      const key = t.address.toLowerCase();
-      if (seen.has(key) || classifyToken(t).hidden) continue;
-      seen.add(key);
-      items.push({
-        symbol: t.symbol, name: t.name, logo: t.logo, address: t.address,
-        decimals: t.decimals, balance: t.balance, chainId, chainName: net.name,
-        priceUsd: t.priceUsd, possibleSpam: t.possibleSpam,
-      });
-    }
-    for (const t of ((DEFAULT_TOKENS as any)[String(net.chainId)] ?? []) as any[]) {
-      const key = t.address.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      items.push({
-        symbol: t.symbol, name: t.name, logo: t.logo, address: t.address,
-        decimals: t.decimals, balance: "0", chainId, chainName: net.name,
-      });
-    }
-    return items;
-  }, [chainId, net, w.rows, w.tokensByChain]);
+  // Native + held + curated-default tokens for the chain (shared with Bridge).
+  const tokenList = useMemo(
+    () => buildChainTokenList(chainId, w.rows, w.tokensByChain),
+    [chainId, w.rows, w.tokensByChain],
+  );
 
   const [fromToken, setFromToken] = useState<SwapToken | null>(null);
   const [toToken, setToToken] = useState<SwapToken | null>(null);
