@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import bs58 from "bs58";
+import nacl from "tweetnacl";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
@@ -65,6 +66,7 @@ const chain = await bundle("src/lib/dapp/chainOps.ts", "chainOps");
 const sol = await bundle("src/lib/dapp/solDecode.ts", "solDecode");
 const solChain = await bundle("../packages/core/src/chains/solana.ts", "solanaChain");
 const engine = await bundle("../packages/core/src/dapp/signEngine.ts", "signEngine");
+const solEngine = await bundle("../packages/core/src/dapp/solEngine.ts", "solEngine");
 
 // ── signDecode.decodePersonalSignMessage: never throw, correct utf8 detection ──
 {
@@ -354,6 +356,117 @@ const engine = await bundle("../packages/core/src/dapp/signEngine.ts", "signEngi
   ok(hash === "0xTXHASH", "sign send_tx returns tx hash");
   const sentTx = calls[2][1];
   ok(sentTx.to && sentTx.value === "0x1" && sentTx.gasLimit === "0x5208" && sentTx.from === undefined, "sign send_tx normalizes gas->gasLimit and drops from");
+}
+
+// ── solEngine: WalletConnect solana requests (preview + sign) ──
+// Shared fixtures: a real ed25519 keypair as the connected account, and a
+// hand-built serialized legacy transaction (compact-u16 sig count + zeroed
+// signature slots + message) so the fee-payer bind is exercised on the same
+// byte layout signSolanaTransaction parses.
+{
+  const kp = nacl.sign.keyPair();
+  const other = nacl.sign.keyPair();
+  const ACC = bs58.encode(kp.publicKey);
+
+  // All compact-u16 values in the builder are < 128, so they encode as 1 byte.
+  function buildSolTx(feePayerBytes, numSigs = 1) {
+    const keys = [feePayerBytes, new Uint8Array(32)]; // payer + system program
+    const message = Uint8Array.from([
+      numSigs, 0, 1,                    // header
+      keys.length,                      // key count
+      ...keys.flatMap((k) => [...k]),
+      ...new Array(32).fill(7),         // recent blockhash
+      1,                                // instruction count
+      1,                                // programIdIndex -> system program
+      1, 0,                             // 1 account index: fee payer
+      2, 9, 9,                          // 2 data bytes
+    ]);
+    const tx = new Uint8Array(1 + numSigs * 64 + message.length);
+    tx[0] = numSigs;                    // sig-count varint, slots left zeroed
+    tx.set(message, 1 + numSigs * 64);
+    return tx;
+  }
+  const txB64 = Buffer.from(buildSolTx(kp.publicKey)).toString("base64");
+
+  // chain-id helpers
+  const { isSolanaMainnetCaip2, SOL_MAINNET_CAIP2, SOL_MAINNET_CAIP2_LEGACY } = solEngine;
+  ok(isSolanaMainnetCaip2(SOL_MAINNET_CAIP2) === true, "sol caip2 canonical mainnet accepted");
+  ok(isSolanaMainnetCaip2(SOL_MAINNET_CAIP2_LEGACY) === true, "sol caip2 legacy mainnet accepted");
+  ok(isSolanaMainnetCaip2("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1") === false, "sol caip2 devnet rejected");
+  ok(isSolanaMainnetCaip2("eip155:1") === false, "sol caip2 evm id rejected");
+  ok(isSolanaMainnetCaip2(null) === false, "sol caip2 non-string rejected");
+
+  // preview: solana_signMessage
+  const preview = solEngine.previewSolanaDappRequest;
+  const helloB58 = bs58.encode(Buffer.from("hello"));
+  const pm = preview({ method: "solana_signMessage", params: { message: helloB58, pubkey: ACC }, account: ACC });
+  ok(pm.ok === true && pm.detail.kind === "sol_message", "sol preview signMessage ok");
+  ok(pm.ok && pm.detail.message.isUtf8 === true && pm.detail.message.text === "hello", "sol preview decodes utf8 hello");
+  ok(preview({ method: "solana_signMessage", params: { message: helloB58 }, account: ACC }).ok === true, "sol preview pubkey omitted -> bound to account");
+  ok(preview({ method: "solana_signMessage", params: { message: helloB58, pubkey: bs58.encode(other.publicKey) }, account: ACC }).code === 4100, "sol preview pubkey mismatch -> 4100");
+  ok(preview({ method: "solana_signMessage", params: {}, account: ACC }).ok === false, "sol preview missing message -> reject");
+  ok(preview({ method: "solana_signMessage", params: { message: "not base58 0OIl!" }, account: ACC }).ok === false, "sol preview non-base58 message -> reject");
+  ok(preview({ method: "solana_signMessage", params: { message: "1".repeat(128 * 1024 + 1) }, account: ACC }).ok === false, "sol preview oversized message -> reject");
+  ok(preview({ method: "solana_signMessage", params: [helloB58, ACC], account: ACC }).ok === false, "sol preview array params (spec violation) -> reject");
+
+  // preview: unsupported methods (incl. EVM methods on a solana chain)
+  ok(preview({ method: "solana_signAllTransactions", params: {}, account: ACC }).code === 4200, "sol preview signAllTransactions -> 4200 (not advertised)");
+  ok(preview({ method: "personal_sign", params: {}, account: ACC }).code === 4200, "sol preview evm method -> 4200");
+
+  // preview: solana_signTransaction / signAndSend
+  const pt = preview({ method: "solana_signTransaction", params: { transaction: txB64 }, account: ACC });
+  ok(pt.ok === true && pt.detail.kind === "sol_tx" && pt.detail.send === false, "sol preview signTransaction ok, send=false");
+  ok(pt.ok && pt.detail.feePayerMismatch === false, "sol preview fee payer matches account");
+  ok(pt.ok && pt.detail.inspection.instructionCount === 1, "sol preview inspects 1 instruction");
+  ok(pt.ok && pt.detail.inspection.programs.some((p) => p.id === bs58.encode(new Uint8Array(32))), "sol preview lists the program id");
+  const ps2 = preview({ method: "solana_signAndSendTransaction", params: { transaction: txB64 }, account: ACC });
+  ok(ps2.ok === true && ps2.detail.kind === "sol_tx" && ps2.detail.send === true, "sol preview signAndSend -> send=true");
+  const mism = preview({ method: "solana_signTransaction", params: { transaction: txB64 }, account: bs58.encode(other.publicKey) });
+  ok(mism.ok === true && mism.detail.feePayerMismatch === true, "sol preview foreign fee payer -> mismatch flagged");
+  ok(preview({ method: "solana_signTransaction", params: {}, account: ACC }).ok === false, "sol preview missing transaction -> reject");
+  ok(preview({ method: "solana_signTransaction", params: { transaction: "!!!not-base64!!!" }, account: ACC }).ok === false, "sol preview bad base64 -> reject");
+  ok(preview({ method: "solana_signTransaction", params: { transaction: "A".repeat(128 * 1024 + 4) }, account: ACC }).ok === false, "sol preview oversized transaction -> reject");
+
+  // preview fuzz: junk must never throw and always yield a typed result.
+  {
+    let bad = 0;
+    const junk = [null, undefined, 42, "x", {}, [], [null], { message: 7 }, { transaction: {} }, { message: "@@", pubkey: 3 }];
+    for (let i = 0; i < 2000; i++) {
+      const m = junk[(Math.random() * junk.length) | 0];
+      const p = junk[(Math.random() * junk.length) | 0];
+      try {
+        const r = preview({ method: m, params: p, account: ACC });
+        if (typeof r.ok !== "boolean") bad++;
+      } catch {
+        bad++;
+      }
+    }
+    ok(bad === 0, "fuzz: 2000 junk sol previews, no throw + always typed (saw " + bad + ")");
+  }
+
+  // sign: solana_signMessage produces a verifiable detached ed25519 signature
+  const sign = solEngine.signSolanaDappRequest;
+  const rm = await sign({ method: "solana_signMessage", params: { message: helloB58, pubkey: ACC }, account: ACC }, kp.secretKey);
+  const msgSig = bs58.decode(rm.signature);
+  ok(msgSig.length === 64, "sol sign message signature is 64 bytes");
+  ok(nacl.sign.detached.verify(Buffer.from("hello"), msgSig, kp.publicKey), "sol sign message signature verifies");
+  ok(rm.transaction === undefined, "sol sign message result has no transaction field");
+
+  // sign: solana_signTransaction signs slot 0 and returns both fields
+  const rt = await sign({ method: "solana_signTransaction", params: { transaction: txB64 }, account: ACC }, kp.secretKey);
+  const signed = Buffer.from(rt.transaction, "base64");
+  const slotSig = signed.subarray(1, 65);
+  const msgBytes = signed.subarray(1 + 64);
+  ok(Buffer.from(bs58.decode(rt.signature)).equals(slotSig), "sol sign tx: result signature == slot 0 signature");
+  ok(nacl.sign.detached.verify(msgBytes, slotSig, kp.publicKey), "sol sign tx: slot 0 signature verifies over the message");
+
+  // sign: hard gates fire BEFORE any signing / network
+  await throws("sol sign tx foreign fee payer throws", () =>
+    sign({ method: "solana_signTransaction", params: { transaction: Buffer.from(buildSolTx(other.publicKey)).toString("base64") }, account: ACC }, kp.secretKey));
+  await throws("sol signAndSend multi-signer throws before broadcast", () =>
+    sign({ method: "solana_signAndSendTransaction", params: { transaction: Buffer.from(buildSolTx(kp.publicKey, 2)).toString("base64") }, account: ACC }, kp.secretKey));
+  await throws("sol sign missing message throws", () =>
+    sign({ method: "solana_signMessage", params: {}, account: ACC }, kp.secretKey));
 }
 
 rmSync(out, { recursive: true, force: true });

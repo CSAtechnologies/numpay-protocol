@@ -26,12 +26,9 @@ import { importFromMnemonic, getSigner } from "@numpay/core/wallet";
 import { deriveSolanaAddress } from "@numpay/core/chains/solana";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import { getWalletKit } from "./client";
+import type { WcAccounts } from "./sessionsCore";
 
-/** The session's connected accounts, one per supported namespace. */
-export interface WcAccounts {
-  evm: string;
-  solana?: string;
-}
+export type { WcAccounts } from "./sessionsCore";
 
 /** CAIP-2 `eip155:1` -> 1. Returns null for non-eip155 or malformed ids. */
 export function parseEip155ChainId(caip2: unknown): number | null {
