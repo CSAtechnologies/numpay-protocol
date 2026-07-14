@@ -712,7 +712,7 @@ export async function signSolanaTransaction(
   userPublicKey: string,
   txBytes: Uint8Array,
   send: boolean,
-): Promise<{ signedB64: string; signature?: string }> {
+): Promise<{ signedB64: string; signature?: string; userSignature: string }> {
   const { value: numSigs, length: lenBytes } = decodeCompactU16(txBytes, 0);
   const sigStart = lenBytes;
   const message = txBytes.slice(sigStart + numSigs * 64);
@@ -733,8 +733,11 @@ export async function signSolanaTransaction(
   const signed = txBytes.slice(); // copy; never mutate the caller's bytes
   signed.set(sig, sigStart);      // user = fee payer = first signature slot
   const signedB64 = bytesToB64(signed);
+  // The fee payer's signature doubles as the transaction id, and WalletConnect's
+  // solana_signTransaction result wants it base58 even without a broadcast.
+  const userSignature = bs58.encode(sig);
 
-  if (!send) return { signedB64 };
+  if (!send) return { signedB64, userSignature };
 
   // Pre-broadcast simulation guard (same as swaps): never send a transaction we
   // have not checked against current state.
@@ -742,7 +745,7 @@ export async function signSolanaTransaction(
   if (!sim.ok) throw new Error(sim.err ?? "Transaction simulation failed");
 
   const signature = await broadcastSolanaTx(signedB64);
-  return { signedB64, signature };
+  return { signedB64, signature, userSignature };
 }
 
 /**

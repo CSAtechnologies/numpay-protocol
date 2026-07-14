@@ -27,10 +27,12 @@ import { SwapScreen } from "./src/screens/SwapScreen";
 import { BridgeScreen } from "./src/screens/BridgeScreen";
 import { ActivityScreen } from "./src/screens/ActivityScreen";
 import { BPANScreen } from "./src/screens/BPANScreen";
+import { WalletConnectScreen } from "./src/screens/WalletConnectScreen";
+import { WcApprovalHost } from "./src/walletconnect/WcApprovalHost";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
-  | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity" | "bpan";
+  | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity" | "bpan" | "dapps";
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("loading");
@@ -47,7 +49,7 @@ export default function App() {
   const [relocked, setRelocked] = useState(false);
 
   const unlocked =
-    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity" || mode === "bpan";
+    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity" || mode === "bpan" || mode === "dapps";
   const w = useMobileWallet(unlocked);
   const unlockedRef = useRef(unlocked);
   unlockedRef.current = unlocked;
@@ -191,6 +193,7 @@ export default function App() {
           }}
           onLock={async () => { await lock(); setError(""); await refresh(); }}
           onBPAN={() => setMode("bpan")}
+          onDapps={() => setMode("dapps")}
           onSpike={() => setMode("spike")}
           onDevnet={() => setMode("devnet")}
           onWipe={async () => { await wipeVault(); setError(""); await refresh(); }}
@@ -230,8 +233,21 @@ export default function App() {
           onSessionExpired={() => { void showRelock(); }}
         />
       )}
+      {mode === "dapps" && (
+        <WalletConnectScreen onBack={() => setMode("home")} />
+      )}
       {mode === "spike" && <Spike onBack={() => setMode("home")} />}
       {mode === "devnet" && <DevnetTx onBack={() => setMode("home")} />}
+
+      {/* WalletConnect approval sheets (session proposals + signing requests)
+          render over whatever screen is open; the re-lock overlay below still
+          wins (higher zIndex), so an expired vault always re-auths first. */}
+      {unlocked && (
+        <WcApprovalHost
+          accounts={{ evm: w.evmAddress, solana: w.nonEvmAddresses?.solana }}
+          onSessionExpired={() => { void showRelock(); }}
+        />
+      )}
 
       {/* Session-expiry re-auth overlay (see the `relocked` comment above). */}
       {relocked && status && (
@@ -393,6 +409,7 @@ function Dashboard(p: {
   onActivity: () => void;
   onReceive: () => void;
   onBPAN: () => void;
+  onDapps: () => void;
   onLock: () => void;
   onSpike: () => void;
   onDevnet: () => void;
@@ -409,6 +426,9 @@ function Dashboard(p: {
         <View style={st.logoMark}><Text style={st.logoMarkText}>N</Text></View>
         <Text style={st.wordmark}>NumPay</Text>
         <View style={{ flex: 1 }} />
+        <Pressable onPress={p.onDapps} style={st.iconBtn} hitSlop={8}>
+          <Text style={{ color: colors.muted, fontSize: 13 }}>{"🔗"}</Text>
+        </Pressable>
         <Pressable onPress={p.onLock} style={st.iconBtn} hitSlop={8}>
           <Text style={{ color: colors.muted, fontSize: 13 }}>{"🔒"}</Text>
         </Pressable>

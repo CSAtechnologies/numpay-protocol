@@ -22,3 +22,11 @@ export {
   MAX_PAYLOAD_BYTES, SUPPORTED_EVM_METHODS, DAPP_ERR,
   isSupportedEvmMethod, previewDappRequest, signDappRequest,
 } from "./signEngine";
+export {
+  type SolWcMethod, type SolDappRequestInput, type SolDappRequestPreview,
+  type SolPreviewDetail,
+  SOL_MAINNET_CAIP2, SOL_MAINNET_CAIP2_LEGACY, SOL_MAINNET_CHAIN_IDS,
+  SUPPORTED_SOL_METHODS,
+  isSolanaMainnetCaip2, isSupportedSolMethod,
+  previewSolanaDappRequest, signSolanaDappRequest,
+} from "./solEngine";
