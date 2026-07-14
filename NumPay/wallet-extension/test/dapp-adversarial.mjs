@@ -64,6 +64,7 @@ const tx = await bundle("src/lib/dapp/txDecode.ts", "txDecode");
 const chain = await bundle("src/lib/dapp/chainOps.ts", "chainOps");
 const sol = await bundle("src/lib/dapp/solDecode.ts", "solDecode");
 const solChain = await bundle("../packages/core/src/chains/solana.ts", "solanaChain");
+const engine = await bundle("../packages/core/src/dapp/signEngine.ts", "signEngine");
 
 // ── signDecode.decodePersonalSignMessage: never throw, correct utf8 detection ──
 {
@@ -257,6 +258,102 @@ const solChain = await bundle("../packages/core/src/chains/solana.ts", "solanaCh
     }
   }
   ok(threwTx === 0, "fuzz: 2000 random tx byte arrays, no throws (saw " + threwTx + ")");
+}
+
+// ── signEngine.previewDappRequest: validation + binding, NEVER throw ──
+{
+  const preview = engine.previewDappRequest;
+  const ACC = "0x1111111111111111111111111111111111111111";
+  const OTHER = "0x2222222222222222222222222222222222222222";
+  const native = { symbol: "ETH", decimals: 18 };
+  const base = { chainId: 1, account: ACC, native };
+
+  // personal_sign, both param orders, address bound to the connected account.
+  const ps = preview({ method: "personal_sign", params: ["0x68656c6c6f", ACC], ...base });
+  ok(ps.ok === true && ps.detail.kind === "personal_sign", "preview personal_sign ok");
+  ok(ps.ok && ps.detail.message.isUtf8 === true, "preview personal_sign decodes utf8");
+  const psRev = preview({ method: "personal_sign", params: [ACC, "0x68656c6c6f"], ...base });
+  ok(psRev.ok === true, "preview personal_sign reversed param order ok");
+
+  // Address mismatch is rejected, not silently signed by the wrong key.
+  const mism = preview({ method: "personal_sign", params: ["0x68656c6c6f", OTHER], ...base });
+  ok(mism.ok === false && mism.code === 4100, "preview address mismatch -> 4100");
+
+  // eth_sign (blind sign) and any unknown method are unsupported.
+  ok(preview({ method: "eth_sign", params: [ACC, "0xdead"], ...base }).code === 4200, "preview eth_sign -> 4200 unsupported");
+  ok(preview({ method: "wallet_scam", params: [], ...base }).code === 4200, "preview unknown method -> 4200");
+
+  // typed data: valid parses + risk surfaces; Permit2 warns.
+  const permit2 = JSON.stringify({
+    types: { EIP712Domain: [], PermitSingle: [{ name: "a", type: "uint256" }] },
+    primaryType: "PermitSingle",
+    domain: { name: "Permit2", chainId: 1, verifyingContract: "0x000000000022d473030f116ddee9f6b43ac78ba3" },
+    message: { a: "1" },
+  });
+  const td = preview({ method: "eth_signTypedData_v4", params: [ACC, permit2], ...base });
+  ok(td.ok === true && td.detail.kind === "typed_data", "preview typed data ok");
+  ok(td.ok && td.risk.some((f) => f.level === "warn"), "preview Permit2 typed data -> warn");
+  ok(preview({ method: "eth_signTypedData_v4", params: [ACC, "not json"], ...base }).ok === false, "preview typed data bad json -> reject");
+
+  // eth_sendTransaction: value formatted with native currency, from bound.
+  const stx = preview({ method: "eth_sendTransaction", params: [{ to: OTHER, value: "0xde0b6b3a7640000" }], ...base });
+  ok(stx.ok === true && stx.detail.kind === "send_tx", "preview send_tx ok");
+  ok(stx.ok && stx.detail.valueLabel === "1 ETH", "preview send_tx value label 1 ETH");
+  ok(stx.ok && stx.detail.tx.from.toLowerCase() === ACC, "preview send_tx binds from to account");
+  const approveData = "0x095ea7b3" + "0".repeat(24) + OTHER.slice(2) + "f".repeat(64);
+  const stxApprove = preview({ method: "eth_sendTransaction", params: [{ to: OTHER, data: approveData }], ...base });
+  ok(stxApprove.ok && stxApprove.risk.some((f) => f.level === "warn"), "preview unlimited approve -> warn");
+  ok(preview({ method: "eth_sendTransaction", params: [{}], ...base }).ok === false, "preview empty tx (no to/data) -> reject");
+
+  // Fuzz: junk method/params must never throw and always yield a typed result.
+  let bad = 0;
+  const junk = [null, undefined, 42, "x", {}, [], [null], [{}], [1, 2, 3]];
+  for (let i = 0; i < 3000; i++) {
+    const m = junk[(Math.random() * junk.length) | 0];
+    const p = junk[(Math.random() * junk.length) | 0];
+    try {
+      const r = preview({ method: m, params: p, chainId: (Math.random() * 1e9) | 0, account: ACC, native });
+      if (typeof r.ok !== "boolean") bad++;
+    } catch {
+      bad++;
+    }
+  }
+  ok(bad === 0, "fuzz: 3000 junk previews, no throw + always typed (saw " + bad + ")");
+}
+
+// ── signEngine.signDappRequest: routes to the signer with normalized args ──
+{
+  const sign = engine.signDappRequest;
+  const ACC = "0x1111111111111111111111111111111111111111";
+  const calls = [];
+  const mockSigner = {
+    signMessage: async (bytes) => { calls.push(["signMessage", bytes]); return "0xSIG_MSG"; },
+    signTypedData: async (domain, types, message) => { calls.push(["signTypedData", domain, types, message]); return "0xSIG_TYPED"; },
+    sendTransaction: async (txReq) => { calls.push(["sendTransaction", txReq]); return { hash: "0xTXHASH" }; },
+  };
+
+  // personal_sign -> signMessage(raw bytes of the message)
+  const sig1 = await sign({ method: "personal_sign", params: ["0x68656c6c6f", ACC] }, mockSigner);
+  ok(sig1 === "0xSIG_MSG", "sign personal_sign returns signature");
+  const passedBytes = calls[0][1];
+  ok(passedBytes instanceof Uint8Array && passedBytes.length === 5, "sign personal_sign passes raw 5 message bytes");
+
+  // eth_signTypedData_v4 -> signTypedData with EIP712Domain stripped
+  const typed = JSON.stringify({
+    types: { EIP712Domain: [{ name: "name", type: "string" }], Mail: [{ name: "x", type: "string" }] },
+    primaryType: "Mail", domain: { name: "M", chainId: 1 }, message: { x: "hi" },
+  });
+  const sig2 = await sign({ method: "eth_signTypedData_v4", params: [ACC, typed] }, mockSigner);
+  ok(sig2 === "0xSIG_TYPED", "sign typed data returns signature");
+  const [, dom, types, msg] = calls[1];
+  ok(!("EIP712Domain" in types) && "Mail" in types, "sign typed data strips EIP712Domain");
+  ok(dom.name === "M" && msg.x === "hi", "sign typed data forwards domain + message");
+
+  // eth_sendTransaction -> sendTransaction(normalized), returns tx hash
+  const hash = await sign({ method: "eth_sendTransaction", params: [{ from: ACC, to: "0x2222222222222222222222222222222222222222", value: "0x1", gas: "0x5208" }] }, mockSigner);
+  ok(hash === "0xTXHASH", "sign send_tx returns tx hash");
+  const sentTx = calls[2][1];
+  ok(sentTx.to && sentTx.value === "0x1" && sentTx.gasLimit === "0x5208" && sentTx.from === undefined, "sign send_tx normalizes gas->gasLimit and drops from");
 }
 
 rmSync(out, { recursive: true, force: true });

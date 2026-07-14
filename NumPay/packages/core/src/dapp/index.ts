@@ -16,3 +16,9 @@ export {
   type DecodedSolMessage,
   bytesToBase64, base64ToBytes, decodeSolSignMessage,
 } from "./solDecode";
+export {
+  type EvmSignMethod, type DappRequestInput, type DappRequestPreview,
+  type PreviewDetail,
+  MAX_PAYLOAD_BYTES, SUPPORTED_EVM_METHODS, DAPP_ERR,
+  isSupportedEvmMethod, previewDappRequest, signDappRequest,
+} from "./signEngine";
