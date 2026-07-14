@@ -4,6 +4,10 @@
 // Buffer before their modules load.
 
 import "react-native-get-random-values";
+// TextEncoder/TextDecoder for WalletConnect (Reown WalletKit) crypto. Hermes'
+// built-ins are incomplete for its use; fast-text-encoding is the SDK's own
+// recommended polyfill.
+import "fast-text-encoding";
 import { Buffer } from "buffer";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -41,6 +45,11 @@ if (typeof g.Intl.PluralRules === "undefined") {
 // keys are empty, and price/token reads route through the wallet API proxy.
 g.__NUMPAY_ENV__ = {
   API_BASE: "https://numpay-wallet-api.numpay.workers.dev",
+  // WalletConnect (Reown) projectId: a PUBLIC client id, not a provider secret.
+  // Get one free at cloud.reown.com and paste it here. Empty = WalletConnect
+  // transport stays disabled and fails loud with a clear message (see
+  // src/walletconnect/client.ts).
+  WALLETCONNECT_PROJECT_ID: "",
 };
 
 export {};
