@@ -28,11 +28,33 @@ export function extractWcUri(url: string | null | undefined): string | null {
 // (already consumed) pairing URI and surface a spurious error.
 let initialConsumed = false;
 
+// The subscriber (the approval host) only exists while the wallet is UNLOCKED,
+// but wc: links land whenever the OS routes them — including at the lock
+// screen (observed live: scan/tap while locked -> unlock -> nothing happened).
+// So the OS listener is permanent, registered at module load, and stashes the
+// latest URI until a subscriber shows up to consume it.
+let activeSubscriber: ((uri: string) => void) | null = null;
+let stashedUri: string | null = null;
+
+Linking.addEventListener("url", (e) => {
+  const wc = extractWcUri(e.url);
+  if (!wc) return;
+  if (activeSubscriber) activeSubscriber(wc);
+  else stashedUri = wc;
+});
+
 /**
- * Watch for `wc:` links, both the one the app was launched with and any that
- * arrive while it is open. Returns an unsubscribe.
+ * Watch for `wc:` links: the one the app was launched with, any that arrived
+ * while the wallet was locked (stashed above), and live ones while unlocked.
+ * Returns an unsubscribe.
  */
 export function subscribeWcDeepLinks(onWcUri: (uri: string) => void): () => void {
+  activeSubscriber = onWcUri;
+  if (stashedUri) {
+    const uri = stashedUri;
+    stashedUri = null;
+    onWcUri(uri);
+  }
   if (!initialConsumed) {
     initialConsumed = true;
     Linking.getInitialURL()
@@ -42,9 +64,7 @@ export function subscribeWcDeepLinks(onWcUri: (uri: string) => void): () => void
       })
       .catch(() => {});
   }
-  const sub = Linking.addEventListener("url", (e) => {
-    const wc = extractWcUri(e.url);
-    if (wc) onWcUri(wc);
-  });
-  return () => sub.remove();
+  return () => {
+    if (activeSubscriber === onWcUri) activeSubscriber = null;
+  };
 }

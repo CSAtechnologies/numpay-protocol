@@ -68,9 +68,47 @@ export function WcApprovalHost({
       onSessionDelete: () => emitSessionsChanged(),
     });
     // Resume existing sessions after an app restart so already-connected dApps
-    // can reach the wallet again. Best-effort: without a projectId (or offline)
-    // the transport stays down until the user opens the Connected dApps screen.
-    if (hasProjectId()) initWalletKit().catch(() => {});
+    // can reach the wallet again, and DRAIN anything that arrived while the
+    // wallet was locked: the host unmounts on lock, so proposals/requests that
+    // landed in that window fired into no handler and only exist in WalletKit's
+    // pending stores. Without this drain they are silently lost until expiry
+    // (observed live: pair while locked -> unlock -> no sheet). Best-effort:
+    // without a projectId (or offline) the transport stays down until the user
+    // opens the Connected dApps screen.
+    if (hasProjectId()) {
+      initWalletKit()
+        .then((kit) => {
+          // The store holds raw proposal structs; the sheets expect the event
+          // shape. Verify-context only travels with the live event, so a
+          // drained proposal gets the conservative "unverified" fallback.
+          for (const p of Object.values(kit.getPendingSessionProposals() ?? {})) {
+            const s = p as { id: number; proposer?: { metadata?: { url?: string } } };
+            const proposal = {
+              id: s.id,
+              params: s,
+              verifyContext: {
+                verified: {
+                  origin: s.proposer?.metadata?.url ?? "",
+                  validation: "UNKNOWN",
+                  verifyUrl: "",
+                },
+              },
+            } as unknown as WalletKitTypes.SessionProposal;
+            setProposals((q) =>
+              q.some((x) => x.id === proposal.id) ? q : [...q, proposal],
+            );
+          }
+          // Pending requests are stored event-shaped already.
+          for (const r of kit.getPendingSessionRequests() ?? []) {
+            const request = r as unknown as WalletKitTypes.SessionRequest;
+            if (tryAutoRespond(request)) continue;
+            setRequests((q) =>
+              q.some((x) => x.id === request.id) ? q : [...q, request],
+            );
+          }
+        })
+        .catch(() => {});
+    }
     // `wc:` deep links ("open in wallet" buttons, tapped QR fallbacks) start a
     // pairing directly; the proposal that follows renders above. The tap is the
     // user's intent, so a failure must be visible, not a silent nothing.

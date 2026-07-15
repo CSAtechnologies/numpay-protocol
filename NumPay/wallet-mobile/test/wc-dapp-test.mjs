@@ -22,10 +22,13 @@ dns.lookup = (hostname, options, callback) => {
 
 import { SignClient } from "@walletconnect/sign-client";
 import { ethers } from "ethers";
+import bs58 from "bs58";
+import nacl from "tweetnacl";
 import { writeFileSync } from "node:fs";
 
 const projectId = process.argv[2];
 const doTx = process.argv.includes("--tx");
+const doSol = process.argv.includes("--sol");
 if (!projectId) { console.error("usage: node wc-dapp-test.mjs <projectId> [--tx]"); process.exit(2); }
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
@@ -83,6 +86,32 @@ log("personal_sign result:", sig.slice(0, 24) + "…");
 log(recovered.toLowerCase() === evmAccount.toLowerCase()
   ? "SIGNATURE VERIFIED: recovered address matches " + evmAccount
   : "SIGNATURE MISMATCH: recovered " + recovered + " expected " + evmAccount);
+
+if (doSol) {
+  const solCaip2 = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+  const solAccount = accounts.find((a) => a.startsWith(solCaip2 + ":"))?.split(":")[2];
+  if (!solAccount) {
+    log("SOLANA LEG SKIPPED: session has no solana account");
+  } else {
+    const solMsg = "NumPay solana exit test " + Date.now();
+    const solMsgBytes = Buffer.from(solMsg, "utf8");
+    log("requesting solana_signMessage…");
+    const solRes = await client.request({
+      topic: session.topic,
+      chainId: solCaip2,
+      request: {
+        method: "solana_signMessage",
+        params: { message: bs58.encode(solMsgBytes), pubkey: solAccount },
+      },
+    });
+    const solSig = bs58.decode(solRes.signature);
+    const solOk = nacl.sign.detached.verify(solMsgBytes, solSig, bs58.decode(solAccount));
+    log("solana_signMessage result:", solRes.signature.slice(0, 24) + "…");
+    log(solOk
+      ? "SOLANA SIGNATURE VERIFIED against " + solAccount
+      : "SOLANA SIGNATURE INVALID for " + solAccount);
+  }
+}
 
 if (doTx) {
   log("requesting eth_sendTransaction (tiny Base self-send)…");
