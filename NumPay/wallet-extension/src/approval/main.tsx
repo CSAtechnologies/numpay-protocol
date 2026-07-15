@@ -38,9 +38,12 @@ import {
   decodePersonalSignMessage,
   parseTypedData,
   assessTypedDataRisk,
-  typesForEthers,
   type RiskFlag,
 } from "@/lib/dapp/signDecode";
+// The actual signing goes through the shared core engine — the same code the
+// mobile WalletConnect sheet uses — so there is exactly ONE signing path to
+// audit. The decode imports above remain for rendering the preview.
+import { signDappRequest, type EvmSignMethod } from "@numpay/core/dapp";
 import {
   decodeTxData,
   formatNativeValue,
@@ -615,22 +618,24 @@ function SignView({
         return;
       }
 
-      const wallet = new ethers.Wallet(wd.privateKey);
-      let signature: string;
-      if (isPersonal) {
-        signature = await wallet.signMessage(ethers.getBytes(decoded!.hex));
-      } else {
-        if (!parsed || !parsed.ok) {
-          setError(parsed ? parsed.error : "Invalid typed data");
-          setBusy(false);
-          return;
-        }
-        signature = await wallet.signTypedData(
-          parsed.domain as ethers.TypedDataDomain,
-          typesForEthers(parsed.types),
-          parsed.message as Record<string, any>
-        );
+      if (!isPersonal && (!parsed || !parsed.ok)) {
+        setError(parsed && !parsed.ok ? parsed.error : "Invalid typed data");
+        setBusy(false);
+        return;
       }
+      // Shared core engine (same ops as before: personal_sign signs the raw
+      // message bytes, typed data signs with EIP712Domain stripped). Params in
+      // spec order, exactly as a transport would deliver them.
+      const wallet = new ethers.Wallet(wd.privateKey);
+      const signature = await signDappRequest(
+        {
+          method: pending.method as EvmSignMethod,
+          params: isPersonal
+            ? [pending.payload, pending.account]
+            : [pending.account, pending.payload],
+        },
+        wallet
+      );
       await touchActivity();
       onDecide(true, signature);
     } catch {
@@ -804,11 +809,14 @@ function SendTxView({
         return;
       }
 
-      const sent = await signer.sendTransaction(
-        normalizeTxForEthers(pending.tx) as ethers.TransactionRequest
+      // Shared core engine: normalizes the tx (gas->gasLimit, from dropped)
+      // and broadcasts through the chain-verified signer above.
+      const hash = await signDappRequest(
+        { method: "eth_sendTransaction", params: [pending.tx] },
+        signer
       );
       await touchActivity();
-      onDecide(true, sent.hash);
+      onDecide(true, hash);
     } catch (e: any) {
       setError(e?.shortMessage || e?.reason || e?.message || "Could not send this transaction.");
       setBusy(false);
