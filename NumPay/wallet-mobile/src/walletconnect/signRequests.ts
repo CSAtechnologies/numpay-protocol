@@ -151,7 +151,10 @@ export async function approveSessionRequest(
 
   if (routed.ns === "solana") {
     const preview = routed.preview;
-    if (preview.detail.kind === "sol_tx" && preview.detail.feePayerMismatch) {
+    if (
+      (preview.detail.kind === "sol_tx" || preview.detail.kind === "sol_tx_batch") &&
+      preview.detail.feePayerMismatch
+    ) {
       // The hard gate is inside signSolanaTransaction; refusing here returns a
       // proper error to the dApp instead of a thrown-away exception.
       await rejectSessionRequest(req, {
@@ -177,7 +180,7 @@ export async function approveSessionRequest(
       topic,
       response: { id, jsonrpc: "2.0", result },
     });
-    if (preview.detail.kind === "sol_tx" && preview.detail.send) {
+    if (preview.detail.kind === "sol_tx" && preview.detail.send && "signature" in result) {
       return { txHash: result.signature, explorerUrl: explorerTxUrl("solana", result.signature) };
     }
     return undefined;

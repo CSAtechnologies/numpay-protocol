@@ -360,9 +360,14 @@ function RequestSheet({ request, accounts, onSessionExpired, onDone }: {
   const bad = !routed.preview.ok ? routed.preview : null;
   const evm = routed.ns === "eip155" && routed.preview.ok ? routed.preview : null;
   const sol = routed.ns === "solana" && routed.preview.ok ? routed.preview : null;
-  // A Solana tx whose fee payer isn't the connected account must not offer an
-  // approve button (the sign path re-enforces this, but the UI blocks first).
-  const solBlocked = !!(sol && sol.detail.kind === "sol_tx" && sol.detail.feePayerMismatch);
+  // A Solana tx (or any tx in a batch) whose fee payer isn't the connected
+  // account must not offer an approve button (the sign path re-enforces this,
+  // but the UI blocks first).
+  const solBlocked = !!(
+    sol &&
+    (sol.detail.kind === "sol_tx" || sol.detail.kind === "sol_tx_batch") &&
+    sol.detail.feePayerMismatch
+  );
   const canConfirm = !bad && !solBlocked;
 
   const reject = () => {
@@ -397,9 +402,11 @@ function RequestSheet({ request, accounts, onSessionExpired, onDone }: {
           : "Transaction request"
       : sol!.detail.kind === "sol_message"
         ? "Signature request"
-        : sol!.detail.send
-          ? "Transaction request"
-          : "Sign transaction";
+        : sol!.detail.kind === "sol_tx_batch"
+          ? `Sign ${sol!.detail.txsB64.length} transactions`
+          : sol!.detail.send
+            ? "Transaction request"
+            : "Sign transaction";
   const sends =
     (evm && evm.method === "eth_sendTransaction") ||
     (sol && sol.detail.kind === "sol_tx" && sol.detail.send);
@@ -550,6 +557,27 @@ function RequestSheet({ request, accounts, onSessionExpired, onDone }: {
                 </Text>
               </>
             )}
+          </Card>
+        )}
+
+        {sol && sol.detail.kind === "sol_tx_batch" && (
+          <Card style={{ padding: 14, marginBottom: 10 }}>
+            <SectionLabel text={`${sol.detail.txsB64.length} transactions`} />
+            <Text style={st.permNote}>
+              All are signed together and returned to the site; nothing is sent by NumPay.
+            </Text>
+            {sol.detail.inspections.map((ins, i) => (
+              <View key={i} style={{ marginTop: 10 }}>
+                <Text style={st.kvValue}>
+                  {i + 1}. {ins.instructionCount} instruction{ins.instructionCount === 1 ? "" : "s"}
+                </Text>
+                {ins.programs.map((prog, j) => (
+                  <Text key={j} style={[st.kvValue, !prog.name && st.rawData]} selectable>
+                    {"   "}{prog.name ?? prog.id}
+                  </Text>
+                ))}
+              </View>
+            ))}
           </Card>
         )}
 

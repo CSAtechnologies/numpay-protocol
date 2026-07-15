@@ -26,7 +26,7 @@ export {
   type SolWcMethod, type SolDappRequestInput, type SolDappRequestPreview,
   type SolPreviewDetail,
   SOL_MAINNET_CAIP2, SOL_MAINNET_CAIP2_LEGACY, SOL_MAINNET_CHAIN_IDS,
-  SUPPORTED_SOL_METHODS,
+  SUPPORTED_SOL_METHODS, MAX_BATCH_TXS,
   isSolanaMainnetCaip2, isSupportedSolMethod,
   previewSolanaDappRequest, signSolanaDappRequest,
 } from "./solEngine";

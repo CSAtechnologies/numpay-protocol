@@ -410,8 +410,20 @@ const solEngine = await bundle("../packages/core/src/dapp/solEngine.ts", "solEng
   ok(preview({ method: "solana_signMessage", params: [helloB58, ACC], account: ACC }).ok === false, "sol preview array params (spec violation) -> reject");
 
   // preview: unsupported methods (incl. EVM methods on a solana chain)
-  ok(preview({ method: "solana_signAllTransactions", params: {}, account: ACC }).code === 4200, "sol preview signAllTransactions -> 4200 (not advertised)");
+  ok(preview({ method: "solana_requestAirdrop", params: {}, account: ACC }).code === 4200, "sol preview unknown sol method -> 4200");
   ok(preview({ method: "personal_sign", params: {}, account: ACC }).code === 4200, "sol preview evm method -> 4200");
+
+  // preview: solana_signAllTransactions (sign-only batch)
+  const batch = preview({ method: "solana_signAllTransactions", params: { transactions: [txB64, txB64] }, account: ACC });
+  ok(batch.ok === true && batch.detail.kind === "sol_tx_batch", "sol preview batch ok");
+  ok(batch.ok && batch.detail.inspections.length === 2 && batch.detail.feePayerMismatch === false, "sol preview batch inspects each tx");
+  const foreignB64 = Buffer.from(buildSolTx(other.publicKey)).toString("base64");
+  const batchMix = preview({ method: "solana_signAllTransactions", params: { transactions: [txB64, foreignB64] }, account: ACC });
+  ok(batchMix.ok === true && batchMix.detail.feePayerMismatch === true, "sol preview batch: one foreign payer flags the whole batch");
+  ok(preview({ method: "solana_signAllTransactions", params: { transactions: [] }, account: ACC }).ok === false, "sol preview empty batch -> reject");
+  ok(preview({ method: "solana_signAllTransactions", params: { transactions: new Array(11).fill(txB64) }, account: ACC }).ok === false, "sol preview oversized batch (11) -> reject");
+  ok(preview({ method: "solana_signAllTransactions", params: { transactions: [txB64, 42] }, account: ACC }).ok === false, "sol preview non-string in batch -> reject");
+  ok(preview({ method: "solana_signAllTransactions", params: { transactions: ["!!!"] }, account: ACC }).ok === false, "sol preview bad base64 in batch -> reject");
 
   // preview: solana_signTransaction / signAndSend
   const pt = preview({ method: "solana_signTransaction", params: { transaction: txB64 }, account: ACC });
@@ -459,6 +471,23 @@ const solEngine = await bundle("../packages/core/src/dapp/solEngine.ts", "solEng
   const msgBytes = signed.subarray(1 + 64);
   ok(Buffer.from(bs58.decode(rt.signature)).equals(slotSig), "sol sign tx: result signature == slot 0 signature");
   ok(nacl.sign.detached.verify(msgBytes, slotSig, kp.publicKey), "sol sign tx: slot 0 signature verifies over the message");
+
+  // sign: solana_signAllTransactions signs every slot 0, order preserved
+  const rb = await sign({ method: "solana_signAllTransactions", params: { transactions: [txB64, txB64] }, account: ACC }, kp.secretKey);
+  ok(Array.isArray(rb.transactions) && rb.transactions.length === 2, "sol sign batch returns both txs");
+  {
+    let allOk = true;
+    for (const sB64 of rb.transactions) {
+      const bytes = Buffer.from(sB64, "base64");
+      const s = bytes.subarray(1, 65);
+      const m = bytes.subarray(65);
+      if (!nacl.sign.detached.verify(m, s, kp.publicKey)) allOk = false;
+    }
+    ok(allOk, "sol sign batch: every slot-0 signature verifies");
+    ok(rb.transactions[0] === rb.transactions[1], "sol sign batch: identical inputs -> identical signed outputs (order/determinism)");
+  }
+  await throws("sol sign batch foreign fee payer throws", () =>
+    sign({ method: "solana_signAllTransactions", params: { transactions: [txB64, Buffer.from(buildSolTx(other.publicKey)).toString("base64")] }, account: ACC }, kp.secretKey));
 
   // sign: hard gates fire BEFORE any signing / network
   await throws("sol sign tx foreign fee payer throws", () =>

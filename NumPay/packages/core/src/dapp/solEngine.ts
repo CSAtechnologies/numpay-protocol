@@ -46,13 +46,20 @@ export function isSolanaMainnetCaip2(chainId: unknown): boolean {
 export type SolWcMethod =
   | "solana_signMessage"
   | "solana_signTransaction"
-  | "solana_signAndSendTransaction";
+  | "solana_signAndSendTransaction"
+  | "solana_signAllTransactions";
 
 export const SUPPORTED_SOL_METHODS: readonly SolWcMethod[] = [
   "solana_signMessage",
   "solana_signTransaction",
   "solana_signAndSendTransaction",
+  "solana_signAllTransactions",
 ];
+
+// signAllTransactions is sign-only batching (dApps like Jupiter split a flow
+// into several transactions). Cap the batch so a hostile dApp cannot make the
+// user rubber-stamp an unreadable wall of transactions in one tap.
+export const MAX_BATCH_TXS = 10;
 
 export function isSupportedSolMethod(m: string): m is SolWcMethod {
   return (SUPPORTED_SOL_METHODS as readonly string[]).includes(m);
@@ -79,6 +86,13 @@ export type SolPreviewDetail =
        * bytes did not parse). The sheet must block approve; signSolanaTransaction
        * re-enforces this at sign time as the hard gate.
        */
+      feePayerMismatch: boolean;
+    }
+  | {
+      kind: "sol_tx_batch";
+      txsB64: string[];
+      inspections: SolTxInspection[];
+      /** Any transaction in the batch with a foreign/unparsable fee payer. */
       feePayerMismatch: boolean;
     };
 
@@ -145,6 +159,39 @@ export function previewSolanaDappRequest(input: SolDappRequestInput): SolDappReq
       return { ok: true, method, account, detail: { kind: "sol_message", message: decoded } };
     }
 
+    if (method === "solana_signAllTransactions") {
+      const p = asRecord(params);
+      const txs = p?.transactions;
+      if (!Array.isArray(txs) || txs.length === 0) {
+        return { ok: false, code: DAPP_ERR.invalidParams.code, error: "Missing transactions array" };
+      }
+      if (txs.length > MAX_BATCH_TXS) {
+        return { ok: false, code: DAPP_ERR.invalidParams.code, error: `Too many transactions (max ${MAX_BATCH_TXS})` };
+      }
+      const txsB64: string[] = [];
+      const inspections: SolTxInspection[] = [];
+      let mismatch = false;
+      for (const t of txs) {
+        if (typeof t !== "string" || t.length === 0 || t.length > MAX_PAYLOAD_BYTES) {
+          return { ok: false, code: DAPP_ERR.invalidParams.code, error: "Invalid transaction in batch" };
+        }
+        const bytes = base64ToBytes(t);
+        if (bytes.length === 0) {
+          return { ok: false, code: DAPP_ERR.invalidParams.code, error: "Transaction is not valid base64" };
+        }
+        const inspection = inspectSolanaTransaction(bytes);
+        if (inspection.feePayer !== account) mismatch = true;
+        txsB64.push(t);
+        inspections.push(inspection);
+      }
+      return {
+        ok: true,
+        method,
+        account,
+        detail: { kind: "sol_tx_batch", txsB64, inspections, feePayerMismatch: mismatch },
+      };
+    }
+
     // solana_signTransaction / solana_signAndSendTransaction
     const txB64 = extractTxB64(params);
     if (!txB64) {
@@ -185,7 +232,7 @@ export function previewSolanaDappRequest(input: SolDappRequestInput): SolDappReq
 export async function signSolanaDappRequest(
   input: { method: SolWcMethod; params: unknown; account: string },
   secretKey: Uint8Array,
-): Promise<{ signature: string; transaction?: string }> {
+): Promise<{ signature: string; transaction?: string } | { transactions: string[] }> {
   const { method, params, account } = input;
 
   if (method === "solana_signMessage") {
@@ -194,6 +241,24 @@ export async function signSolanaDappRequest(
     if (!bytes) throw new Error("Missing sign message");
     const sig = nacl.sign.detached(bytes, secretKey);
     return { signature: bs58.encode(sig) };
+  }
+
+  if (method === "solana_signAllTransactions") {
+    const p = asRecord(params);
+    const txs = p?.transactions;
+    if (!Array.isArray(txs) || txs.length === 0 || txs.length > MAX_BATCH_TXS) {
+      throw new Error("Invalid transactions batch");
+    }
+    // Sign-only, in order; each pass re-enforces the fee-payer bind.
+    const signed: string[] = [];
+    for (const t of txs) {
+      if (typeof t !== "string") throw new Error("Invalid transaction in batch");
+      const { signedB64 } = await signSolanaTransaction(
+        secretKey, account, base64ToBytes(t), false,
+      );
+      signed.push(signedB64);
+    }
+    return { transactions: signed };
   }
 
   const txB64 = extractTxB64(params);

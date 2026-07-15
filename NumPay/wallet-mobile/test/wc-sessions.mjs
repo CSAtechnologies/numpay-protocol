@@ -102,8 +102,9 @@ function proposal({ required = {}, optional = {}, verify = "VALID", isScam = fal
   ok(Array.isArray(both.solana?.chains) && both.solana.chains.includes(SOL_MAIN) && both.solana.chains.includes(SOL_LEGACY),
     "offer: solana canonical + legacy mainnet ids");
   ok(both.solana.accounts.includes(`${SOL_MAIN}:${SOLACC}`), "offer: solana account on canonical id");
-  ok(both.solana.methods.length === 3 && both.solana.methods.includes("solana_signAndSendTransaction"),
-    "offer: exactly the three sol methods (no signAllTransactions)");
+  ok(both.solana.methods.length === 4 && both.solana.methods.includes("solana_signAndSendTransaction")
+    && both.solana.methods.includes("solana_signAllTransactions"),
+    "offer: exactly the four sol methods incl. signAllTransactions");
 }
 
 // ── buildSessionNamespaces: intersect a proposal with the offer ──

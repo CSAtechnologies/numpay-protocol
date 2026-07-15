@@ -6,7 +6,7 @@
 // expo-screen-capture or a config plugin).
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { BackHandler, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 
 import { createWallet, importFromMnemonic } from "@numpay/core/wallet";
 import { formatBPAN } from "@numpay/core/bpan";
@@ -86,6 +86,32 @@ export default function App() {
   useEffect(() => {
     if (unlocked && !relocked) void touchActivity();
   }, [mode, unlocked, relocked]);
+
+  // Hardware back: sub-screens return home and onboarding steps step back,
+  // instead of the whole app exiting (the long-standing "back kills NumPay"
+  // gotcha). Auth screens consume nothing: backing out of home/locked/onboard
+  // exits normally, and the re-lock overlay cannot be dismissed with back.
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const relockedRef = useRef(relocked);
+  relockedRef.current = relocked;
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (relockedRef.current) return true; // re-auth is mandatory, not dismissible
+      const m = modeRef.current;
+      if (m === "receive" || m === "send" || m === "swap" || m === "bridge" ||
+          m === "activity" || m === "bpan" || m === "dapps" || m === "spike" || m === "devnet") {
+        setMode("home");
+        return true;
+      }
+      if (m === "import" || m === "reveal" || m === "pin") {
+        setMode("onboard");
+        return true;
+      }
+      return false; // home / locked / onboard: let Android close the app
+    });
+    return () => sub.remove();
+  }, []);
 
   const onUnlocked = async () => {
     setError("");
