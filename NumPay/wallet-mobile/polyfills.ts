@@ -49,7 +49,7 @@ g.__NUMPAY_ENV__ = {
   // Get one free at cloud.reown.com and paste it here. Empty = WalletConnect
   // transport stays disabled and fails loud with a clear message (see
   // src/walletconnect/client.ts).
-  WALLETCONNECT_PROJECT_ID: "",
+  WALLETCONNECT_PROJECT_ID: "aab075734c7a1dd54fcecd98fe5bbdc7",
 };
 
 export {};
