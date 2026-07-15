@@ -66,6 +66,10 @@ export function WcApprovalHost({
         setRequests((q) => [...q, r]);
       },
       onSessionDelete: () => emitSessionsChanged(),
+      // A sheet whose request died dApp-side must dismiss itself; answering an
+      // expired id errors, and a zombie sheet blocks every later request.
+      onProposalExpire: (e) => setProposals((q) => q.filter((p) => p.id !== e.id)),
+      onRequestExpire: (e) => setRequests((q) => q.filter((r) => r.id !== e.id)),
     });
     // Resume existing sessions after an app restart so already-connected dApps
     // can reach the wallet again, and DRAIN anything that arrived while the

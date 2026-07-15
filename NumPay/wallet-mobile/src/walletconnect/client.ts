@@ -26,6 +26,9 @@ export type WcHandlers = {
   onSessionProposal?: (p: WalletKitTypes.SessionProposal) => void;
   onSessionRequest?: (r: WalletKitTypes.SessionRequest) => void;
   onSessionDelete?: (d: WalletKitTypes.SessionDelete) => void;
+  /** dApp-side expiry: a sheet for this id is now dead and must dismiss. */
+  onProposalExpire?: (e: WalletKitTypes.ProposalExpire) => void;
+  onRequestExpire?: (e: WalletKitTypes.SessionRequestExpire) => void;
 };
 
 let handlers: WcHandlers = {};
@@ -69,6 +72,18 @@ export function initWalletKit(): Promise<WalletKitInstance> {
     kit.on("session_delete", (event) => {
       if (__DEV__) console.log("[wc] session_delete", event.topic);
       handlers.onSessionDelete?.(event);
+    });
+    // WalletConnect requests are time-boxed (~5 min). When one expires before
+    // the user decides, the sheet must dismiss itself — answering a dead
+    // request errors, and a zombie sheet blocks every later request (observed
+    // live: tx sheet left open past expiry).
+    kit.on("proposal_expire", (event) => {
+      if (__DEV__) console.log("[wc] proposal_expire", event.id);
+      handlers.onProposalExpire?.(event);
+    });
+    kit.on("session_request_expire", (event) => {
+      if (__DEV__) console.log("[wc] session_request_expire", event.id);
+      handlers.onRequestExpire?.(event);
     });
 
     wk = kit;

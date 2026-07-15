@@ -114,13 +114,15 @@ if (doSol) {
 }
 
 if (doTx) {
-  log("requesting eth_sendTransaction (tiny Base self-send)…");
+  // 1 wei self-send: the wallet only holds dust on Base, so keep the value
+  // symbolic — the point is the sheet -> vault -> broadcast path, not the sum.
+  log("requesting eth_sendTransaction (1 wei Base self-send)…");
   const txHash = await client.request({
     topic: session.topic,
     chainId: "eip155:8453",
     request: {
       method: "eth_sendTransaction",
-      params: [{ from: evmAccount, to: evmAccount, value: "0x2386f26fc10000" }],
+      params: [{ from: evmAccount, to: evmAccount, value: "0x1" }],
     },
   });
   log("TX HASH:", txHash);
