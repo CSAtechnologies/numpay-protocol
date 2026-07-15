@@ -21,11 +21,19 @@ import {
   type DappRequestPreview,
   type SolDappRequestPreview,
 } from "@numpay/core/dapp";
+import { ethers } from "ethers";
 import { NETWORKS, BPAN_MAINNET_RPC } from "@numpay/core/networks";
 import { importFromMnemonic, getSigner } from "@numpay/core/wallet";
 import { deriveSolanaAddress } from "@numpay/core/chains/solana";
+import { logTx, updateTx, explorerTxUrl } from "@numpay/core/txLog";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import { getWalletKit } from "./client";
+
+/** What the approval sheet shows after a dApp request BROADCAST a tx. */
+export interface WcBroadcastResult {
+  txHash: string;
+  explorerUrl: string;
+}
 import type { WcAccounts } from "./sessionsCore";
 
 export type { WcAccounts } from "./sessionsCore";
@@ -118,13 +126,15 @@ export function previewSessionRequest(
  * connected account), then re-checks the vault lock (H-06 parity with
  * Send/BPAN): a locked/expired session fires onSessionExpired and signs
  * nothing. Rejects the request over the wire on validation failure and
- * rethrows signing errors so the caller can surface them.
+ * rethrows signing errors so the caller can surface them. Returns broadcast
+ * details when the request actually sent a transaction (so the sheet can show
+ * the result overlay); undefined for signature-only requests.
  */
 export async function approveSessionRequest(
   req: WalletKitTypes.SessionRequest,
   accounts: WcAccounts,
   onSessionExpired?: () => void,
-): Promise<void> {
+): Promise<WcBroadcastResult | undefined> {
   const wk = getWalletKit();
   if (!wk) throw new Error("WalletConnect is not initialised");
 
@@ -167,7 +177,10 @@ export async function approveSessionRequest(
       topic,
       response: { id, jsonrpc: "2.0", result },
     });
-    return;
+    if (preview.detail.kind === "sol_tx" && preview.detail.send) {
+      return { txHash: result.signature, explorerUrl: explorerTxUrl("solana", result.signature) };
+    }
+    return undefined;
   }
 
   // eip155
@@ -200,6 +213,37 @@ export async function approveSessionRequest(
     topic,
     response: { id, jsonrpc: "2.0", result },
   });
+
+  if (preview.method !== "eth_sendTransaction" || !net || preview.detail.kind !== "send_tx") {
+    return undefined;
+  }
+
+  // A dApp-initiated broadcast is still one of this wallet's sends: log it so
+  // the Activity page shows it (the history-consistency rule) — the closed
+  // sheet otherwise leaves no visible trace anywhere in the app.
+  const dtx = preview.detail.tx;
+  let valueWei: bigint | undefined;
+  try {
+    valueWei = BigInt(dtx.value ?? "0x0");
+  } catch {
+    valueWei = undefined; // hostile hex already survived preview; log without it
+  }
+  void logTx({
+    owner: accounts.evm,
+    hash: result, chainId: net.id, kind: "send", timestamp: Date.now(),
+    symbol: net.symbol,
+    value: valueWei !== undefined ? ethers.formatUnits(valueWei, net.decimals) : "0",
+    logo: net.logo,
+    counterparty: dtx.to ?? undefined,
+    status: "pending",
+    from: accounts.evm, to: dtx.to ?? undefined,
+    valueWei: valueWei?.toString(), data: dtx.data,
+  });
+  void signer.provider?.waitForTransaction(result).then((rc) => {
+    void updateTx(net.id, result, { status: rc && rc.status === 0 ? "failed" : "confirmed" });
+  }).catch(() => { /* replaced/dropped — the Activity reconciler settles it */ });
+
+  return { txHash: result, explorerUrl: explorerTxUrl(net.id, result) };
 }
 
 /**

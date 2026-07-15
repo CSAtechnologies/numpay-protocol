@@ -16,6 +16,7 @@ import { NETWORKS } from "@numpay/core/networks";
 import type { RiskFlag } from "@numpay/core/dapp";
 import { colors, radius, spacing, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Card, SectionLabel } from "../ui/components";
+import { TxResultOverlay } from "../ui/TxResultOverlay";
 import { hasProjectId } from "./config";
 import { getActiveSessions, initWalletKit, pair, setWcHandlers } from "./client";
 import { subscribeWcDeepLinks } from "./deepLink";
@@ -31,6 +32,7 @@ import {
   rejectSessionRequest,
   tryAutoRespond,
   type WcAccounts,
+  type WcBroadcastResult,
 } from "./signRequests";
 
 function chainName(chainId: number): string {
@@ -346,6 +348,10 @@ function RequestSheet({ request, accounts, onSessionExpired, onDone }: {
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Set once a request actually broadcast a transaction: the sheet swaps to
+  // the same result overlay in-app sends show, so a dApp send is not a silent
+  // sheet-close (observed as "nothing happened" after the exit-test tx).
+  const [sent, setSent] = useState<WcBroadcastResult | null>(null);
   const routed = useMemo(() => previewSessionRequest(request, accounts), [request, accounts]);
   const peer = getActiveSessions()[request.topic]?.peer?.metadata;
   const verified = request.verifyContext?.verified;
@@ -367,8 +373,9 @@ function RequestSheet({ request, accounts, onSessionExpired, onDone }: {
     setBusy(true);
     setError("");
     try {
-      await approveSessionRequest(request, accounts, onSessionExpired);
-      onDone();
+      const broadcast = await approveSessionRequest(request, accounts, onSessionExpired);
+      if (broadcast) setSent(broadcast);
+      else onDone();
     } catch (e) {
       const msg = String((e as Error)?.message ?? e);
       // Vault expiry: the re-lock overlay is now covering this sheet; keep it
@@ -396,6 +403,20 @@ function RequestSheet({ request, accounts, onSessionExpired, onDone }: {
   const sends =
     (evm && evm.method === "eth_sendTransaction") ||
     (sol && sol.detail.kind === "sol_tx" && sol.detail.send);
+
+  if (sent) {
+    return (
+      <TxResultOverlay
+        status="success"
+        kind="send"
+        amountLabel={evm && evm.detail.kind === "send_tx" ? evm.detail.valueLabel : undefined}
+        detail={`Requested by ${peer?.name || "a connected dApp"}`}
+        txHash={sent.txHash}
+        explorerUrl={sent.explorerUrl}
+        onClose={onDone}
+      />
+    );
+  }
 
   return (
     <View style={st.sheet}>
