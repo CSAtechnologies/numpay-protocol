@@ -5,8 +5,8 @@
 // Phase 0. FLAG_SECURE on secret screens is a follow-up (needs
 // expo-screen-capture or a config plugin).
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { BackHandler, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { BackHandler, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 
 import { createWallet, importFromMnemonic } from "@numpay/core/wallet";
 import { formatBPAN } from "@numpay/core/bpan";
@@ -19,7 +19,13 @@ import { runSpike, type SpikeResult } from "./spike/runSpike";
 import { runDevnetTx } from "./spike/devnetTx";
 import { useMobileWallet, type AssetRow, type MobileWalletState } from "./src/wallet/useMobileWallet";
 import { colors, radius, type as ts, spacing } from "./src/ui/theme";
-import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SectionLabel } from "./src/ui/components";
+import {
+  AlertCard, AmbientBackground, Btn, Chip, Card, Field, GradientNumber,
+  LogoMark, ScreenHeader, SectionLabel,
+} from "./src/ui/components";
+import {
+  ActivityIcon, LayersIcon, LinkIcon, LockIcon, ReceiveIcon, SendIcon, SwapIcon,
+} from "./src/ui/icons";
 import { AssetIcon, ChainBadge, ChainIcon } from "./src/ui/coins";
 import { ReceiveScreen, type ReceiveAddrs } from "./src/screens/ReceiveScreen";
 import { SendScreen } from "./src/screens/SendScreen";
@@ -36,7 +42,7 @@ import { clearReceiveWatch } from "./src/notify/receiveWatch";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
-  | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity" | "bpan" | "dapps";
+  | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity" | "bpan" | "dapps" | "dev";
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("loading");
@@ -53,7 +59,7 @@ export default function App() {
   const [relocked, setRelocked] = useState(false);
 
   const unlocked =
-    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity" || mode === "bpan" || mode === "dapps";
+    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev";
   const w = useMobileWallet(unlocked);
   const unlockedRef = useRef(unlocked);
   unlockedRef.current = unlocked;
@@ -110,8 +116,12 @@ export default function App() {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
       if (relockedRef.current) return true; // re-auth is mandatory, not dismissible
       const m = modeRef.current;
+      if (m === "spike" || m === "devnet") {
+        setMode("dev");
+        return true;
+      }
       if (m === "receive" || m === "send" || m === "swap" || m === "bridge" ||
-          m === "activity" || m === "bpan" || m === "dapps" || m === "spike" || m === "devnet") {
+          m === "activity" || m === "bpan" || m === "dapps" || m === "dev") {
         setMode("home");
         return true;
       }
@@ -162,6 +172,7 @@ export default function App() {
 
   return (
     <View style={st.container}>
+      <AmbientBackground />
       <StatusBar style="light" />
       {mode === "loading" && <Text style={st.dim}>loading…</Text>}
       {(mode === "onboard" || mode === "import" || mode === "reveal" || mode === "pin" || mode === "locked") && (
@@ -219,7 +230,6 @@ export default function App() {
       {mode === "home" && (
         <Dashboard
           w={w}
-          argonMs={getLastArgonMs()}
           onSend={() => setMode("send")}
           onSwap={() => setMode("swap")}
           onBridge={() => setMode("bridge")}
@@ -231,6 +241,14 @@ export default function App() {
           onLock={async () => { await lock(); setError(""); await refresh(); }}
           onBPAN={() => setMode("bpan")}
           onDapps={() => setMode("dapps")}
+          onDev={() => setMode("dev")}
+        />
+      )}
+      {mode === "dev" && (
+        <DevScreen
+          w={w}
+          argonMs={getLastArgonMs()}
+          onBack={() => setMode("home")}
           onSpike={() => setMode("spike")}
           onDevnet={() => setMode("devnet")}
           onWipe={async () => { await wipeVault(); await clearReceiveWatch(); setError(""); await refresh(); }}
@@ -273,8 +291,8 @@ export default function App() {
       {mode === "dapps" && (
         <WalletConnectScreen onBack={() => setMode("home")} />
       )}
-      {mode === "spike" && <Spike onBack={() => setMode("home")} />}
-      {mode === "devnet" && <DevnetTx onBack={() => setMode("home")} />}
+      {mode === "spike" && <Spike onBack={() => setMode("dev")} />}
+      {mode === "devnet" && <DevnetTx onBack={() => setMode("dev")} />}
 
       {/* WalletConnect approval sheets (session proposals + signing requests)
           render over whatever screen is open; the re-lock overlay below still
@@ -309,13 +327,13 @@ export default function App() {
   );
 }
 
-// Brand header for the auth screens: the small gradient logo mark + wordmark
-// (the popup's .logo-mark, solid brand fill in RN).
+// Brand header for the auth screens: the popup's .logo-mark, now with the real
+// 135deg brand gradient, sized up and centered for the phone's tall canvas.
 function AuthHeader() {
   return (
     <View style={st.authHeader}>
-      <View style={st.logoMark}><Text style={st.logoMarkText}>N</Text></View>
-      <Text style={st.wordmark}>NumPay</Text>
+      <LogoMark size={64} />
+      <Text style={st.authWordmark}>NumPay</Text>
     </View>
   );
 }
@@ -439,7 +457,6 @@ function Locked(p: {
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 function Dashboard(p: {
   w: MobileWalletState;
-  argonMs: number | null;
   onSend: () => void;
   onSwap: () => void;
   onBridge: () => void;
@@ -448,32 +465,31 @@ function Dashboard(p: {
   onBPAN: () => void;
   onDapps: () => void;
   onLock: () => void;
-  onSpike: () => void;
-  onDevnet: () => void;
-  onWipe: () => void;
+  onDev: () => void;
 }) {
   const { w } = p;
-  const [confirmWipe, setConfirmWipe] = useState(false);
   const [filter, setFilter] = useState<string | null>(null);
+  // Dev tools are invisible in normal use: five taps on the version footer.
+  const devTaps = useRef(0);
   const rows = filter ? w.rows.filter((r) => r.chainId === filter) : w.rows;
   return (
     <View style={{ flex: 1 }}>
-      {/* Header: logo mark + wordmark + lock */}
+      {/* Header: gradient logo mark + wordmark + dApps / lock icon buttons */}
       <View style={st.homeHeader}>
-        <View style={st.logoMark}><Text style={st.logoMarkText}>N</Text></View>
+        <LogoMark size={28} />
         <Text style={st.wordmark}>NumPay</Text>
         <View style={{ flex: 1 }} />
         <Pressable onPress={p.onDapps} style={st.iconBtn} hitSlop={8}>
-          <Text style={{ color: colors.muted, fontSize: 13 }}>{"🔗"}</Text>
+          <LinkIcon size={15} color={colors.muted} />
         </Pressable>
         <Pressable onPress={p.onLock} style={st.iconBtn} hitSlop={8}>
-          <Text style={{ color: colors.muted, fontSize: 13 }}>{"🔒"}</Text>
+          <LockIcon size={15} color={colors.muted} />
         </Pressable>
       </View>
 
       {/* Portfolio hero. Auto-displays the wallet's BPAN once known (the
-          product's identity rule); the raw address stays as the fallback.
-          Tapping opens BPAN management (register / map / look up). */}
+          product's identity rule) with the popup's gradient numerals; the raw
+          address stays as the fallback. Tapping opens BPAN management. */}
       <Pressable onPress={p.onBPAN} style={({ pressed }) => [st.hero, pressed && { opacity: 0.85 }]}>
         <View style={st.heroLabelRow}>
           <View style={st.greenDot} />
@@ -484,7 +500,11 @@ function Dashboard(p: {
           <View style={{ flex: 1 }} />
           <Text style={st.heroManage}>{w.bpan ? "Manage ›" : "Set up BPAN ›"}</Text>
         </View>
-        {!!w.bpan && <Text style={st.heroBpan}>{formatBPAN(w.bpan)}</Text>}
+        {!!w.bpan && (
+          <View style={{ marginTop: 8 }}>
+            <GradientNumber text={formatBPAN(w.bpan)} size={ts.hero} />
+          </View>
+        )}
         <Text style={[st.portfolio, !!w.bpan && { fontSize: 22, marginTop: 4 }]}>
           ${w.portfolioUsd.toFixed(2)}
           {w.loading ? "  …" : ""}
@@ -492,13 +512,13 @@ function Dashboard(p: {
         <Text style={st.heroAddr} numberOfLines={1}>{w.evmAddress}</Text>
       </Pressable>
 
-      {/* Action circles (Send / Receive / Activity) */}
+      {/* Action row: the extension's stroke glyphs on brand-toned discs */}
       <View style={st.actions}>
-        <ActionCircle label="Send" color={colors.brand} glyph="↑" onPress={p.onSend} />
-        <ActionCircle label="Receive" color="#22c55e" glyph="↓" onPress={p.onReceive} />
-        <ActionCircle label="Swap" color="#f59e0b" glyph="⇄" onPress={p.onSwap} />
-        <ActionCircle label="Bridge" color="#8b5cf6" glyph="⇉" onPress={p.onBridge} />
-        <ActionCircle label="Activity" color="#0ea5e9" glyph="≋" onPress={p.onActivity} />
+        <ActionCircle label="Send" color={colors.brand} Icon={SendIcon} onPress={p.onSend} />
+        <ActionCircle label="Receive" color="#22c55e" Icon={ReceiveIcon} onPress={p.onReceive} />
+        <ActionCircle label="Swap" color="#f59e0b" Icon={SwapIcon} onPress={p.onSwap} />
+        <ActionCircle label="Bridge" color="#8b5cf6" Icon={LayersIcon} onPress={p.onBridge} />
+        <ActionCircle label="Activity" color="#0ea5e9" Icon={ActivityIcon} onPress={p.onActivity} />
       </View>
 
       {!!w.error && (
@@ -518,38 +538,86 @@ function Dashboard(p: {
         ))}
       </ScrollView>
 
-      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={{ flex: 1 }}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={w.loading}
+            onRefresh={w.refresh}
+            tintColor={colors.brand}
+            colors={[colors.brand]}
+            progressBackgroundColor={colors.card}
+          />
+        }
+      >
         <SectionLabel text="Assets" style={{ marginTop: 8, marginBottom: 2 } as object} />
         {rows.map((r) => (
           <AssetRowView key={r.key} row={r} />
         ))}
         {rows.length === 0 && !w.loading && (
-          <Text style={st.dim}>No assets yet. Receive funds to get started.</Text>
+          <View style={st.emptyState}>
+            <Text style={st.emptyTitle}>No assets yet</Text>
+            <Text style={st.dim}>Receive funds to get started.</Text>
+          </View>
         )}
-        <View style={st.devBox}>
-          <SectionLabel text={`Dev${p.argonMs !== null ? ` · argon2 ${p.argonMs} ms` : ""}`} />
-          <Btn label="Refresh" onPress={w.refresh} variant="secondary" />
-          <Btn label="Run core spike" onPress={p.onSpike} variant="secondary" />
-          <Btn label="Devnet tx (Phase 0 gate)" onPress={p.onDevnet} variant="secondary" />
-          <Btn
-            label={confirmWipe ? "Tap again to WIPE vault (seed is the only recovery)" : "Wipe vault (dev)"}
-            onPress={() => (confirmWipe ? p.onWipe() : setConfirmWipe(true))}
-            variant="danger"
-          />
-        </View>
+        <Pressable
+          onPress={() => {
+            devTaps.current += 1;
+            if (devTaps.current >= 5) { devTaps.current = 0; p.onDev(); }
+          }}
+        >
+          <Text style={st.version}>NumPay · v0.1.0</Text>
+        </Pressable>
       </ScrollView>
     </View>
   );
 }
 
-function ActionCircle(p: { label: string; color: string; glyph: string; onPress: () => void }) {
+function ActionCircle(p: {
+  label: string;
+  color: string;
+  Icon: (props: { size?: number; color?: string }) => ReactElement;
+  onPress: () => void;
+}) {
   return (
     <Pressable onPress={p.onPress} style={({ pressed }) => [st.actionCircle, pressed && { transform: [{ scale: 0.93 }] }]}>
       <View style={[st.actionIcon, { backgroundColor: p.color }]}>
-        <Text style={{ color: "#fff", fontSize: 20, fontWeight: "700" }}>{p.glyph}</Text>
+        <p.Icon size={21} color="#fff" />
       </View>
       <Text style={st.actionLabel}>{p.label}</Text>
     </Pressable>
+  );
+}
+
+// ── Dev screen (hidden: 5 taps on the dashboard version footer) ──────────────
+function DevScreen(p: {
+  w: MobileWalletState;
+  argonMs: number | null;
+  onBack: () => void;
+  onSpike: () => void;
+  onDevnet: () => void;
+  onWipe: () => void;
+}) {
+  const [confirmWipe, setConfirmWipe] = useState(false);
+  return (
+    <View style={{ flex: 1 }}>
+      <ScreenHeader title="Developer tools" onBack={p.onBack} />
+      <SectionLabel
+        text={`Diagnostics${p.argonMs !== null ? ` · argon2 ${p.argonMs} ms` : ""}`}
+        style={{ marginTop: 6 } as object}
+      />
+      <Btn label="Refresh balances" onPress={p.w.refresh} variant="secondary" />
+      <Btn label="Run core spike" onPress={p.onSpike} variant="secondary" />
+      <Btn label="Devnet tx (Phase 0 gate)" onPress={p.onDevnet} variant="secondary" />
+      <View style={{ flex: 1 }} />
+      <Btn
+        label={confirmWipe ? "Tap again to WIPE vault (seed is the only recovery)" : "Wipe vault"}
+        onPress={() => (confirmWipe ? p.onWipe() : setConfirmWipe(true))}
+        variant="danger"
+        style={{ marginBottom: 24 }}
+      />
+    </View>
   );
 }
 
@@ -662,14 +730,9 @@ const st = StyleSheet.create({
     paddingHorizontal: spacing.screen,
   },
 
-  authHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 20 },
+  authHeader: { alignItems: "center", marginTop: 72, marginBottom: 36 },
+  authWordmark: { color: colors.textPrimary, fontSize: 22, fontWeight: "700", marginTop: 16 },
   homeHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 },
-  logoMark: {
-    width: 28, height: 28, borderRadius: 9,
-    backgroundColor: colors.brand,
-    alignItems: "center", justifyContent: "center",
-  },
-  logoMarkText: { color: "#fff", fontWeight: "700", fontSize: 13 },
   wordmark: { color: colors.textPrimary, fontSize: 16, fontWeight: "700" },
   iconBtn: {
     width: 32, height: 32, borderRadius: radius.iconBtn,
@@ -695,12 +758,6 @@ const st = StyleSheet.create({
     marginTop: 8, fontVariant: ["tabular-nums"],
   },
   heroAddr: { color: colors.muted, fontSize: ts.sub, marginTop: 8, fontFamily: "monospace" },
-  // .m-number: the big monospace BPAN headline (solid brand-tinted fill in RN
-  // for the popup's gradient text).
-  heroBpan: {
-    color: "#d9d2ff", fontSize: ts.hero, fontWeight: "700",
-    fontFamily: "monospace", marginTop: 8, fontVariant: ["tabular-nums"],
-  },
 
   actions: {
     flexDirection: "row", justifyContent: "space-between",
@@ -735,7 +792,12 @@ const st = StyleSheet.create({
   h2: { color: colors.textPrimary, fontSize: ts.h2, fontWeight: "600", marginBottom: 12 },
   body: { color: colors.textPrimary, fontSize: 15 },
   dim: { color: colors.muted, fontSize: ts.row, marginTop: 8 },
-  devBox: { marginTop: 24, marginBottom: 30 },
+  emptyState: { alignItems: "center", paddingVertical: 48 },
+  emptyTitle: { color: colors.textSecondary, fontSize: ts.body, fontWeight: "600" },
+  version: {
+    color: colors.muted2, fontSize: ts.label, textAlign: "center",
+    paddingVertical: 28, letterSpacing: 0.4,
+  },
   mono: { color: colors.textPrimary, fontFamily: "monospace", fontSize: ts.row, marginTop: 2 },
   ok: { color: colors.success, fontSize: ts.row },
   err: { color: colors.danger, fontSize: ts.body, marginTop: 8 },

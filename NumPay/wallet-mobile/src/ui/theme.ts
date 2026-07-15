@@ -62,3 +62,17 @@ export const spacing = {
   cardPad: 18, // .m-hero padding
   gap: 8,
 } as const;
+
+// Gradient stops from the extension's premium classes, verbatim:
+// .logo-mark / .btn-primary-premium share the brand ramp; .m-number is the
+// white->lilac text ramp; the ambient wash mirrors body::before's radials.
+export const gradients = {
+  /** 135deg on the logo mark, 180deg on primary buttons. */
+  brand: ["#a394ff", "#7c6df0", "#5b4cdb"] as const,
+  brandLocations: [0, 0.55, 1] as const,
+  /** .m-number gradient text (dark theme). */
+  number: ["#ffffff", "#b8acff"] as const,
+  /** body::before ambient radial washes. */
+  ambientA: "rgba(124, 109, 240, 0.18)",
+  ambientB: "rgba(163, 148, 255, 0.10)",
+} as const;

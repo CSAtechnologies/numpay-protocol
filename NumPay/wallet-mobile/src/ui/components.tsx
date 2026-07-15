@@ -7,10 +7,16 @@ import {
   Pressable, StyleSheet, Text, TextInput, View,
   type StyleProp, type TextInputProps, type ViewStyle,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import Svg, {
+  Defs, RadialGradient as SvgRadialGradient, LinearGradient as SvgLinearGradient,
+  Stop, Ellipse, Text as SvgText,
+} from "react-native-svg";
 import type { SendErrorView } from "@numpay/core/sendErrors";
-import { colors, radius, type as ts } from "./theme";
+import { colors, gradients, radius, type as ts } from "./theme";
+import { ChevronLeftIcon } from "./icons";
 
-// ── Buttons (.btn-primary / .btn-secondary + danger tone) ────────────────────
+// ── Buttons (.btn-primary-premium / .btn-secondary + danger tone) ────────────
 export function Btn({
   label, onPress, variant = "primary", disabled, style,
 }: {
@@ -20,6 +26,32 @@ export function Btn({
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
+  if (variant === "primary") {
+    // .btn-primary-premium: vertical brand gradient, hairline top light,
+    // brand glow. Gradient lives inside the pressable so radius clips it.
+    return (
+      <Pressable
+        onPress={onPress}
+        disabled={disabled}
+        style={({ pressed }) => [
+          st.btnPremiumShell,
+          disabled && { opacity: 0.4 },
+          pressed && !disabled && { transform: [{ scale: 0.98 }] },
+          style,
+        ]}
+      >
+        <LinearGradient
+          colors={gradients.brand}
+          locations={gradients.brandLocations}
+          start={{ x: 0.5, y: 0 }}
+          end={{ x: 0.5, y: 1 }}
+          style={st.btnPremiumFill}
+        >
+          <Text style={st.btnText}>{label}</Text>
+        </LinearGradient>
+      </Pressable>
+    );
+  }
   return (
     <Pressable
       onPress={onPress}
@@ -37,6 +69,84 @@ export function Btn({
         {label}
       </Text>
     </Pressable>
+  );
+}
+
+// ── Logo mark (.logo-mark): 135deg brand gradient tile with the N ────────────
+export function LogoMark({ size = 28 }: { size?: number }) {
+  return (
+    <LinearGradient
+      colors={gradients.brand}
+      locations={[0, 0.5, 1]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={{
+        width: size, height: size, borderRadius: size * 0.32,
+        alignItems: "center", justifyContent: "center",
+        shadowColor: colors.brand, shadowOpacity: 0.5,
+        shadowRadius: 10, shadowOffset: { width: 0, height: 6 },
+        elevation: 8,
+      }}
+    >
+      <Text style={{ color: "#fff", fontWeight: "700", fontSize: size * 0.46 }}>N</Text>
+    </LinearGradient>
+  );
+}
+
+// ── Ambient wash (body::before): two soft radial blobs behind everything ─────
+export function AmbientBackground() {
+  return (
+    <Svg
+      pointerEvents="none"
+      style={StyleSheet.absoluteFill}
+      width="100%"
+      height="100%"
+    >
+      <Defs>
+        {/* stopOpacity ramps, not "transparent" color stops: react-native-svg
+            renders the latter with a visible hard edge (seen on-device). */}
+        <SvgRadialGradient id="ambA" cx="50%" cy="50%" r="50%">
+          <Stop offset="0%" stopColor="#7c6df0" stopOpacity={0.14} />
+          <Stop offset="60%" stopColor="#7c6df0" stopOpacity={0.05} />
+          <Stop offset="100%" stopColor="#7c6df0" stopOpacity={0} />
+        </SvgRadialGradient>
+        <SvgRadialGradient id="ambB" cx="50%" cy="50%" r="50%">
+          <Stop offset="0%" stopColor="#a394ff" stopOpacity={0.08} />
+          <Stop offset="100%" stopColor="#a394ff" stopOpacity={0} />
+        </SvgRadialGradient>
+      </Defs>
+      <Ellipse cx="12%" cy="-2%" rx="300" ry="170" fill="url(#ambA)" />
+      <Ellipse cx="100%" cy="16%" rx="230" ry="150" fill="url(#ambB)" />
+    </Svg>
+  );
+}
+
+// ── Gradient numerals (.m-number): white->lilac vertical text gradient ───────
+export function GradientNumber({
+  text, size = 26,
+}: { text: string; size?: number }) {
+  // Monospace digits: ~0.62em advance is enough width for the svg canvas.
+  const width = Math.ceil(text.length * size * 0.62) + 4;
+  const height = Math.ceil(size * 1.25);
+  return (
+    <Svg width={width} height={height}>
+      <Defs>
+        <SvgLinearGradient id="numGrad" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0%" stopColor={gradients.number[0]} />
+          <Stop offset="100%" stopColor={gradients.number[1]} />
+        </SvgLinearGradient>
+      </Defs>
+      <SvgText
+        x={0}
+        y={size}
+        fill="url(#numGrad)"
+        fontSize={size}
+        fontWeight="700"
+        fontFamily="monospace"
+      >
+        {text}
+      </SvgText>
+    </Svg>
   );
 }
 
@@ -81,7 +191,7 @@ export function ScreenHeader({ title, onBack }: { title: string; onBack?: () => 
     <View style={st.header}>
       {onBack && (
         <Pressable onPress={onBack} style={st.iconBtn} hitSlop={8}>
-          <Text style={{ color: colors.muted, fontSize: 18, marginTop: -2 }}>{"‹"}</Text>
+          <ChevronLeftIcon size={17} color={colors.muted} />
         </Pressable>
       )}
       <Text style={st.headerTitle}>{title}</Text>
@@ -165,6 +275,27 @@ export function SendErrorCard({ view, style }: { view: SendErrorView; style?: St
 }
 
 const st = StyleSheet.create({
+  btnPremiumShell: {
+    width: "100%",
+    borderRadius: radius.button,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.13)",
+    overflow: "hidden",
+    shadowColor: colors.brand,
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  btnPremiumFill: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 13,
+    paddingHorizontal: 24,
+  },
   btn: {
     width: "100%",
     flexDirection: "row",
