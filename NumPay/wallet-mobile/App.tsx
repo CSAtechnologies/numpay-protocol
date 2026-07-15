@@ -20,9 +20,11 @@ import { runDevnetTx } from "./spike/devnetTx";
 import { useMobileWallet, type AssetRow, type MobileWalletState } from "./src/wallet/useMobileWallet";
 import { colors, radius, type as ts, spacing } from "./src/ui/theme";
 import {
-  AlertCard, AmbientBackground, Btn, Chip, Card, Field, GradientNumber,
-  LogoMark, ScreenHeader, SectionLabel,
+  AlertCard, AmbientBackground, AnimatedLogo, Btn, Chip, Card, Field,
+  GradientNumber, LogoMark, ScreenHeader, SectionLabel,
 } from "./src/ui/components";
+import { BottomNav, BOTTOM_NAV_CLEARANCE, type NavTab } from "./src/ui/BottomNav";
+import { SettingsScreen } from "./src/screens/SettingsScreen";
 import {
   ActivityIcon, LayersIcon, LinkIcon, LockIcon, ReceiveIcon, SendIcon, SwapIcon,
 } from "./src/ui/icons";
@@ -42,7 +44,7 @@ import { clearReceiveWatch } from "./src/notify/receiveWatch";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
-  | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity" | "bpan" | "dapps" | "dev";
+  | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity" | "bpan" | "dapps" | "dev" | "settings";
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("loading");
@@ -59,7 +61,11 @@ export default function App() {
   const [relocked, setRelocked] = useState(false);
 
   const unlocked =
-    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev";
+    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev" || mode === "settings";
+  // The floating nav shows on its six tabs; focused flows (swap, bridge,
+  // dApps, dev) keep the full screen.
+  const navVisible =
+    mode === "home" || mode === "send" || mode === "receive" || mode === "bpan" || mode === "activity" || mode === "settings";
   const w = useMobileWallet(unlocked);
   const unlockedRef = useRef(unlocked);
   unlockedRef.current = unlocked;
@@ -121,7 +127,7 @@ export default function App() {
         return true;
       }
       if (m === "receive" || m === "send" || m === "swap" || m === "bridge" ||
-          m === "activity" || m === "bpan" || m === "dapps" || m === "dev") {
+          m === "activity" || m === "bpan" || m === "dapps" || m === "dev" || m === "settings") {
         setMode("home");
         return true;
       }
@@ -170,8 +176,17 @@ export default function App() {
     }
   };
 
+  const goReceive = () => {
+    setReceiveAddrs({ evm: w.evmAddress, nonEvm: w.nonEvmAddresses });
+    setMode("receive");
+  };
+  const navTo = (tab: NavTab) => {
+    if (tab === "receive") goReceive();
+    else setMode(tab);
+  };
+
   return (
-    <View style={st.container}>
+    <View style={[st.container, navVisible && { paddingBottom: BOTTOM_NAV_CLEARANCE }]}>
       <AmbientBackground />
       <StatusBar style="light" />
       {mode === "loading" && <Text style={st.dim}>loading…</Text>}
@@ -234,14 +249,18 @@ export default function App() {
           onSwap={() => setMode("swap")}
           onBridge={() => setMode("bridge")}
           onActivity={() => setMode("activity")}
-          onReceive={() => {
-            setReceiveAddrs({ evm: w.evmAddress, nonEvm: w.nonEvmAddresses });
-            setMode("receive");
-          }}
+          onReceive={goReceive}
           onLock={async () => { await lock(); setError(""); await refresh(); }}
           onBPAN={() => setMode("bpan")}
           onDapps={() => setMode("dapps")}
+        />
+      )}
+      {mode === "settings" && (
+        <SettingsScreen
+          onLock={async () => { await lock(); setError(""); await refresh(); }}
+          onDapps={() => setMode("dapps")}
           onDev={() => setMode("dev")}
+          onWipe={async () => { await wipeVault(); await clearReceiveWatch(); setError(""); await refresh(); }}
         />
       )}
       {mode === "dev" && (
@@ -294,6 +313,11 @@ export default function App() {
       {mode === "spike" && <Spike onBack={() => setMode("dev")} />}
       {mode === "devnet" && <DevnetTx onBack={() => setMode("dev")} />}
 
+      {/* Floating pill nav (extension Layout parity) on the six main tabs. */}
+      {navVisible && !relocked && (
+        <BottomNav active={mode as NavTab} onNavigate={navTo} />
+      )}
+
       {/* WalletConnect approval sheets (session proposals + signing requests)
           render over whatever screen is open; the re-lock overlay below still
           wins (higher zIndex), so an expired vault always re-auths first. */}
@@ -327,12 +351,12 @@ export default function App() {
   );
 }
 
-// Brand header for the auth screens: the popup's .logo-mark, now with the real
-// 135deg brand gradient, sized up and centered for the phone's tall canvas.
+// Brand header for the auth screens: the real NumPay logo with the extension
+// Welcome page's breathing-glow treatment, centered for the phone canvas.
 function AuthHeader() {
   return (
     <View style={st.authHeader}>
-      <LogoMark size={64} />
+      <AnimatedLogo size={72} />
       <Text style={st.authWordmark}>NumPay</Text>
     </View>
   );
@@ -465,12 +489,9 @@ function Dashboard(p: {
   onBPAN: () => void;
   onDapps: () => void;
   onLock: () => void;
-  onDev: () => void;
 }) {
   const { w } = p;
   const [filter, setFilter] = useState<string | null>(null);
-  // Dev tools are invisible in normal use: five taps on the version footer.
-  const devTaps = useRef(0);
   const rows = filter ? w.rows.filter((r) => r.chainId === filter) : w.rows;
   return (
     <View style={{ flex: 1 }}>
@@ -561,14 +582,7 @@ function Dashboard(p: {
             <Text style={st.dim}>Receive funds to get started.</Text>
           </View>
         )}
-        <Pressable
-          onPress={() => {
-            devTaps.current += 1;
-            if (devTaps.current >= 5) { devTaps.current = 0; p.onDev(); }
-          }}
-        >
-          <Text style={st.version}>NumPay · v0.1.0</Text>
-        </Pressable>
+        <View style={{ height: 24 }} />
       </ScrollView>
     </View>
   );

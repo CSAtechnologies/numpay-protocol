@@ -2,9 +2,9 @@
 // (index.css component classes + AlertCard.tsx). Every mobile screen builds
 // from these so the phone app keeps the extension's visual language; only
 // touch sizing differs where noted.
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import {
-  Pressable, StyleSheet, Text, TextInput, View,
+  Animated, Easing, Image, Pressable, StyleSheet, Text, TextInput, View,
   type StyleProp, type TextInputProps, type ViewStyle,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
@@ -72,24 +72,73 @@ export function Btn({
   );
 }
 
-// ── Logo mark (.logo-mark): 135deg brand gradient tile with the N ────────────
+// ── Logo mark: the REAL NumPay logo asset (ext public/logo.png), with the
+//    .logo-mark brand glow behind it ────────────────────────────────────────────
+const LOGO = require("../../assets/logo.png");
+
 export function LogoMark({ size = 28 }: { size?: number }) {
   return (
-    <LinearGradient
-      colors={gradients.brand}
-      locations={[0, 0.5, 1]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
+    <View
       style={{
-        width: size, height: size, borderRadius: size * 0.32,
-        alignItems: "center", justifyContent: "center",
         shadowColor: colors.brand, shadowOpacity: 0.5,
         shadowRadius: 10, shadowOffset: { width: 0, height: 6 },
         elevation: 8,
       }}
     >
-      <Text style={{ color: "#fff", fontWeight: "700", fontSize: size * 0.46 }}>N</Text>
-    </LinearGradient>
+      {/* The asset bakes in a white square; round it into an app-icon tile. */}
+      <Image
+        source={LOGO}
+        style={{ width: size, height: size, borderRadius: size * 0.24 }}
+        resizeMode="cover"
+      />
+    </View>
+  );
+}
+
+/**
+ * Auth-screen logo (the extension Welcome page's logo-ring treatment): the
+ * real logo with a slowly breathing brand glow behind it.
+ */
+export function AnimatedLogo({ size = 72 }: { size?: number }) {
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1, duration: 2200,
+          easing: Easing.inOut(Easing.ease), useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0, duration: 2200,
+          easing: Easing.inOut(Easing.ease), useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+
+  const ring = size * 1.9;
+  return (
+    <View style={{ width: ring, height: ring, alignItems: "center", justifyContent: "center" }}>
+      <Animated.View
+        style={{
+          position: "absolute",
+          width: ring, height: ring, borderRadius: ring / 2,
+          backgroundColor: colors.brandTint,
+          opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] }),
+          transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1.06] }) }],
+        }}
+      />
+      <View
+        style={{
+          position: "absolute",
+          width: size * 1.35, height: size * 1.35, borderRadius: (size * 1.35) / 2,
+          borderWidth: 1, borderColor: "rgba(124, 109, 240, 0.3)",
+        }}
+      />
+      <LogoMark size={size} />
+    </View>
   );
 }
 

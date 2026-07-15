@@ -104,3 +104,80 @@ export function GlobeIcon({ size = 20, color = "#fff" }: IconProps) {
     </Svg>
   );
 }
+
+// ── Floating-nav icons (ext Nav*Icon ports: stroke 1.9 + a fill layer that
+//    fades in at 0.16 opacity when the tab is active) ─────────────────────────
+
+interface NavIconProps extends IconProps {
+  active?: boolean;
+}
+
+function navFrame(size: number) {
+  return { ...frame(size), strokeWidth: 1.9 };
+}
+
+const GEAR_D =
+  "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z";
+
+export function NavWalletIcon({ size = 20, color = "#fff", active }: NavIconProps) {
+  return (
+    <Svg {...navFrame(size)} stroke={color}>
+      <Rect x={3} y={6.2} width={18} height={13.2} rx={3.6} fill={color} fillOpacity={active ? 0.16 : 0} stroke="none" />
+      <Rect x={3} y={6.2} width={18} height={13.2} rx={3.6} />
+      <Path d="M21 11h-3.4a1.9 1.9 0 0 0 0 3.8H21" />
+    </Svg>
+  );
+}
+
+export function NavSendIcon({ size = 20, color = "#fff", active }: NavIconProps) {
+  return (
+    <Svg {...navFrame(size)} stroke={color}>
+      <Path d="M21 3 15 21l-3.6-7.4L3.6 9.9Z" fill={color} fillOpacity={active ? 0.16 : 0} stroke="none" />
+      <Path d="M21 3 3.6 9.9l7.8 3.7L15 21Z" />
+      <Path d="M21 3l-9.6 10.6" />
+    </Svg>
+  );
+}
+
+export function NavReceiveIcon({ size = 20, color = "#fff", active }: NavIconProps) {
+  return (
+    <Svg {...navFrame(size)} stroke={color}>
+      <Path d="M3.6 14v3.2a3.2 3.2 0 0 0 3.2 3.2h10.4a3.2 3.2 0 0 0 3.2-3.2V14Z" fill={color} fillOpacity={active ? 0.16 : 0} stroke="none" />
+      <Path d="M12 3.6v9.8" />
+      <Path d="m8.1 9.7 3.9 3.9 3.9-3.9" />
+      <Path d="M3.6 14v3.2a3.2 3.2 0 0 0 3.2 3.2h10.4a3.2 3.2 0 0 0 3.2-3.2V14" />
+    </Svg>
+  );
+}
+
+export function NavBpanIcon({ size = 20, color = "#fff", active }: NavIconProps) {
+  return (
+    <Svg {...navFrame(size)} stroke={color}>
+      <Rect x={3} y={4.6} width={18} height={14.8} rx={4.4} fill={color} fillOpacity={active ? 0.16 : 0} stroke="none" />
+      <Rect x={3} y={4.6} width={18} height={14.8} rx={4.4} />
+      <Path d="M10.4 8.7 9 15.3" />
+      <Path d="M15.2 8.7 13.8 15.3" />
+      <Path d="M8.2 11.1h7.6" />
+      <Path d="M7.8 13.4h7.6" />
+    </Svg>
+  );
+}
+
+export function NavActivityIcon({ size = 20, color = "#fff", active }: NavIconProps) {
+  return (
+    <Svg {...navFrame(size)} stroke={color}>
+      <Path d="M2.6 12.6H6l2.6-6.2 3.4 11.2 2.6-7.8 1.4 2.8h3.4V20.5H2.6Z" fill={color} fillOpacity={active ? 0.16 : 0} stroke="none" />
+      <Path d="M2.6 12.6H6l2.6-6.2 3.4 11.2 2.6-7.8 1.4 2.8h3.4" />
+    </Svg>
+  );
+}
+
+export function NavSettingsIcon({ size = 20, color = "#fff", active }: NavIconProps) {
+  return (
+    <Svg {...navFrame(size)} stroke={color}>
+      <Path d={GEAR_D} fill={color} fillOpacity={active ? 0.16 : 0} stroke="none" />
+      <Path d={GEAR_D} />
+      <Circle cx={12} cy={12} r={3} />
+    </Svg>
+  );
+}

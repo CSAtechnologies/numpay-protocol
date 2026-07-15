@@ -38,7 +38,14 @@ import { getItem, setItem } from "@numpay/core/storage";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import { savePublicAddresses } from "../notify/receiveWatch";
 
-const DUST_USD = 0.01; // same cutoff as the extension dashboard
+const DUST_USD = 0.01; // same cutoff as the extension dashboard (tokens only)
+
+// Zero-balance display order for the natives list: the majors a wallet user
+// expects to see first, then everything else in sweep order.
+const MAJOR_ORDER = [
+  "ethereum", "bitcoin", "solana", "bsc", "base", "polygon", "arbitrum",
+  "optimism", "avalanche", "tron", "sui", "xrp", "litecoin",
+];
 
 // Hard ceiling on the busy-guarded refresh phase. Found on-device: a hung
 // upstream (no per-call timeout) kept `busy` true for minutes, so the refresh
@@ -301,12 +308,19 @@ export function useMobileWallet(unlocked: boolean): MobileWalletState {
   }, [unlocked, refresh]);
 
   const tokens = tokenRows(tokensByChain, hidden, rates);
-  // Natives with a balance always show; zero-balance natives only clutter a
-  // phone screen, but keep ETH so an empty wallet is not a blank page.
-  const visibleNatives = natives.filter(
-    (r) => r.balanceNum > 0 || r.chainId === "ethereum"
-  );
-  const rows = [...visibleNatives, ...tokens].sort((a, b) => b.usdValue - a.usdValue);
+  // Every native the sweeps return stays VISIBLE, zero balance included —
+  // matching the extension dashboard (user directive 2026-07-15: majors must
+  // never be hidden). Holders sort to the top by USD value; the zero-balance
+  // tail follows a fixed major-chain order instead of alphabet soup.
+  const rows = [...natives, ...tokens].sort((a, b) => {
+    if (b.usdValue !== a.usdValue) return b.usdValue - a.usdValue;
+    const aHolds = a.balanceNum > 0 ? 0 : 1;
+    const bHolds = b.balanceNum > 0 ? 0 : 1;
+    if (aHolds !== bHolds) return aHolds - bHolds;
+    const ai = MAJOR_ORDER.indexOf(a.chainId);
+    const bi = MAJOR_ORDER.indexOf(b.chainId);
+    return (ai === -1 ? MAJOR_ORDER.length : ai) - (bi === -1 ? MAJOR_ORDER.length : bi);
+  });
   const portfolioUsd = rows.reduce((s, r) => s + r.usdValue, 0);
   const chainIds = [...new Set(rows.map((r) => r.chainId))];
 
