@@ -36,6 +36,7 @@ import { chainNameOf } from "@numpay/core/txLog";
 import { getOwnedBPANCount, findOwnedBPANs } from "@numpay/core/bpan";
 import { getItem, setItem } from "@numpay/core/storage";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
+import { savePublicAddresses } from "../notify/receiveWatch";
 
 const DUST_USD = 0.01; // same cutoff as the extension dashboard
 
@@ -196,6 +197,9 @@ export function useMobileWallet(unlocked: boolean): MobileWalletState {
           },
         };
         addrCache.current = cached;
+        // Public addresses only: lets the background receive watcher sweep
+        // while the vault is locked (notify/receiveWatch.ts).
+        void savePublicAddresses(cached.evm, cached.addrs);
       }
       const { evm, addrs } = cached;
       setEvmAddress(evm);

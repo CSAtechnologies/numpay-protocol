@@ -29,6 +29,10 @@ import { ActivityScreen } from "./src/screens/ActivityScreen";
 import { BPANScreen } from "./src/screens/BPANScreen";
 import { WalletConnectScreen } from "./src/screens/WalletConnectScreen";
 import { WcApprovalHost } from "./src/walletconnect/WcApprovalHost";
+// Side-effect import: defines the background receive-watch task at bundle
+// load so headless launches can find it (see notify/backgroundTask.ts).
+import { ensureReceiveWatch } from "./src/notify/backgroundTask";
+import { clearReceiveWatch } from "./src/notify/receiveWatch";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
@@ -86,6 +90,13 @@ export default function App() {
   useEffect(() => {
     if (unlocked && !relocked) void touchActivity();
   }, [mode, unlocked, relocked]);
+
+  // Arm the closed-app receive watcher once per unlock: asks notification
+  // permission on first use, then registers the OS background task. Failure
+  // (denied / restricted) is silent by design — the wallet works without it.
+  useEffect(() => {
+    if (unlocked) void ensureReceiveWatch();
+  }, [unlocked]);
 
   // Hardware back: sub-screens return home and onboarding steps step back,
   // instead of the whole app exiting (the long-standing "back kills NumPay"
@@ -222,7 +233,7 @@ export default function App() {
           onDapps={() => setMode("dapps")}
           onSpike={() => setMode("spike")}
           onDevnet={() => setMode("devnet")}
-          onWipe={async () => { await wipeVault(); setError(""); await refresh(); }}
+          onWipe={async () => { await wipeVault(); await clearReceiveWatch(); setError(""); await refresh(); }}
         />
       )}
       {mode === "receive" && receiveAddrs && (
