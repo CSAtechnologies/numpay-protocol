@@ -5,11 +5,13 @@
 // Phase 0. FLAG_SECURE on secret screens is a follow-up (needs
 // expo-screen-capture or a config plugin).
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { LinearGradient } from "expo-linear-gradient";
 import { BackHandler, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 
 import { createWallet, importFromMnemonic } from "@numpay/core/wallet";
 import { formatBPAN } from "@numpay/core/bpan";
+import { chainNameOf } from "@numpay/core/txLog";
 import {
   createVault, getLastArgonMs, getStatus, getUnlockedMnemonic, lock,
   autoLockCheck, touchActivity, unlockWithBiometrics, unlockWithPin,
@@ -20,13 +22,13 @@ import { runDevnetTx } from "./spike/devnetTx";
 import { useMobileWallet, type AssetRow, type MobileWalletState } from "./src/wallet/useMobileWallet";
 import { colors, radius, type as ts, spacing } from "./src/ui/theme";
 import {
-  AlertCard, AmbientBackground, AnimatedLogo, Btn, Chip, Card, Field,
+  AlertCard, AmbientBackground, AnimatedLogo, Btn, Card, Field,
   GradientNumber, LogoMark, ScreenHeader, SectionLabel,
 } from "./src/ui/components";
 import { BottomNav, BOTTOM_NAV_CLEARANCE, type NavTab } from "./src/ui/BottomNav";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import {
-  ActivityIcon, LayersIcon, LinkIcon, LockIcon, ReceiveIcon, SendIcon, SwapIcon,
+  LayersIcon, LinkIcon, LockIcon, ReceiveIcon, SendIcon, SwapIcon,
 } from "./src/ui/icons";
 import { AssetIcon, ChainBadge, ChainIcon } from "./src/ui/coins";
 import { ReceiveScreen, type ReceiveAddrs } from "./src/screens/ReceiveScreen";
@@ -527,13 +529,17 @@ function Dashboard(p: {
 }) {
   const { w } = p;
   const [filter, setFilter] = useState<string | null>(null);
+  const [showNetworks, setShowNetworks] = useState(false);
   const rows = filter ? w.rows.filter((r) => r.chainId === filter) : w.rows;
+  const filterName = filter ? (chainNameOf(filter) ?? filter) : "All Assets";
   return (
     <View style={{ flex: 1 }}>
-      {/* Header: gradient logo mark + wordmark + dApps / lock icon buttons */}
+      {/* Header: account pill left, dApps + lock right (ext Dashboard header) */}
       <View style={st.homeHeader}>
-        <LogoMark size={28} />
-        <Text style={st.wordmark}>NumPay</Text>
+        <View style={st.acctPill}>
+          <LogoMark size={18} />
+          <Text style={st.acctName}>NumPay</Text>
+        </View>
         <View style={{ flex: 1 }} />
         <Pressable onPress={p.onDapps} style={st.iconBtn} hitSlop={8}>
           <LinkIcon size={15} color={colors.muted} />
@@ -542,57 +548,6 @@ function Dashboard(p: {
           <LockIcon size={15} color={colors.muted} />
         </Pressable>
       </View>
-
-      {/* Portfolio hero. Auto-displays the wallet's BPAN once known (the
-          product's identity rule) with the popup's gradient numerals; the raw
-          address stays as the fallback. Tapping opens BPAN management. */}
-      <Pressable onPress={p.onBPAN} style={({ pressed }) => [st.hero, pressed && { opacity: 0.85 }]}>
-        <View style={st.heroLabelRow}>
-          <View style={st.greenDot} />
-          <SectionLabel
-            text={w.bpan ? "Your number · Active" : "Portfolio"}
-            style={{ color: colors.brand2 } as object}
-          />
-          <View style={{ flex: 1 }} />
-          <Text style={st.heroManage}>{w.bpan ? "Manage ›" : "Set up BPAN ›"}</Text>
-        </View>
-        {!!w.bpan && (
-          <View style={{ marginTop: 8 }}>
-            <GradientNumber text={formatBPAN(w.bpan)} size={ts.hero} />
-          </View>
-        )}
-        <Text style={[st.portfolio, !!w.bpan && { fontSize: 22, marginTop: 4 }]}>
-          ${w.portfolioUsd.toFixed(2)}
-          {w.loading ? "  …" : ""}
-        </Text>
-        <Text style={st.heroAddr} numberOfLines={1}>{w.evmAddress}</Text>
-      </Pressable>
-
-      {/* Action row: the extension's stroke glyphs on brand-toned discs */}
-      <View style={st.actions}>
-        <ActionCircle label="Send" color={colors.brand} Icon={SendIcon} onPress={p.onSend} />
-        <ActionCircle label="Receive" color="#22c55e" Icon={ReceiveIcon} onPress={p.onReceive} />
-        <ActionCircle label="Swap" color="#f59e0b" Icon={SwapIcon} onPress={p.onSwap} />
-        <ActionCircle label="Bridge" color="#8b5cf6" Icon={LayersIcon} onPress={p.onBridge} />
-        <ActionCircle label="Activity" color="#0ea5e9" Icon={ActivityIcon} onPress={p.onActivity} />
-      </View>
-
-      {!!w.error && (
-        <AlertCard tone="danger" title="Refresh failed" body={w.error} style={{ marginBottom: 8 }} />
-      )}
-
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, marginBottom: 6 }}>
-        <Chip label="All" active={filter === null} onPress={() => setFilter(null)} />
-        {w.chainIds.map((id) => (
-          <Chip
-            key={id}
-            label={id}
-            active={filter === id}
-            onPress={() => setFilter(id)}
-            icon={<ChainIcon chainId={id} size={16} />}
-          />
-        ))}
-      </ScrollView>
 
       <ScrollView
         style={{ flex: 1 }}
@@ -607,7 +562,98 @@ function Dashboard(p: {
           />
         }
       >
-        <SectionLabel text="Assets" style={{ marginTop: 8, marginBottom: 2 } as object} />
+        {/* Hero: the ext's centered gradient portfolio number, no card. */}
+        <View style={{ alignItems: "center", marginTop: 14 }}>
+          <GradientNumber text={`$${w.portfolioUsd.toFixed(2)}`} size={42} />
+          <Text style={st.heroSub}>
+            Total Portfolio{w.loading ? "  · syncing…" : ""}
+          </Text>
+        </View>
+
+        {/* Pills: chain filter + the wallet's BPAN (identity rule) */}
+        <View style={st.pillRow}>
+          <Pressable style={st.filterPill} onPress={() => setShowNetworks((v) => !v)}>
+            {filter && <ChainIcon chainId={filter} size={15} />}
+            <Text style={st.filterPillText}>{filterName}</Text>
+            <Text style={st.pillChevron}>{showNetworks ? "▴" : "▾"}</Text>
+          </Pressable>
+          <Pressable style={st.bpanPill} onPress={p.onBPAN}>
+            <Text style={st.bpanHash}>#</Text>
+            <Text style={st.bpanPillText}>
+              {w.bpan ? formatBPAN(w.bpan) : "Set up BPAN ›"}
+            </Text>
+          </Pressable>
+        </View>
+
+        {/* Network filter dropdown (ext parity) */}
+        {showNetworks && (
+          <Card style={{ marginBottom: 12, maxHeight: 250 }}>
+            <ScrollView nestedScrollEnabled>
+              <Pressable
+                style={st.netRow}
+                onPress={() => { setFilter(null); setShowNetworks(false); }}
+              >
+                <Text style={[st.netName, filter === null && { color: colors.brand2 }]}>All Assets</Text>
+              </Pressable>
+              {w.chainIds.map((id) => (
+                <Pressable
+                  key={id}
+                  style={st.netRow}
+                  onPress={() => { setFilter(id); setShowNetworks(false); }}
+                >
+                  <ChainIcon chainId={id} size={16} />
+                  <Text style={[st.netName, filter === id && { color: colors.brand2 }]}>
+                    {chainNameOf(id) ?? id}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </Card>
+        )}
+
+        {/* Primary Send CTA (ext: gradient bar, "Pay anyone, any chain") */}
+        <Pressable onPress={p.onSend} style={({ pressed }) => [pressed && { transform: [{ scale: 0.99 }] }]}>
+          <LinearGradient
+            colors={["#b5a8ff", "#7c6df0", "#5b4cdb"]}
+            locations={[0, 0.5, 1]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={st.sendCta}
+          >
+            <View style={st.sendCtaChip}>
+              <SendIcon size={15} color="#fff" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={st.sendCtaTitle}>Send</Text>
+              <Text style={st.sendCtaSub}>Pay anyone, any chain</Text>
+            </View>
+            <Text style={st.sendCtaChevron}>{"›"}</Text>
+          </LinearGradient>
+        </Pressable>
+
+        {/* Secondary row: Receive / Swap / Bridge (ext has DeFi in slot 3) */}
+        <View style={st.actionCards}>
+          {([
+            { label: "Receive", Icon: ReceiveIcon, onPress: p.onReceive },
+            { label: "Swap", Icon: SwapIcon, onPress: p.onSwap },
+            { label: "Bridge", Icon: LayersIcon, onPress: p.onBridge },
+          ] as const).map(({ label, Icon, onPress }) => (
+            <Pressable
+              key={label}
+              onPress={onPress}
+              style={({ pressed }) => [st.actionCard, pressed && { borderColor: colors.brand }]}
+            >
+              <Icon size={15} color={colors.muted} />
+              <Text style={st.actionCardLabel}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {!!w.error && (
+          <AlertCard tone="danger" title="Refresh failed" body={w.error} style={{ marginBottom: 8 }} />
+        )}
+
+        <SectionLabel text="Assets" style={{ marginTop: 18, marginBottom: 2 } as object} />
         {rows.map((r) => (
           <AssetRowView key={r.key} row={r} onPress={() => p.onOpenAsset(r)} />
         ))}
@@ -620,22 +666,6 @@ function Dashboard(p: {
         <View style={{ height: 24 }} />
       </ScrollView>
     </View>
-  );
-}
-
-function ActionCircle(p: {
-  label: string;
-  color: string;
-  Icon: (props: { size?: number; color?: string }) => ReactElement;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable onPress={p.onPress} style={({ pressed }) => [st.actionCircle, pressed && { transform: [{ scale: 0.93 }] }]}>
-      <View style={[st.actionIcon, { backgroundColor: p.color }]}>
-        <p.Icon size={21} color="#fff" />
-      </View>
-      <Text style={st.actionLabel}>{p.label}</Text>
-    </Pressable>
   );
 }
 
@@ -792,36 +822,76 @@ const st = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
 
-  hero: {
-    backgroundColor: colors.surface2,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    borderRadius: radius.hero,
-    padding: spacing.cardPad,
-    marginTop: 6,
+  acctPill: {
+    flexDirection: "row", alignItems: "center", gap: 7,
+    paddingVertical: 5, paddingHorizontal: 10,
+    borderRadius: radius.pill,
+    backgroundColor: colors.card,
+    borderWidth: 1, borderColor: colors.border,
   },
-  heroLabelRow: { flexDirection: "row", alignItems: "center", gap: 7 },
-  heroManage: { color: colors.brand2, fontSize: ts.small, fontWeight: "600" },
-  greenDot: {
-    width: 6, height: 6, borderRadius: 3, backgroundColor: colors.success,
-  },
-  portfolio: {
-    color: colors.textPrimary, fontSize: 32, fontWeight: "700",
-    marginTop: 8, fontVariant: ["tabular-nums"],
-  },
-  heroAddr: { color: colors.muted, fontSize: ts.sub, marginTop: 8, fontFamily: "monospace" },
+  acctName: { color: colors.textPrimary, fontSize: 13, fontWeight: "600" },
+  heroSub: { color: colors.textSecondary, fontSize: 12, marginTop: 4 },
 
-  actions: {
-    flexDirection: "row", justifyContent: "space-between",
-    marginTop: 14, marginBottom: 12,
-    paddingHorizontal: 4,
+  pillRow: {
+    flexDirection: "row", justifyContent: "center", alignItems: "center",
+    gap: 8, marginTop: 14, marginBottom: 14,
   },
-  actionCircle: { alignItems: "center", gap: 7, padding: 2 },
-  actionIcon: {
-    width: 46, height: 46, borderRadius: 23,
+  filterPill: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    paddingVertical: 7, paddingHorizontal: 13,
+    borderRadius: radius.pill,
+    backgroundColor: colors.card,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  filterPillText: { color: colors.textPrimary, fontSize: 12.5, fontWeight: "500" },
+  pillChevron: { color: colors.muted, fontSize: 9 },
+  bpanPill: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    paddingVertical: 7, paddingHorizontal: 13,
+    borderRadius: radius.pill,
+    backgroundColor: colors.brandTint,
+    borderWidth: 1, borderColor: "rgba(124, 109, 240, 0.32)",
+  },
+  bpanHash: { color: colors.brand2, fontSize: 12, fontWeight: "700" },
+  bpanPillText: {
+    color: colors.brand2, fontSize: 12.5, fontWeight: "600",
+    fontVariant: ["tabular-nums"],
+  },
+  netRow: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    paddingHorizontal: 14, paddingVertical: 11,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(42, 36, 80, 0.7)",
+  },
+  netName: { color: colors.textPrimary, fontSize: 13, fontWeight: "500" },
+
+  sendCta: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    paddingVertical: 13, paddingHorizontal: 14,
+    borderRadius: 14,
+    shadowColor: colors.brand,
+    shadowOpacity: 0.85, shadowRadius: 12, shadowOffset: { width: 0, height: 10 },
+    elevation: 10,
+  },
+  sendCtaChip: {
+    width: 32, height: 32, borderRadius: 9,
+    backgroundColor: "rgba(255,255,255,0.16)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
     alignItems: "center", justifyContent: "center",
   },
-  actionLabel: { color: colors.textSecondary, fontSize: ts.small, fontWeight: "500" },
+  sendCtaTitle: { color: "#fff", fontSize: 15, fontWeight: "600", letterSpacing: -0.3 },
+  sendCtaSub: { color: "rgba(255,255,255,0.75)", fontSize: 11, marginTop: 1 },
+  sendCtaChevron: { color: "rgba(255,255,255,0.7)", fontSize: 18, marginTop: -2 },
+
+  actionCards: { flexDirection: "row", gap: 7, marginTop: 8 },
+  actionCard: {
+    flex: 1, alignItems: "center", gap: 5,
+    paddingVertical: 9,
+    borderRadius: 11,
+    backgroundColor: colors.card,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  actionCardLabel: { color: colors.textPrimary, fontSize: 11, fontWeight: "500" },
 
   tokenRow: {
     flexDirection: "row", alignItems: "center",
