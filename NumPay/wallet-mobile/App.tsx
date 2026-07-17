@@ -8,8 +8,9 @@ import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-// Hold the native splash (dark bg + NumPay mark, app.json) until React mounts,
-// so it hands straight to the JS Splash overlay with no white flash between.
+// Hold the branded native splash (dark bg + NumPay mark, app.json) until the
+// first real screen is ready; hideAsync then reveals the lock/onboard screen,
+// which animates the logo in itself. No separate JS splash (no double reveal).
 SplashScreen.preventAutoHideAsync().catch(() => {});
 import { LinearGradient } from "expo-linear-gradient";
 import { BackHandler, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
@@ -51,7 +52,6 @@ import { WcApprovalHost } from "./src/walletconnect/WcApprovalHost";
 import { ensureReceiveWatch } from "./src/notify/backgroundTask";
 import { clearReceiveWatch } from "./src/notify/receiveWatch";
 import { PinPad } from "./src/ui/PinPad";
-import { Splash } from "./src/ui/Splash";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
@@ -73,8 +73,6 @@ export default function App() {
   // after re-auth the user resumes exactly where they were — a mid-send
   // expiry used to silently unmount the form and its error card.
   const [relocked, setRelocked] = useState(false);
-  // Cold-start splash animation; unmounts when its own animation finishes.
-  const [showSplash, setShowSplash] = useState(true);
   // Active wallet id (multi-wallet): drives the useMobileWallet reload on switch.
   const [activeWalletId, setActiveWalletId] = useState<string | null>(null);
   const [addWalletOpen, setAddWalletOpen] = useState(false);
@@ -112,10 +110,12 @@ export default function App() {
     setRelocked(true);
   }, []);
 
-  // Reveal the JS tree (which mounts the JS Splash overlay on top) and drop the
-  // native splash — both are the dark bg + NumPay mark, so the transition is
-  // seamless.
-  useEffect(() => { SplashScreen.hideAsync().catch(() => {}); }, []);
+  // Hold the branded native splash until the first real screen is resolved
+  // (lock / onboard / home), so it hands straight to content with no black
+  // flash — the lock/onboard screens animate the logo in themselves.
+  useEffect(() => {
+    if (mode !== "loading") SplashScreen.hideAsync().catch(() => {});
+  }, [mode]);
 
   useEffect(() => {
     refresh().catch((e) => setError(String(e)));
@@ -426,9 +426,6 @@ export default function App() {
           />
         </View>
       )}
-
-      {/* Cold-start splash: over everything, unmounts when its animation ends. */}
-      {showSplash && <Splash onFinish={() => setShowSplash(false)} />}
     </View>
   );
 }
