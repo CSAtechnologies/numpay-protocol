@@ -42,8 +42,11 @@ const BIO_ENABLED_FLAG = "numpay_bio_enabled";
 const SS_PIN_WRAP = "numpay_dk_pin";
 const SS_BIO_KEY = "numpay_dk_bio";
 const SS_ATTEMPTS = "numpay_pin_attempts";
-// In-memory session
-const SESSION_MNEMONIC = "numpay_mobile_session";
+// In-memory session. Multi-wallet: the whole decrypted payload AND the data key
+// live here while unlocked, so switching/adding/removing wallets re-encrypts the
+// blob without a re-PIN. The data key in RAM is no more sensitive than the
+// mnemonics already there; both are dropped by lock()/auto-lock.
+const SESSION_UNLOCKED = "numpay_mobile_session"; // JSON { dataKey, payload }
 const SESSION_ACTIVITY = "numpay_lastActivity";
 
 // Same parameters as the extension vault (m in KiB). The stretch runs in the
@@ -78,9 +81,42 @@ export class VaultError extends Error {
   }
 }
 
-interface VaultPayload { v: 1; mnemonic: string; createdAt: number }
+// One wallet inside the vault. `id` is stable for the wallet's lifetime and is
+// how the UI addresses it (switch/rename/remove).
+export interface WalletEntry {
+  id: string;
+  name: string;
+  mnemonic: string;
+  createdAt: number;
+}
+// v2: multiple wallets + which one is active. v1 (single mnemonic) is migrated
+// transparently on unlock and rewritten as v2 on the next mutation.
+interface VaultPayloadV1 { v: 1; mnemonic: string; createdAt: number }
+interface VaultPayload { v: 2; wallets: WalletEntry[]; activeId: string }
 interface PinWrap { salt: string; iv: string; wrapped: string } // all base64
 interface AttemptState { fails: number; lockUntil: number }
+// What the in-memory session holds while unlocked.
+interface Unlocked { dataKey: string; payload: VaultPayload } // dataKey base64
+
+function newId(): string {
+  return hex(rand(8));
+}
+
+// Bring any stored payload up to the current shape.
+function migrate(raw: VaultPayloadV1 | VaultPayload): VaultPayload {
+  if (raw.v === 2) return raw;
+  const id = newId();
+  return {
+    v: 2,
+    wallets: [{ id, name: "Wallet 1", mnemonic: raw.mnemonic, createdAt: raw.createdAt }],
+    activeId: id,
+  };
+}
+
+function activeMnemonic(p: VaultPayload): string {
+  const w = p.wallets.find((x) => x.id === p.activeId) ?? p.wallets[0];
+  return w?.mnemonic ?? "";
+}
 
 let lastArgonMs: number | null = null;
 /** Duration of the most recent argon2id PIN stretch on this device, in ms. */
@@ -132,15 +168,46 @@ async function decryptVaultBlob(dataKey: Uint8Array): Promise<VaultPayload> {
   const { iv, ct } = JSON.parse(raw) as { iv: string; ct: string };
   try {
     const pt = gcm(dataKey, unb64(iv)).decrypt(unb64(ct));
-    return JSON.parse(new TextDecoder().decode(pt)) as VaultPayload;
+    const parsed = JSON.parse(new TextDecoder().decode(pt)) as VaultPayloadV1 | VaultPayload;
+    return migrate(parsed);
   } catch {
     throw new VaultError("corrupt", "Vault data failed to decrypt.");
   }
 }
 
-async function openSession(mnemonic: string): Promise<void> {
-  await setSession(SESSION_MNEMONIC, mnemonic);
+// Encrypt a payload under the data key and persist the blob (fresh IV each time).
+async function writeVaultBlob(dataKey: Uint8Array, payload: VaultPayload): Promise<void> {
+  const iv = rand(12);
+  const ct = gcm(dataKey, iv).encrypt(utf8(JSON.stringify(payload)));
+  await setItem(VAULT_BLOB_KEY, JSON.stringify({ iv: b64(iv), ct: b64(ct) }));
+}
+
+async function openSession(dataKey: Uint8Array, payload: VaultPayload): Promise<void> {
+  const u: Unlocked = { dataKey: b64(dataKey), payload };
+  await setSession(SESSION_UNLOCKED, JSON.stringify(u));
   await setSession(SESSION_ACTIVITY, String(Date.now()));
+}
+
+async function readSession(): Promise<Unlocked | null> {
+  const raw = await getSession(SESSION_UNLOCKED);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as Unlocked;
+  } catch {
+    return null;
+  }
+}
+
+// Apply a mutation to the unlocked payload, re-encrypt the blob, refresh the
+// session. Throws "no-vault" when locked (no data key available).
+async function mutateUnlocked(fn: (p: VaultPayload) => VaultPayload): Promise<VaultPayload> {
+  const u = await readSession();
+  if (!u) throw new VaultError("no-vault", "Wallet is locked.");
+  const dataKey = unb64(u.dataKey);
+  const next = fn(u.payload);
+  await writeVaultBlob(dataKey, next);
+  await openSession(dataKey, next);
+  return next;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -181,11 +248,15 @@ export async function createVault(
 ): Promise<void> {
   const dataKey = rand(32);
 
-  // Vault blob under the random data key (MMKV: ciphertext only).
-  const blobIv = rand(12);
-  const payload: VaultPayload = { v: 1, mnemonic, createdAt: Date.now() };
-  const ct = gcm(dataKey, blobIv).encrypt(utf8(JSON.stringify(payload)));
-  await setItem(VAULT_BLOB_KEY, JSON.stringify({ iv: b64(blobIv), ct: b64(ct) }));
+  // Vault blob under the random data key (MMKV: ciphertext only). One wallet to
+  // start; more are added via addWallet without a re-PIN.
+  const id = newId();
+  const payload: VaultPayload = {
+    v: 2,
+    wallets: [{ id, name: "Wallet 1", mnemonic, createdAt: Date.now() }],
+    activeId: id,
+  };
+  await writeVaultBlob(dataKey, payload);
 
   // PIN path: argon2id-wrapped data key, at rest inside the Keystore-encrypted
   // SecureStore.
@@ -211,7 +282,7 @@ export async function createVault(
   await setItem(BIO_ENABLED_FLAG, bioStored ? "1" : "0");
 
   await writeAttempts({ fails: 0, lockUntil: 0 });
-  await openSession(mnemonic);
+  await openSession(dataKey, payload);
 }
 
 export async function unlockWithPin(pin: string): Promise<string> {
@@ -245,8 +316,8 @@ export async function unlockWithPin(pin: string): Promise<string> {
 
   await writeAttempts({ fails: 0, lockUntil: 0 });
   const payload = await decryptVaultBlob(dataKey);
-  await openSession(payload.mnemonic);
-  return payload.mnemonic;
+  await openSession(dataKey, payload);
+  return activeMnemonic(payload);
 }
 
 export async function unlockWithBiometrics(): Promise<string> {
@@ -263,27 +334,29 @@ export async function unlockWithBiometrics(): Promise<string> {
   }
   if (!dataKeyB64) throw new VaultError("no-biometrics", "Biometric unlock is not set up.");
 
-  const payload = await decryptVaultBlob(unb64(dataKeyB64));
+  const dataKey = unb64(dataKeyB64);
+  const payload = await decryptVaultBlob(dataKey);
   await writeAttempts({ fails: 0, lockUntil: 0 });
-  await openSession(payload.mnemonic);
-  return payload.mnemonic;
+  await openSession(dataKey, payload);
+  return activeMnemonic(payload);
 }
 
-/** Mnemonic from the in-memory session, or null when locked. */
+/** Mnemonic of the ACTIVE wallet from the in-memory session, or null when locked. */
 export async function getUnlockedMnemonic(): Promise<string | null> {
-  return getSession(SESSION_MNEMONIC);
+  const u = await readSession();
+  return u ? activeMnemonic(u.payload) : null;
 }
 
 export async function touchActivity(): Promise<void> {
-  if (await getSession(SESSION_MNEMONIC)) {
+  if (await getSession(SESSION_UNLOCKED)) {
     await setSession(SESSION_ACTIVITY, String(Date.now()));
   }
 }
 
 /** Drops the session if idle past the auto-lock window. Returns true if it locked. */
 export async function autoLockCheck(): Promise<boolean> {
-  const mn = await getSession(SESSION_MNEMONIC);
-  if (!mn) return false;
+  const u = await getSession(SESSION_UNLOCKED);
+  if (!u) return false;
   const last = Number((await getSession(SESSION_ACTIVITY)) ?? 0);
   if (Date.now() - last > AUTO_LOCK_MINUTES * 60_000) {
     await lock();
@@ -293,8 +366,89 @@ export async function autoLockCheck(): Promise<boolean> {
 }
 
 export async function lock(): Promise<void> {
-  await removeSession(SESSION_MNEMONIC);
+  await removeSession(SESSION_UNLOCKED);
   await removeSession(SESSION_ACTIVITY);
+}
+
+// ── Multi-wallet management (all require the vault to be UNLOCKED) ────────────
+
+export interface WalletMeta {
+  id: string;
+  name: string;
+  active: boolean;
+  createdAt: number;
+}
+
+/** The wallets in the vault (metadata only; no mnemonics), or [] when locked. */
+export async function listWallets(): Promise<WalletMeta[]> {
+  const u = await readSession();
+  if (!u) return [];
+  return u.payload.wallets.map((w) => ({
+    id: w.id, name: w.name, active: w.id === u.payload.activeId, createdAt: w.createdAt,
+  }));
+}
+
+export async function getActiveWalletId(): Promise<string | null> {
+  const u = await readSession();
+  return u ? u.payload.activeId : null;
+}
+
+/**
+ * Add a wallet from a validated mnemonic and make it active. Rejects a mnemonic
+ * already in the vault (returns that wallet's id instead of duplicating). Caller
+ * validates/normalises the mnemonic first (via @numpay/core/wallet).
+ */
+export async function addWallet(mnemonic: string, name: string): Promise<string> {
+  const u = await readSession();
+  if (!u) throw new VaultError("no-vault", "Wallet is locked.");
+  const existing = u.payload.wallets.find((w) => w.mnemonic === mnemonic);
+  if (existing) {
+    await mutateUnlocked((p) => ({ ...p, activeId: existing.id }));
+    return existing.id;
+  }
+  const id = newId();
+  const clean = name.trim() || `Wallet ${u.payload.wallets.length + 1}`;
+  await mutateUnlocked((p) => ({
+    ...p,
+    wallets: [...p.wallets, { id, name: clean, mnemonic, createdAt: Date.now() }],
+    activeId: id,
+  }));
+  return id;
+}
+
+/** Switch the active wallet. No-op (but persisted) for an unknown id. */
+export async function switchWallet(id: string): Promise<void> {
+  await mutateUnlocked((p) =>
+    p.wallets.some((w) => w.id === id) ? { ...p, activeId: id } : p
+  );
+}
+
+export async function renameWallet(id: string, name: string): Promise<void> {
+  const clean = name.trim();
+  if (!clean) return;
+  await mutateUnlocked((p) => ({
+    ...p,
+    wallets: p.wallets.map((w) => (w.id === id ? { ...w, name: clean } : w)),
+  }));
+}
+
+/**
+ * Remove a wallet. The LAST wallet cannot be removed here (that is the
+ * whole-vault wipe flow). Removing the active wallet moves active to the first
+ * remaining one.
+ */
+export async function removeWallet(id: string): Promise<void> {
+  await mutateUnlocked((p) => {
+    if (p.wallets.length <= 1) return p; // never leave the vault empty
+    const wallets = p.wallets.filter((w) => w.id !== id);
+    const activeId = p.activeId === id ? wallets[0].id : p.activeId;
+    return { ...p, wallets, activeId };
+  });
+}
+
+/** The active wallet's mnemonic — for the reveal-recovery-phrase flow. */
+export async function getActiveMnemonic(): Promise<string | null> {
+  return getUnlockedMnemonic();
 }
 
 /**

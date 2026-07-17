@@ -15,6 +15,7 @@ import { chainNameOf } from "@numpay/core/txLog";
 import {
   createVault, getLastArgonMs, getStatus, getUnlockedMnemonic, lock,
   autoLockCheck, touchActivity, unlockWithBiometrics, unlockWithPin,
+  getActiveWalletId, switchWallet, addWallet,
   VaultError, wipeVault, type VaultStatus,
 } from "./src/vault/mobileVault";
 import { runSpike, type SpikeResult } from "./spike/runSpike";
@@ -44,6 +45,8 @@ import { WcApprovalHost } from "./src/walletconnect/WcApprovalHost";
 // load so headless launches can find it (see notify/backgroundTask.ts).
 import { ensureReceiveWatch } from "./src/notify/backgroundTask";
 import { clearReceiveWatch } from "./src/notify/receiveWatch";
+import { PinPad } from "./src/ui/PinPad";
+import { Splash } from "./src/ui/Splash";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
@@ -65,6 +68,11 @@ export default function App() {
   // after re-auth the user resumes exactly where they were — a mid-send
   // expiry used to silently unmount the form and its error card.
   const [relocked, setRelocked] = useState(false);
+  // Cold-start splash animation; unmounts when its own animation finishes.
+  const [showSplash, setShowSplash] = useState(true);
+  // Active wallet id (multi-wallet): drives the useMobileWallet reload on switch.
+  const [activeWalletId, setActiveWalletId] = useState<string | null>(null);
+  const [addWalletOpen, setAddWalletOpen] = useState(false);
 
   const unlocked =
     mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev" || mode === "settings" || mode === "token";
@@ -72,7 +80,7 @@ export default function App() {
   // dApps, dev) keep the full screen.
   const navVisible =
     mode === "home" || mode === "send" || mode === "receive" || mode === "bpan" || mode === "activity" || mode === "settings";
-  const w = useMobileWallet(unlocked);
+  const w = useMobileWallet(unlocked, activeWalletId);
   const unlockedRef = useRef(unlocked);
   unlockedRef.current = unlocked;
 
@@ -80,8 +88,18 @@ export default function App() {
     const s = await getStatus();
     setStatus(s);
     const mn = await getUnlockedMnemonic();
+    setActiveWalletId(await getActiveWalletId());
     if (mn) setMode("home");
     else setMode(s.exists ? "locked" : "onboard");
+  }, []);
+
+  // Switch the active wallet (Settings accounts). The hook re-derives on the id
+  // change; we land on the dashboard so the switch is visible immediately.
+  const onSwitchWallet = useCallback(async (id: string) => {
+    await switchWallet(id);
+    await touchActivity();
+    setActiveWalletId(id);
+    setMode("home");
   }, []);
 
   const showRelock = useCallback(async () => {
@@ -196,7 +214,6 @@ export default function App() {
     <View style={[st.container, navVisible && { paddingBottom: BOTTOM_NAV_CLEARANCE }]}>
       <AmbientBackground />
       <StatusBar style="light" />
-      {mode === "loading" && <Text style={st.dim}>loading…</Text>}
       {(mode === "onboard" || mode === "import" || mode === "reveal" || mode === "pin" || mode === "locked") && (
         <AuthHeader />
       )}
@@ -265,6 +282,9 @@ export default function App() {
       )}
       {mode === "settings" && (
         <SettingsScreen
+          activeWalletId={activeWalletId}
+          onSwitchWallet={onSwitchWallet}
+          onAddWallet={() => { setError(""); setAddWalletOpen(true); }}
           onLock={async () => { await lock(); setError(""); await refresh(); }}
           onDapps={() => setMode("dapps")}
           onDev={() => setMode("dev")}
@@ -364,6 +384,19 @@ export default function App() {
         />
       )}
 
+      {/* Add-wallet overlay (Settings → accounts). Adds to the unlocked vault
+          and switches to it without a re-PIN. */}
+      {addWalletOpen && (
+        <AddWalletOverlay
+          onClose={() => setAddWalletOpen(false)}
+          onAdded={async (id) => {
+            setAddWalletOpen(false);
+            setActiveWalletId(id);
+            setMode("home");
+          }}
+        />
+      )}
+
       {/* Session-expiry re-auth overlay (see the `relocked` comment above). */}
       {relocked && status && (
         <View style={st.lockOverlay}>
@@ -383,6 +416,9 @@ export default function App() {
           />
         </View>
       )}
+
+      {/* Cold-start splash: over everything, unmounts when its animation ends. */}
+      {showSplash && <Splash onFinish={() => setShowSplash(false)} />}
     </View>
   );
 }
@@ -447,20 +483,39 @@ function Reveal(p: { mnemonic: string; onNext: () => void }) {
   );
 }
 
+// Two-step PIN setup with the dots keypad: enter, then confirm. A mismatch
+// bumps the shake token and restarts at step 1.
 function PinSetup(p: {
   bioAvailable: boolean;
   error: string;
   onSubmit: (pin: string, enableBio: boolean) => void;
 }) {
-  const [pin, setPin] = useState("");
-  const [pin2, setPin2] = useState("");
+  const [first, setFirst] = useState<string | null>(null);
   const [bio, setBio] = useState(p.bioAvailable);
   const [localErr, setLocalErr] = useState("");
+  const [shake, setShake] = useState(0);
+
+  const onComplete = (pin: string) => {
+    if (first === null) {
+      setFirst(pin);
+      setLocalErr("");
+      setShake((s) => s + 1); // clear dots for the confirm step
+      return;
+    }
+    if (pin !== first) {
+      setFirst(null);
+      setLocalErr("PINs didn't match. Start again.");
+      setShake((s) => s + 1);
+      return;
+    }
+    setLocalErr("");
+    p.onSubmit(pin, bio);
+  };
+
   return (
     <View>
-      <Text style={st.h2}>Choose a 6-digit PIN</Text>
-      <PinInput value={pin} onChange={setPin} placeholder="PIN" />
-      <PinInput value={pin2} onChange={setPin2} placeholder="Repeat PIN" />
+      <Text style={st.h2}>{first === null ? "Choose a 6-digit PIN" : "Confirm your PIN"}</Text>
+      <PinPad onComplete={onComplete} shakeToken={shake} onChangeLength={() => setLocalErr("")} />
       {p.bioAvailable && (
         <View style={st.rowBetween}>
           <Text style={st.body}>Biometric unlock</Text>
@@ -471,16 +526,7 @@ function PinSetup(p: {
           />
         </View>
       )}
-      {!!(localErr || p.error) && <Text style={st.err}>{localErr || p.error}</Text>}
-      <Btn
-        label="Create vault"
-        onPress={() => {
-          if (!/^\d{6}$/.test(pin)) return setLocalErr("PIN must be exactly 6 digits.");
-          if (pin !== pin2) return setLocalErr("PINs don't match.");
-          setLocalErr("");
-          p.onSubmit(pin, bio);
-        }}
-      />
+      {!!(localErr || p.error) && <Text style={[st.err, { textAlign: "center" }]}>{localErr || p.error}</Text>}
     </View>
   );
 }
@@ -492,13 +538,17 @@ function Locked(p: {
   onPin: (pin: string) => void;
   onBio: () => void;
 }) {
-  const [pin, setPin] = useState("");
+  const [shake, setShake] = useState(0);
+  const errRef = useRef(p.error);
+  // A new error (wrong PIN) arrived: shake + clear the dots.
+  useEffect(() => {
+    if (p.error && p.error !== errRef.current) setShake((s) => s + 1);
+    errRef.current = p.error;
+  }, [p.error]);
   const lockedFor = Math.max(0, Math.ceil((p.status.lockUntil - p.now) / 1000));
   return (
     <View>
-      <Text style={st.h2}>Welcome back</Text>
-      <PinInput value={pin} onChange={setPin} placeholder="6-digit PIN" />
-      {!!p.error && <Text style={st.err}>{p.error}</Text>}
+      <Text style={[st.h2, { textAlign: "center" }]}>Welcome back</Text>
       {lockedFor > 0 ? (
         <AlertCard
           tone="amber"
@@ -507,9 +557,106 @@ function Locked(p: {
           style={{ marginTop: 10 }}
         />
       ) : (
-        <Btn label="Unlock" onPress={() => { p.onPin(pin); setPin(""); }} />
+        <PinPad
+          onComplete={(pin) => p.onPin(pin)}
+          shakeToken={shake}
+          showBiometrics={p.status.biometricsEnabled}
+          onBiometrics={p.onBio}
+        />
       )}
-      {p.status.biometricsEnabled && <Btn label="Use biometrics" onPress={p.onBio} variant="secondary" />}
+      {!!p.error && <Text style={[st.err, { textAlign: "center" }]}>{p.error}</Text>}
+    </View>
+  );
+}
+
+// Add-wallet overlay: create a fresh wallet (reveal its phrase first) or import
+// one, name it, add it to the unlocked vault, and switch to it. No re-PIN — the
+// vault is already open.
+function AddWalletOverlay(p: { onClose: () => void; onAdded: (id: string) => void }) {
+  const [tab, setTab] = useState<"create" | "import">("create");
+  const [name, setName] = useState("");
+  const [phrase, setPhrase] = useState("");
+  // Create flow reveals the new phrase before it is added.
+  const [generated, setGenerated] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const add = async (mnemonic: string) => {
+    setBusy(true);
+    setError("");
+    try {
+      const id = await addWallet(mnemonic, name);
+      p.onAdded(id);
+    } catch (e) {
+      setError(String((e as Error)?.message ?? e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <View style={st.lockOverlay}>
+      <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <ScreenHeader title="Add wallet" onBack={p.onClose} />
+
+        {generated ? (
+          <View>
+            <AlertCard
+              tone="amber"
+              title="Save this recovery phrase"
+              body="These words ARE the new wallet. Write them down in order and keep them offline before continuing."
+              style={{ marginBottom: 10 }}
+            />
+            <Card style={{ padding: 14 }}>
+              <Text style={st.mnemonic}>{generated}</Text>
+            </Card>
+            {!!error && <Text style={st.err}>{error}</Text>}
+            <Btn label={busy ? "Adding…" : "I saved it, add wallet"} onPress={() => { void add(generated); }} disabled={busy} />
+          </View>
+        ) : (
+          <View>
+            <View style={st.segRow}>
+              <Pressable style={[st.seg, tab === "create" && st.segOn]} onPress={() => { setTab("create"); setError(""); }}>
+                <Text style={[st.segText, tab === "create" && st.segTextOn]}>Create new</Text>
+              </Pressable>
+              <Pressable style={[st.seg, tab === "import" && st.segOn]} onPress={() => { setTab("import"); setError(""); }}>
+                <Text style={[st.segText, tab === "import" && st.segTextOn]}>Import</Text>
+              </Pressable>
+            </View>
+
+            <Field placeholder="Wallet name (optional)" value={name} onChangeText={setName} />
+
+            {tab === "import" && (
+              <Field
+                style={{ height: 90, textAlignVertical: "top" }}
+                multiline autoCapitalize="none" autoCorrect={false}
+                placeholder="Recovery phrase (12 or 24 words)"
+                value={phrase}
+                onChangeText={setPhrase}
+              />
+            )}
+
+            {!!error && <Text style={st.err}>{error}</Text>}
+
+            <Btn
+              label={tab === "create" ? "Create" : (busy ? "Importing…" : "Import")}
+              disabled={busy}
+              onPress={() => {
+                if (tab === "create") {
+                  setGenerated(createWallet().mnemonic);
+                  setError("");
+                } else {
+                  try {
+                    const wa = importFromMnemonic(phrase.trim());
+                    void add(wa.mnemonic);
+                  } catch {
+                    setError("That doesn't look like a valid recovery phrase.");
+                  }
+                }
+              }}
+            />
+          </View>
+        )}
+      </ScrollView>
     </View>
   );
 }
@@ -791,19 +938,6 @@ function DevnetTx(p: { onBack: () => void }) {
   );
 }
 
-function PinInput(p: { value: string; onChange: (v: string) => void; placeholder: string }) {
-  return (
-    <Field
-      keyboardType="number-pad"
-      secureTextEntry
-      maxLength={6}
-      placeholder={p.placeholder}
-      value={p.value}
-      onChangeText={(v) => p.onChange(v.replace(/\D/g, ""))}
-    />
-  );
-}
-
 const st = StyleSheet.create({
   container: {
     flex: 1,
@@ -924,6 +1058,20 @@ const st = StyleSheet.create({
   ok: { color: colors.success, fontSize: ts.row },
   err: { color: colors.danger, fontSize: ts.body, marginTop: 8 },
   mnemonic: { color: colors.textPrimary, fontSize: 16, lineHeight: 26, fontFamily: "monospace" },
+  segRow: {
+    flexDirection: "row", gap: 6,
+    padding: 4,
+    borderRadius: radius.button,
+    backgroundColor: colors.card,
+    borderWidth: 1, borderColor: colors.border,
+    marginBottom: 4,
+  },
+  seg: {
+    flex: 1, alignItems: "center", paddingVertical: 9, borderRadius: radius.tile,
+  },
+  segOn: { backgroundColor: colors.brand },
+  segText: { color: colors.muted, fontSize: ts.small, fontWeight: "600" },
+  segTextOn: { color: "#fff" },
   rowBetween: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 14,
   },

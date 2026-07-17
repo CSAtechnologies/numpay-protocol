@@ -147,7 +147,7 @@ async function loadOwnBPAN(owner: string): Promise<string> {
   return "";
 }
 
-export function useMobileWallet(unlocked: boolean): MobileWalletState {
+export function useMobileWallet(unlocked: boolean, activeWalletId?: string | null): MobileWalletState {
   const [evmAddress, setEvmAddress] = useState("");
   const [bpan, setBpan] = useState("");
   const [nonEvmAddresses, setNonEvmAddresses] = useState<NonEvmAddressMap | null>(null);
@@ -306,6 +306,24 @@ export function useMobileWallet(unlocked: boolean): MobileWalletState {
       prevNonEvm.current = undefined;
     }
   }, [unlocked, refresh]);
+
+  // Active wallet switched (multi-wallet): the mnemonic behind
+  // getUnlockedMnemonic now differs, so drop the derived addresses + last-known
+  // balances (they belong to the previous wallet) and re-derive. Only a genuine
+  // id CHANGE while unlocked triggers this; the initial null→id at unlock is
+  // already handled by the main refresh effect above (no double-refresh).
+  const prevWalletId = useRef(activeWalletId);
+  useEffect(() => {
+    const prev = prevWalletId.current;
+    prevWalletId.current = activeWalletId;
+    if (!unlocked || prev == null || prev === activeWalletId) return;
+    addrCache.current = null;
+    prevEvmByChain.current = new Map();
+    prevNonEvm.current = undefined;
+    setNatives([]); setTokensByChain({}); setBpan(""); setEvmAddress("");
+    setNonEvmAddresses(null);
+    refresh();
+  }, [activeWalletId, unlocked, refresh]);
 
   const tokens = tokenRows(tokensByChain, hidden, rates);
   // Every native the sweeps return stays VISIBLE, zero balance included —
