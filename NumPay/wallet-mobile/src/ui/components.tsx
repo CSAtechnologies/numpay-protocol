@@ -4,9 +4,10 @@
 // touch sizing differs where noted.
 import { useEffect, useRef, type ReactNode } from "react";
 import {
-  Animated, Easing, Image, Pressable, StyleSheet, Text, TextInput, View,
+  Animated, Easing, Pressable, StyleSheet, Text, TextInput, View,
   type StyleProp, type TextInputProps, type ViewStyle,
 } from "react-native";
+import { NumPayMark, NumPayAnimatedLogo } from "./NumPayLogo";
 import { LinearGradient } from "expo-linear-gradient";
 import Svg, {
   Defs, RadialGradient as SvgRadialGradient, LinearGradient as SvgLinearGradient,
@@ -72,44 +73,28 @@ export function Btn({
   );
 }
 
-// ── Logo mark: the REAL NumPay logo asset (ext public/logo.png), with the
-//    .logo-mark brand glow behind it ────────────────────────────────────────────
-const LOGO = require("../../assets/logo.png");
-
+// ── Logo mark: the real NumPay vector mark (see NumPayLogo). LogoMark is the
+//    static tile used in header pills / account pill; AnimatedLogo wraps the
+//    self-drawing mark in the Welcome page's breathing pulse rings. ───────────
 export function LogoMark({ size = 28 }: { size?: number }) {
-  return (
-    <View
-      style={{
-        shadowColor: colors.brand, shadowOpacity: 0.5,
-        shadowRadius: 10, shadowOffset: { width: 0, height: 6 },
-        elevation: 8,
-      }}
-    >
-      {/* The asset bakes in a white square; round it into an app-icon tile. */}
-      <Image
-        source={LOGO}
-        style={{ width: size, height: size, borderRadius: size * 0.24 }}
-        resizeMode="cover"
-      />
-    </View>
-  );
+  return <NumPayMark size={size} />;
 }
 
 /**
- * Auth-screen logo (the extension Welcome page's logo-ring treatment): the
- * real logo with a slowly breathing brand glow behind it.
+ * Auth/splash logo: the extension Welcome page's treatment — three staggered
+ * pulse rings behind the mark that draws itself in on mount (NumPayAnimatedLogo).
  */
-export function AnimatedLogo({ size = 72 }: { size?: number }) {
+export function AnimatedLogo({ size = 88 }: { size?: number }) {
   const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, {
-          toValue: 1, duration: 2200,
+          toValue: 1, duration: 2600,
           easing: Easing.inOut(Easing.ease), useNativeDriver: true,
         }),
         Animated.timing(pulse, {
-          toValue: 0, duration: 2200,
+          toValue: 0, duration: 2600,
           easing: Easing.inOut(Easing.ease), useNativeDriver: true,
         }),
       ]),
@@ -118,7 +103,7 @@ export function AnimatedLogo({ size = 72 }: { size?: number }) {
     return () => loop.stop();
   }, [pulse]);
 
-  const ring = size * 1.9;
+  const ring = size * 1.6;
   return (
     <View style={{ width: ring, height: ring, alignItems: "center", justifyContent: "center" }}>
       <Animated.View
@@ -126,18 +111,18 @@ export function AnimatedLogo({ size = 72 }: { size?: number }) {
           position: "absolute",
           width: ring, height: ring, borderRadius: ring / 2,
           backgroundColor: colors.brandTint,
-          opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] }),
-          transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1.06] }) }],
+          opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0.05] }),
+          transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1.05] }) }],
         }}
       />
       <View
         style={{
           position: "absolute",
-          width: size * 1.35, height: size * 1.35, borderRadius: (size * 1.35) / 2,
+          width: size * 1.28, height: size * 1.28, borderRadius: (size * 1.28) / 2,
           borderWidth: 1, borderColor: "rgba(124, 109, 240, 0.3)",
         }}
       />
-      <LogoMark size={size} />
+      <NumPayAnimatedLogo size={size} />
     </View>
   );
 }

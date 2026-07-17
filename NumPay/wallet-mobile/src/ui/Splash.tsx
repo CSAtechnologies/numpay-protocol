@@ -6,25 +6,20 @@
 import { useEffect, useRef } from "react";
 import { Animated, Easing, StyleSheet, View } from "react-native";
 import { colors } from "./theme";
-import { LogoMark } from "./components";
+import { NumPayAnimatedLogo } from "./NumPayLogo";
 
 export function Splash({ onFinish }: { onFinish: () => void }) {
-  const logoScale = useRef(new Animated.Value(0.6)).current;
-  const logoOpacity = useRef(new Animated.Value(0)).current;
-  const ring = useRef(new Animated.Value(0)).current;
+  // The mark plays its own build-in (tile forms, N draws, foot bounces) over
+  // ~2.1s; the wordmark rises after the draw, then the whole overlay fades.
   const word = useRef(new Animated.Value(0)).current;
   const overlay = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     Animated.sequence([
-      Animated.parallel([
-        Animated.spring(logoScale, { toValue: 1, friction: 5, tension: 80, useNativeDriver: true }),
-        Animated.timing(logoOpacity, { toValue: 1, duration: 320, useNativeDriver: true }),
-        Animated.timing(ring, { toValue: 1, duration: 900, easing: Easing.out(Easing.ease), useNativeDriver: true }),
-      ]),
-      Animated.timing(word, { toValue: 1, duration: 300, easing: Easing.out(Easing.ease), useNativeDriver: true }),
-      Animated.delay(520),
-      Animated.timing(overlay, { toValue: 0, duration: 340, easing: Easing.in(Easing.ease), useNativeDriver: true }),
+      Animated.delay(1300), // let the N finish drawing before the wordmark
+      Animated.timing(word, { toValue: 1, duration: 340, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      Animated.delay(760),
+      Animated.timing(overlay, { toValue: 0, duration: 360, easing: Easing.in(Easing.ease), useNativeDriver: true }),
     ]).start(({ finished }) => { if (finished) onFinish(); });
   }, []);
 
@@ -32,18 +27,7 @@ export function Splash({ onFinish }: { onFinish: () => void }) {
     <Animated.View style={[st.overlay, { opacity: overlay }]} pointerEvents="none">
       <View style={{ alignItems: "center" }}>
         <View style={st.logoWrap}>
-          <Animated.View
-            style={[
-              st.ring,
-              {
-                opacity: ring.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.6, 0.35, 0] }),
-                transform: [{ scale: ring.interpolate({ inputRange: [0, 1], outputRange: [0.7, 2.1] }) }],
-              },
-            ]}
-          />
-          <Animated.View style={{ opacity: logoOpacity, transform: [{ scale: logoScale }] }}>
-            <LogoMark size={84} />
-          </Animated.View>
+          <NumPayAnimatedLogo size={96} />
         </View>
         <Animated.Text
           style={[
@@ -70,12 +54,7 @@ const st = StyleSheet.create({
     justifyContent: "center",
     zIndex: 100,
   },
-  logoWrap: { width: 200, height: 200, alignItems: "center", justifyContent: "center" },
-  ring: {
-    position: "absolute",
-    width: 120, height: 120, borderRadius: 60,
-    backgroundColor: colors.brandTint,
-  },
+  logoWrap: { width: 180, height: 180, alignItems: "center", justifyContent: "center" },
   word: {
     color: colors.textPrimary,
     fontSize: 26, fontWeight: "700",

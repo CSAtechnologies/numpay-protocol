@@ -5,7 +5,12 @@
 // Phase 0. FLAG_SECURE on secret screens is a follow-up (needs
 // expo-screen-capture or a config plugin).
 import { StatusBar } from "expo-status-bar";
+import * as SplashScreen from "expo-splash-screen";
 import { useCallback, useEffect, useRef, useState } from "react";
+
+// Hold the native splash (dark bg + NumPay mark, app.json) until React mounts,
+// so it hands straight to the JS Splash overlay with no white flash between.
+SplashScreen.preventAutoHideAsync().catch(() => {});
 import { LinearGradient } from "expo-linear-gradient";
 import { BackHandler, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 
@@ -106,6 +111,11 @@ export default function App() {
     setStatus(await getStatus());
     setRelocked(true);
   }, []);
+
+  // Reveal the JS tree (which mounts the JS Splash overlay on top) and drop the
+  // native splash — both are the dark bg + NumPay mark, so the transition is
+  // seamless.
+  useEffect(() => { SplashScreen.hideAsync().catch(() => {}); }, []);
 
   useEffect(() => {
     refresh().catch((e) => setError(String(e)));

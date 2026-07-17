@@ -5,25 +5,29 @@
     "version": "1.0.0",
     "scheme": "numpay",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "icon": "./assets/numpay-icon.png",
+    "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#786EE9",
+        "foregroundImage": "./assets/numpay-mark.png",
+        "monochromeImage": "./assets/numpay-mark.png"
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.anonymous.walletmobile",
       "intentFilters": [
         {
           "action": "VIEW",
-          "category": ["DEFAULT", "BROWSABLE"],
-          "data": { "scheme": "wc" }
+          "category": [
+            "DEFAULT",
+            "BROWSABLE"
+          ],
+          "data": {
+            "scheme": "wc"
+          }
         }
       ]
     },
@@ -37,6 +41,14 @@
         {
           "cameraPermission": "NumPay uses the camera only to scan WalletConnect QR codes.",
           "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0a0912",
+          "image": "./assets/numpay-mark.png",
+          "imageWidth": 200
         }
       ]
     ]
