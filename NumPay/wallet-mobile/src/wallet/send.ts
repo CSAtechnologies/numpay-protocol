@@ -12,7 +12,9 @@ import { importFromMnemonic, getSigner } from "@numpay/core/wallet";
 import { NETWORKS, type Network } from "@numpay/core/networks";
 import {
   deriveNonEvmAddresses, sendSolanaTransfer, sendTronTransfer, sendSuiTransfer,
+  sendSolanaTokenTransfer, sendTronTokenTransfer, sendSuiTokenTransfer,
 } from "@numpay/core/chains";
+import { sendToken } from "@numpay/core/tokens";
 import { logTx, updateTx, explorerTxUrl } from "@numpay/core/txLog";
 
 // Explorer links come from core so Activity rows and send receipts agree.
@@ -137,6 +139,91 @@ export const NON_EVM_SENDABLE: Record<string, { symbol: string; decimals: number
   tron:   { symbol: "TRX", decimals: 6 },
   sui:    { symbol: "SUI", decimals: 9 },
 };
+
+// ── Token sends (ERC-20 / SPL / TRC-20 / Sui coins) ──────────────────────────
+// Same core transfer functions the extension Send page calls; fees are always
+// paid in the chain's native coin, so the native fee estimates above apply.
+
+export interface TokenSendAsset {
+  /** Network id ("ethereum", "base", "solana", "tron", "sui", ...). */
+  chainId: string;
+  /** ERC-20 contract / SPL mint / TRC-20 contract / Sui coin type. */
+  address: string;
+  symbol: string;
+  decimals: number;
+  logo?: string;
+}
+
+export async function sendTokenTransfer(
+  mnemonic: string,
+  asset: TokenSendAsset,
+  to: string,
+  amount: string,
+  overrides?: ethers.Overrides,
+): Promise<string> {
+  const owner = importFromMnemonic(mnemonic).address;
+
+  // Non-EVM tokens: fast-final chains, logged confirmed like native sends.
+  if (asset.chainId === "solana" || asset.chainId === "tron" || asset.chainId === "sui") {
+    const base = toBaseUnits(amount, asset.decimals);
+    const derived = await deriveNonEvmAddresses(mnemonic);
+    let hash: string;
+    if (asset.chainId === "solana") {
+      hash = await sendSolanaTokenTransfer(
+        derived.solana.secretKey, asset.address, to, base, asset.decimals,
+      );
+    } else if (asset.chainId === "tron") {
+      hash = await sendTronTokenTransfer(
+        derived.tron.privateKey, derived.tron.address, asset.address, to, base,
+      );
+    } else {
+      hash = await sendSuiTokenTransfer(
+        derived.sui.secretKey, derived.sui.address, asset.address, to, base,
+      );
+    }
+    void logTx({
+      owner,
+      hash, chainId: asset.chainId, kind: "send", timestamp: Date.now(),
+      symbol: asset.symbol, value: amount,
+      assetAddr: asset.address.toLowerCase(),
+      logo: asset.logo,
+      counterparty: to,
+      status: "confirmed",
+    });
+    return hash;
+  }
+
+  // EVM ERC-20, with the same wrong-chain RPC guard as native sends.
+  const net = requireNetwork(asset.chainId);
+  const w = importFromMnemonic(mnemonic);
+  const signer = getSigner(w.privateKey, net.rpcUrl);
+  const providerNet = await signer.provider!.getNetwork();
+  if (Number(providerNet.chainId) !== net.chainId) {
+    throw new Error(
+      `Network mismatch: RPC reports chain ${providerNet.chainId}, expected ${net.chainId} (${net.name}). Send cancelled.`
+    );
+  }
+
+  const tx = await sendToken(asset.address, to, amount, asset.decimals, signer, overrides);
+  void logTx({
+    owner: w.address,
+    hash: tx.hash, chainId: net.id, kind: "send", timestamp: Date.now(),
+    symbol: asset.symbol, value: amount,
+    assetAddr: asset.address.toLowerCase(),
+    logo: asset.logo,
+    counterparty: to,
+    status: "pending",
+    nonce: tx.nonce, from: tx.from ?? w.address,
+    to: tx.to ?? undefined, data: tx.data,
+    maxFeeWei: tx.maxFeePerGas?.toString(), maxPrioWei: tx.maxPriorityFeePerGas?.toString(),
+    gasPriceWei: tx.gasPrice?.toString(),
+  });
+  void tx.wait().then((rc) => {
+    void updateTx(net.id, tx.hash, { status: rc && rc.status === 0 ? "failed" : "confirmed" });
+  }).catch(() => { /* replaced/dropped — the Activity reconciler settles it */ });
+
+  return tx.hash;
+}
 
 export async function sendNonEvmNative(
   mnemonic: string,

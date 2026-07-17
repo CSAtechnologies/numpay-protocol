@@ -20,7 +20,8 @@ import { getUsdPrice } from "@numpay/core/currency";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import {
   estimateEvmNativeFee, explorerTxUrl, sendEvmNative, sendNonEvmNative,
-  nonEvmNativeReserve, NON_EVM_SENDABLE, type EvmFeeEstimate,
+  sendTokenTransfer, nonEvmNativeReserve, NON_EVM_SENDABLE,
+  type EvmFeeEstimate, type TokenSendAsset,
 } from "../wallet/send";
 import type { MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, radius, type as ts } from "../ui/theme";
@@ -62,10 +63,19 @@ function nonEvmFeeLine(chainId: string, price: number): string {
   }
 }
 
-export function SendScreen({ w, onBack, onSessionExpired }: {
+/** A pickable token: the asset fields the send needs plus display balance. */
+export interface SendTokenPick extends TokenSendAsset {
+  balanceNum: number;
+  priceUsd: number;
+}
+
+export function SendScreen({ w, onBack, onSessionExpired, initialChainId, initialToken }: {
   w: MobileWalletState;
   onBack: () => void;
   onSessionExpired?: () => void;
+  /** Preselect (TokenDetail entry): chain and, for token rows, the token. */
+  initialChainId?: string;
+  initialToken?: SendTokenPick | null;
 }) {
   // Sendable chains: every EVM chain the wallet holds native coin on (plus
   // Ethereum so the screen is never empty), then the sendable non-EVM chains.
@@ -77,13 +87,37 @@ export function SendScreen({ w, onBack, onSessionExpired }: {
     return [...evm, ...Object.keys(NON_EVM_SENDABLE)];
   }, [w.rows]);
 
-  const [chainId, setChainId] = useState("ethereum");
+  const [chainId, setChainId] = useState(initialChainId ?? "ethereum");
+  // null = the chain's native coin; otherwise the picked token.
+  const [token, setToken] = useState<SendTokenPick | null>(initialToken ?? null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const isEvm = !NON_EVM_SENDABLE[chainId];
   const net = NETWORKS[chainId];
-  const symbol = isEvm ? (net?.symbol ?? "ETH") : NON_EVM_SENDABLE[chainId].symbol;
+  const nativeSymbol = isEvm ? (net?.symbol ?? "ETH") : NON_EVM_SENDABLE[chainId].symbol;
+  const symbol = token?.symbol ?? nativeSymbol;
+  const decimalsMax = token?.decimals ?? (isEvm ? (net?.decimals ?? 18) : NON_EVM_SENDABLE[chainId].decimals);
   const chainName = isEvm ? (net?.name ?? chainId) : NON_EVM_NAMES[chainId] ?? chainId;
-  const balance = w.rows.find((r) => r.isNative && r.chainId === chainId)?.balanceNum ?? 0;
-  const price = w.rates ? getUsdPrice(symbol, w.rates) : 0;
+  const nativeBalance = w.rows.find((r) => r.isNative && r.chainId === chainId)?.balanceNum ?? 0;
+  const balance = token ? token.balanceNum : nativeBalance;
+  const price = token
+    ? token.priceUsd
+    : (w.rates ? getUsdPrice(nativeSymbol, w.rates) : 0);
+
+  // Tokens pickable on the selected chain (discovered holdings, largest first).
+  const chainTokens = useMemo<SendTokenPick[]>(() => {
+    const list = w.tokensByChain[chainId] ?? [];
+    return list
+      .map((t) => {
+        const bal = parseFloat(t.balance) || 0;
+        const p = t.priceUsd ?? (w.rates ? getUsdPrice(t.symbol, w.rates) : 0);
+        return {
+          chainId, address: t.address, symbol: t.symbol, decimals: t.decimals,
+          logo: t.logo, balanceNum: bal, priceUsd: p,
+        };
+      })
+      .filter((t) => t.balanceNum > 0)
+      .sort((a, b) => b.balanceNum * b.priceUsd - a.balanceNum * a.priceUsd);
+  }, [w.tokensByChain, chainId, w.rates]);
 
   const [to, setTo] = useState("");
   const [resolvedAddr, setResolvedAddr] = useState("");
@@ -123,6 +157,7 @@ export function SendScreen({ w, onBack, onSessionExpired }: {
 
   function switchChain(id: string) {
     setChainId(id);
+    setToken(null); setPickerOpen(false);
     setTo(""); setResolvedAddr(""); setResolvedBPAN("");
     setBpanChange(null); setBpanChangeAck(false);
     setError(""); setAmount(""); setTxHash("");
@@ -210,6 +245,12 @@ export function SendScreen({ w, onBack, onSessionExpired }: {
       : (isValidNonEvmAddress(to.trim(), chainId) ? to.trim() : ""));
 
   function handleMax() {
+    // Tokens don't pay their own fee (gas is native), so MAX is the full
+    // balance; natives keep the fee reserve.
+    if (token) {
+      setAmount(token.balanceNum > 0 ? String(token.balanceNum) : "0");
+      return;
+    }
     const reserve = isEvm
       ? (fee?.reserveNative ?? 0.0012)
       : nonEvmNativeReserve(chainId);
@@ -241,9 +282,14 @@ export function SendScreen({ w, onBack, onSessionExpired }: {
     Keyboard.dismiss();
     setSending(true); setError(""); setTxHash(""); setTxFx("pending");
     try {
-      const hash = isEvm
-        ? await sendEvmNative(mnemonic, chainId, destinationAddress, amount, tierOverrides(gasTier, feeInfo))
-        : await sendNonEvmNative(mnemonic, chainId, destinationAddress, amount);
+      const hash = token
+        ? await sendTokenTransfer(
+            mnemonic, token, destinationAddress, amount,
+            isEvm ? tierOverrides(gasTier, feeInfo) : undefined,
+          )
+        : isEvm
+          ? await sendEvmNative(mnemonic, chainId, destinationAddress, amount, tierOverrides(gasTier, feeInfo))
+          : await sendNonEvmNative(mnemonic, chainId, destinationAddress, amount);
       setTxHash(hash);
       setTxFx("success");
       w.refresh();
@@ -256,7 +302,9 @@ export function SendScreen({ w, onBack, onSessionExpired }: {
   }
 
   const amountUsd = parseFloat(amount) > 0 && price > 0 ? parseFloat(amount) * price : 0;
-  const feeUsd = fee && price > 0 ? fee.feeNative * price : 0;
+  // Fees are always paid in the chain's native coin, whatever asset is sent.
+  const nativePrice = w.rates ? getUsdPrice(nativeSymbol, w.rates) : 0;
+  const feeUsd = fee && nativePrice > 0 ? fee.feeNative * nativePrice : 0;
   const errView = error ? parseSendError(error) : null;
 
   return (
@@ -276,20 +324,69 @@ export function SendScreen({ w, onBack, onSessionExpired }: {
           ))}
         </ScrollView>
 
-        {/* Asset summary */}
-        <Card style={st.assetCard}>
-          <AssetIcon symbol={symbol} chainId={chainId} size={36} />
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={st.assetSym}>{symbol}</Text>
-            <Text style={st.assetChain}>{chainName}</Text>
-          </View>
-          <View style={{ alignItems: "flex-end" }}>
-            <Text style={st.assetBal}>
-              {balance.toLocaleString(undefined, { maximumFractionDigits: 6 })} {symbol}
-            </Text>
-            {price > 0 && <Text style={st.assetChain}>${(balance * price).toFixed(2)}</Text>}
-          </View>
-        </Card>
+        {/* Asset picker: the chain's native coin or any discovered token */}
+        <Pressable onPress={() => setPickerOpen((v) => !v)}>
+          <Card style={st.assetCard}>
+            <AssetIcon
+              symbol={symbol} logo={token?.logo} chainId={chainId}
+              address={token?.address} size={36}
+            />
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={st.assetSym}>{symbol}</Text>
+              <Text style={st.assetChain}>
+                {chainName}{chainTokens.length > 0 ? "  ·  tap to change asset" : ""}
+              </Text>
+            </View>
+            <View style={{ alignItems: "flex-end" }}>
+              <Text style={st.assetBal}>
+                {balance.toLocaleString(undefined, { maximumFractionDigits: 6 })} {symbol}
+              </Text>
+              {price > 0 && <Text style={st.assetChain}>${(balance * price).toFixed(2)}</Text>}
+            </View>
+          </Card>
+        </Pressable>
+
+        {/* Token list (native first, holdings by value) */}
+        {pickerOpen && (
+          <Card style={{ marginTop: 6 }}>
+            <Pressable
+              style={st.pickRow}
+              onPress={() => { setToken(null); setPickerOpen(false); setAmount(""); setError(""); }}
+            >
+              <AssetIcon symbol={nativeSymbol} chainId={chainId} size={30} />
+              <View style={{ flex: 1, marginLeft: 10 }}>
+                <Text style={st.assetSym}>{nativeSymbol}</Text>
+                <Text style={st.assetChain}>Native coin</Text>
+              </View>
+              <Text style={st.assetBal}>
+                {nativeBalance.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+              </Text>
+            </Pressable>
+            {chainTokens.map((t) => (
+              <Pressable
+                key={t.address}
+                style={st.pickRow}
+                onPress={() => { setToken(t); setPickerOpen(false); setAmount(""); setError(""); }}
+              >
+                <AssetIcon symbol={t.symbol} logo={t.logo} chainId={chainId} address={t.address} size={30} />
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={st.assetSym}>{t.symbol}</Text>
+                  <Text style={st.assetChain} numberOfLines={1}>
+                    {t.address.slice(0, 8)}…{t.address.slice(-4)}
+                  </Text>
+                </View>
+                <Text style={st.assetBal}>
+                  {t.balanceNum.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                </Text>
+              </Pressable>
+            ))}
+            {chainTokens.length === 0 && (
+              <Text style={[st.assetChain, { padding: 12 }]}>
+                No tokens discovered on {chainName} yet.
+              </Text>
+            )}
+          </Card>
+        )}
 
         {/* Recipient */}
         <Field
@@ -343,8 +440,8 @@ export function SendScreen({ w, onBack, onSessionExpired }: {
           <Text style={st.subText}>{amountUsd > 0 ? `≈ $${amountUsd.toFixed(2)}` : " "}</Text>
           <Text style={st.subText}>
             {isEvm
-              ? (fee ? `Network fee ~${fmtFeeNative(fee.feeNative)} ${symbol}${feeUsdLabel(feeUsd)}` : "Estimating fee…")
-              : nonEvmFeeLine(chainId, price)}
+              ? (fee ? `Network fee ~${fmtFeeNative(fee.feeNative)} ${nativeSymbol}${feeUsdLabel(feeUsd)}` : "Estimating fee…")
+              : nonEvmFeeLine(chainId, nativePrice)}
           </Text>
         </View>
 
@@ -409,6 +506,14 @@ const st = StyleSheet.create({
   assetSym: { color: colors.textPrimary, fontSize: ts.body, fontWeight: "600" },
   assetChain: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
   assetBal: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "500", fontVariant: ["tabular-nums"] },
+  pickRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(42, 36, 80, 0.7)",
+  },
   resolving: { color: colors.muted, fontSize: ts.small, marginTop: 6 },
   resolved: { color: colors.success, fontSize: ts.small, marginTop: 6 },
   maxBtn: {

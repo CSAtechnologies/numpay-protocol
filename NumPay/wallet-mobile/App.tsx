@@ -30,7 +30,8 @@ import {
 } from "./src/ui/icons";
 import { AssetIcon, ChainBadge, ChainIcon } from "./src/ui/coins";
 import { ReceiveScreen, type ReceiveAddrs } from "./src/screens/ReceiveScreen";
-import { SendScreen } from "./src/screens/SendScreen";
+import { SendScreen, type SendTokenPick } from "./src/screens/SendScreen";
+import { TokenDetailScreen } from "./src/screens/TokenDetailScreen";
 import { SwapScreen } from "./src/screens/SwapScreen";
 import { BridgeScreen } from "./src/screens/BridgeScreen";
 import { ActivityScreen } from "./src/screens/ActivityScreen";
@@ -44,11 +45,14 @@ import { clearReceiveWatch } from "./src/notify/receiveWatch";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
-  | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity" | "bpan" | "dapps" | "dev" | "settings";
+  | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity" | "bpan" | "dapps" | "dev" | "settings" | "token";
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("loading");
   const [receiveAddrs, setReceiveAddrs] = useState<ReceiveAddrs | null>(null);
+  // Token-detail target and the Send screen's preselection (TokenDetail entry).
+  const [tokenDetail, setTokenDetail] = useState<AssetRow | null>(null);
+  const [sendInit, setSendInit] = useState<{ chainId: string; token: SendTokenPick | null } | null>(null);
   const [status, setStatus] = useState<VaultStatus | null>(null);
   const [pendingMnemonic, setPendingMnemonic] = useState("");
   const [error, setError] = useState("");
@@ -61,7 +65,7 @@ export default function App() {
   const [relocked, setRelocked] = useState(false);
 
   const unlocked =
-    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev" || mode === "settings";
+    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev" || mode === "settings" || mode === "token";
   // The floating nav shows on its six tabs; focused flows (swap, bridge,
   // dApps, dev) keep the full screen.
   const navVisible =
@@ -127,7 +131,8 @@ export default function App() {
         return true;
       }
       if (m === "receive" || m === "send" || m === "swap" || m === "bridge" ||
-          m === "activity" || m === "bpan" || m === "dapps" || m === "dev" || m === "settings") {
+          m === "activity" || m === "bpan" || m === "dapps" || m === "dev" ||
+          m === "settings" || m === "token") {
         setMode("home");
         return true;
       }
@@ -253,6 +258,7 @@ export default function App() {
           onLock={async () => { await lock(); setError(""); await refresh(); }}
           onBPAN={() => setMode("bpan")}
           onDapps={() => setMode("dapps")}
+          onOpenAsset={(row) => { setTokenDetail(row); setMode("token"); }}
         />
       )}
       {mode === "settings" && (
@@ -278,8 +284,36 @@ export default function App() {
       )}
       {mode === "send" && (
         <SendScreen
+          key={sendInit ? `${sendInit.chainId}:${sendInit.token?.address ?? "native"}` : "default"}
           w={w}
+          initialChainId={sendInit?.chainId}
+          initialToken={sendInit?.token}
+          onBack={() => { setSendInit(null); setMode("home"); }}
+          onSessionExpired={() => { void showRelock(); }}
+        />
+      )}
+      {mode === "token" && tokenDetail && (
+        <TokenDetailScreen
+          w={w}
+          row={tokenDetail}
           onBack={() => setMode("home")}
+          onSend={() => {
+            setSendInit({
+              chainId: tokenDetail.chainId,
+              token: tokenDetail.isNative ? null : {
+                chainId: tokenDetail.chainId,
+                address: tokenDetail.key.split(":")[1],
+                symbol: tokenDetail.symbol,
+                decimals: w.tokensByChain[tokenDetail.chainId]
+                  ?.find((t) => t.address.toLowerCase() === tokenDetail.key.split(":")[1])?.decimals ?? 18,
+                logo: tokenDetail.logo,
+                balanceNum: tokenDetail.balanceNum,
+                priceUsd: tokenDetail.balanceNum > 0 ? tokenDetail.usdValue / tokenDetail.balanceNum : 0,
+              },
+            });
+            setMode("send");
+          }}
+          onReceive={goReceive}
           onSessionExpired={() => { void showRelock(); }}
         />
       )}
@@ -489,6 +523,7 @@ function Dashboard(p: {
   onBPAN: () => void;
   onDapps: () => void;
   onLock: () => void;
+  onOpenAsset: (row: AssetRow) => void;
 }) {
   const { w } = p;
   const [filter, setFilter] = useState<string | null>(null);
@@ -574,7 +609,7 @@ function Dashboard(p: {
       >
         <SectionLabel text="Assets" style={{ marginTop: 8, marginBottom: 2 } as object} />
         {rows.map((r) => (
-          <AssetRowView key={r.key} row={r} />
+          <AssetRowView key={r.key} row={r} onPress={() => p.onOpenAsset(r)} />
         ))}
         {rows.length === 0 && !w.loading && (
           <View style={st.emptyState}>
@@ -637,10 +672,13 @@ function DevScreen(p: {
 
 // Token/holdings row (.token-row): flat row with hairline divider, house-framed
 // asset icon + chain corner badge, name/chain left, balance/fiat right.
-function AssetRowView(p: { row: AssetRow }) {
+function AssetRowView(p: { row: AssetRow; onPress?: () => void }) {
   const r = p.row;
   return (
-    <View style={st.tokenRow}>
+    <Pressable
+      onPress={p.onPress}
+      style={({ pressed }) => [st.tokenRow, pressed && { opacity: 0.7 }]}
+    >
       <View style={{ width: 32, height: 32 }}>
         <AssetIcon
           symbol={r.symbol}
@@ -661,7 +699,7 @@ function AssetRowView(p: { row: AssetRow }) {
         </Text>
         <Text style={st.tokenSub}>${r.usdValue.toFixed(2)}</Text>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
