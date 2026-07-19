@@ -27,7 +27,7 @@ import {
 import { runSpike, type SpikeResult } from "./spike/runSpike";
 import { runDevnetTx } from "./spike/devnetTx";
 import { useMobileWallet, type AssetRow, type MobileWalletState } from "./src/wallet/useMobileWallet";
-import { colors, radius, type as ts, spacing } from "./src/ui/theme";
+import { activeTheme, colors, radius, type as ts, spacing } from "./src/ui/theme";
 import {
   AlertCard, AmbientBackground, AnimatedLogo, Btn, Card, Field,
   GradientNumber, LogoMark, ScreenHeader, SectionLabel,
@@ -247,7 +247,9 @@ function AppInner() {
   return (
     <View style={[st.container, navVisible && { paddingBottom: BOTTOM_NAV_CLEARANCE }]}>
       <AmbientBackground />
-      <StatusBar style="light" />
+      {/* Status bar glyphs are the INVERSE of the background: dark icons on
+          the light theme's near-white bg, light icons on the dark one. */}
+      <StatusBar style={activeTheme === "light" ? "dark" : "light"} />
       {(mode === "onboard" || mode === "import" || mode === "reveal" || mode === "pin" || mode === "locked") && (
         <AuthHeader />
       )}
@@ -1041,7 +1043,7 @@ const st = StyleSheet.create({
     flexDirection: "row", alignItems: "center", gap: 10,
     paddingHorizontal: 14, paddingVertical: 11,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(42, 36, 80, 0.7)",
+    borderBottomColor: colors.divider,
   },
   netName: { color: colors.textPrimary, fontSize: 13, fontWeight: "500" },
 
@@ -1077,7 +1079,7 @@ const st = StyleSheet.create({
     flexDirection: "row", alignItems: "center",
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(42, 36, 80, 0.7)",
+    borderBottomColor: colors.divider,
   },
   tokenName: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "500" },
   tokenSub: { color: colors.muted, fontSize: ts.small, marginTop: 1 },

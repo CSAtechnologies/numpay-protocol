@@ -399,7 +399,7 @@ const st = StyleSheet.create({
     flexDirection: "row", alignItems: "center",
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(42, 36, 80, 0.7)",
+    borderBottomColor: colors.divider,
   },
   tokenSym: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "600" },
   tokenSub: { color: colors.muted, fontSize: ts.small, marginTop: 1 },

@@ -140,13 +140,13 @@ export function AmbientBackground() {
         {/* stopOpacity ramps, not "transparent" color stops: react-native-svg
             renders the latter with a visible hard edge (seen on-device). */}
         <SvgRadialGradient id="ambA" cx="50%" cy="50%" r="50%">
-          <Stop offset="0%" stopColor="#7c6df0" stopOpacity={0.14} />
-          <Stop offset="60%" stopColor="#7c6df0" stopOpacity={0.05} />
-          <Stop offset="100%" stopColor="#7c6df0" stopOpacity={0} />
+          <Stop offset="0%" stopColor={gradients.ambientA.color} stopOpacity={gradients.ambientA.opacity} />
+          <Stop offset="60%" stopColor={gradients.ambientA.color} stopOpacity={gradients.ambientA.opacity * 0.36} />
+          <Stop offset="100%" stopColor={gradients.ambientA.color} stopOpacity={0} />
         </SvgRadialGradient>
         <SvgRadialGradient id="ambB" cx="50%" cy="50%" r="50%">
-          <Stop offset="0%" stopColor="#a394ff" stopOpacity={0.08} />
-          <Stop offset="100%" stopColor="#a394ff" stopOpacity={0} />
+          <Stop offset="0%" stopColor={gradients.ambientB.color} stopOpacity={gradients.ambientB.opacity} />
+          <Stop offset="100%" stopColor={gradients.ambientB.color} stopOpacity={0} />
         </SvgRadialGradient>
       </Defs>
       <Ellipse cx="12%" cy="-2%" rx="300" ry="170" fill="url(#ambA)" />
@@ -314,7 +314,7 @@ const st = StyleSheet.create({
     borderRadius: radius.button,
     marginTop: 12,
     borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.13)",
+    borderColor: colors.overlayBorder,
     overflow: "hidden",
     shadowColor: colors.brand,
     shadowOpacity: 0.5,
@@ -347,8 +347,10 @@ const st = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  btnDanger: { backgroundColor: "#5b1f2b" },
-  btnText: { color: "#fff", fontWeight: "600", fontSize: ts.body },
+  btnDanger: { backgroundColor: colors.dangerBtn },
+  // Buttons carry a brand-gradient or solid-colour fill in both themes, so
+  // the label stays white rather than following textPrimary.
+  btnText: { color: colors.onBrand, fontWeight: "600", fontSize: ts.body },
 
   input: {
     width: "100%",

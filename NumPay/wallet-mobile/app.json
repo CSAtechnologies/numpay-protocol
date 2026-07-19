@@ -6,7 +6,7 @@
     "scheme": "numpay",
     "orientation": "portrait",
     "icon": "./assets/numpay-icon.png",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true
     },
@@ -46,7 +46,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#0a0912",
+          "backgroundColor": "#faf9ff",
           "image": "./assets/numpay-mark.png",
           "imageWidth": 150
         }

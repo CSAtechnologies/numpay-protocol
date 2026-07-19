@@ -513,7 +513,7 @@ const st = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(42, 36, 80, 0.7)",
+    borderBottomColor: colors.divider,
   },
   resolving: { color: colors.muted, fontSize: ts.small, marginTop: 6 },
   resolved: { color: colors.success, fontSize: ts.small, marginTop: 6 },

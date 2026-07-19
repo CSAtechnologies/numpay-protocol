@@ -3,7 +3,7 @@
 // layer. Absolute-positioned over the screen; App pads the content area so
 // the last rows clear it.
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { colors } from "./theme";
+import { activeTheme, colors } from "./theme";
 import {
   NavActivityIcon, NavBpanIcon, NavReceiveIcon, NavSendIcon,
   NavSettingsIcon, NavWalletIcon,
@@ -52,14 +52,16 @@ const st = StyleSheet.create({
     bottom: 12, left: 12, right: 12,
     height: 56,
     borderRadius: 20,
-    backgroundColor: "rgba(17, 15, 30, 0.96)",
+    backgroundColor: colors.navBg,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.navBorder,
     flexDirection: "row",
     alignItems: "center",
     overflow: "hidden",
     shadowColor: "#000",
-    shadowOpacity: 0.6,
+    // A 0.6 drop shadow reads as a smudge on a light background; the
+    // extension's light .floating-nav uses 0.08.
+    shadowOpacity: activeTheme === "light" ? 0.1 : 0.6,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
     elevation: 12,
@@ -76,9 +78,9 @@ const st = StyleSheet.create({
     position: "absolute",
     left: 5, right: 5, top: 6, bottom: 6,
     borderRadius: 16,
-    backgroundColor: "rgba(139, 92, 246, 0.12)",
+    backgroundColor: colors.brandTint,
     borderWidth: 1,
-    borderColor: "rgba(139, 92, 246, 0.1)",
+    borderColor: colors.navBorder,
   },
   label: {
     fontSize: 8.5,

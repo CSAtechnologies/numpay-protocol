@@ -138,7 +138,7 @@ const st = StyleSheet.create({
     alignItems: "center",
     paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(42, 36, 80, 0.7)",
+    borderBottomColor: colors.divider,
   },
   kindBadge: {
     position: "absolute", right: -2, bottom: -2,
@@ -150,7 +150,7 @@ const st = StyleSheet.create({
   pendingChip: { color: colors.amber, fontSize: 10, fontWeight: "500" },
   failedChip: { color: colors.danger, fontSize: 10, fontWeight: "500" },
   sub: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
-  metaChain: { color: "rgba(163, 148, 255, 0.7)", fontSize: 10, fontWeight: "500" },
+  metaChain: { color: colors.muted, fontSize: 10, fontWeight: "500" },
   metaDim: { color: colors.muted2, fontSize: 10 },
   amount: {
     fontSize: ts.row, fontWeight: "600", marginLeft: 8,

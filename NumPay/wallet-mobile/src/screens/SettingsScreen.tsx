@@ -276,14 +276,14 @@ const st = StyleSheet.create({
   rowChevron: { color: colors.muted2, fontSize: 18, marginLeft: 2 },
   hairline: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: "rgba(42, 36, 80, 0.7)",
+    backgroundColor: colors.divider,
     marginHorizontal: 14,
   },
 
   walletRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 12 },
   walletDivider: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "rgba(42, 36, 80, 0.7)",
+    borderTopColor: colors.divider,
   },
   walletMain: { flexDirection: "row", alignItems: "center", gap: 12, flex: 1 },
   radio: {
@@ -300,7 +300,7 @@ const st = StyleSheet.create({
   curRow: {
     flexDirection: "row", alignItems: "center", gap: 12,
     paddingHorizontal: 14, paddingVertical: 11,
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: "rgba(42, 36, 80, 0.7)",
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.divider,
   },
   curFlag: { fontSize: 22 },
   curSym: { color: colors.textPrimary, fontSize: ts.body, fontWeight: "600" },

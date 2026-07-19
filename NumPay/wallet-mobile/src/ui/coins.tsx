@@ -34,7 +34,7 @@ function FallbackCoin({ spec, size }: { spec: FallbackCoinSpec; size: number }) 
           width: size, height: size, backgroundColor: spec.disc,
           alignItems: "center", justifyContent: "center",
         },
-        spec.needsRing && { borderWidth: 1, borderColor: "rgba(255,255,255,0.18)" },
+        spec.needsRing && { borderWidth: 1, borderColor: colors.coinRing },
       ]}
     >
       <Text
