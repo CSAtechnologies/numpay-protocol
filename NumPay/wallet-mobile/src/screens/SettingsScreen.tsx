@@ -5,11 +5,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import {
-  listWallets, renameWallet, removeWallet, getActiveMnemonic,
+  listWallets, renameWallet, removeWallet, getActiveMnemonic, setWalletAvatar,
   type WalletMeta,
 } from "../vault/mobileVault";
 import { colors, radius, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
+import { WalletAvatar, EmojiPicker } from "../ui/WalletAvatar";
+
+function shortAddr(a?: string): string {
+  return a && a.length >= 10 ? `${a.slice(0, 6)}…${a.slice(-4)}` : (a ?? "");
+}
 
 function Row({ label, hint, onPress, danger, right }: {
   label: string;
@@ -48,11 +53,14 @@ export function SettingsScreen({
   const [wallets, setWallets] = useState<WalletMeta[]>([]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameVal, setRenameVal] = useState("");
+  const [emojiTargetId, setEmojiTargetId] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<string | null>(null);
   const [confirmWipe, setConfirmWipe] = useState(false);
 
   const reload = useCallback(() => { listWallets().then(setWallets).catch(() => {}); }, []);
   useEffect(() => { reload(); }, [reload, activeWalletId]);
+
+  const emojiTarget = wallets.find((w) => w.id === emojiTargetId) ?? null;
 
   const doRename = async (id: string) => {
     await renameWallet(id, renameVal);
@@ -95,32 +103,48 @@ export function SettingsScreen({
                 </View>
               ) : (
                 <>
+                  {/* Avatar — tap to pick an emoji (extension parity) */}
+                  <Pressable hitSlop={6} onPress={() => setEmojiTargetId(m.id)} style={{ marginRight: 10 }}>
+                    <WalletAvatar avatar={m.avatar} name={m.name} size={34} active={m.active} />
+                  </Pressable>
                   <Pressable style={st.walletMain} onPress={() => onSwitchWallet(m.id)}>
-                    <View style={[st.radio, m.active && st.radioOn]}>
-                      {m.active && <View style={st.radioDot} />}
-                    </View>
                     <View style={{ flex: 1 }}>
                       <Text style={st.rowLabel}>{m.name}</Text>
-                      <Text style={st.rowHint}>{m.active ? "Active" : "Tap to switch"}</Text>
+                      <Text style={st.rowHint} numberOfLines={1}>{shortAddr(m.evmAddress)}</Text>
                     </View>
                   </Pressable>
-                  <Pressable
-                    hitSlop={8}
-                    onPress={() => { setRenaming(m.id); setRenameVal(m.name); }}
-                    style={st.walletAction}
-                  >
-                    <Text style={st.walletActionText}>Rename</Text>
-                  </Pressable>
-                  {wallets.length > 1 && (
-                    <Pressable hitSlop={8} onPress={() => doRemove(m)} style={st.walletAction}>
-                      <Text style={[st.walletActionText, { color: colors.danger }]}>Remove</Text>
-                    </Pressable>
-                  )}
+                  <View style={{ alignItems: "flex-end" }}>
+                    {m.active ? (
+                      <Text style={[st.walletActionText, { color: colors.muted }]}>Active</Text>
+                    ) : (
+                      <Pressable hitSlop={8} onPress={() => onSwitchWallet(m.id)}>
+                        <Text style={st.walletActionText}>Switch</Text>
+                      </Pressable>
+                    )}
+                    <View style={{ flexDirection: "row", gap: 10, marginTop: 4 }}>
+                      <Pressable hitSlop={6} onPress={() => { setRenaming(m.id); setRenameVal(m.name); }}>
+                        <Text style={st.walletSubAction}>Rename</Text>
+                      </Pressable>
+                      {wallets.length > 1 && (
+                        <Pressable hitSlop={6} onPress={() => doRemove(m)}>
+                          <Text style={[st.walletSubAction, { color: colors.danger }]}>Remove</Text>
+                        </Pressable>
+                      )}
+                    </View>
+                  </View>
                 </>
               )}
             </View>
           ))}
         </Card>
+        {emojiTarget && (
+          <EmojiPicker
+            walletName={emojiTarget.name}
+            current={emojiTarget.avatar}
+            onPick={async (emoji) => { await setWalletAvatar(emojiTarget.id, emoji); setEmojiTargetId(null); reload(); }}
+            onClose={() => setEmojiTargetId(null)}
+          />
+        )}
         <Btn label="Add wallet" variant="secondary" onPress={onAddWallet} />
 
         {/* ── Security ── */}
@@ -231,6 +255,7 @@ const st = StyleSheet.create({
   radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.brand },
   walletAction: { paddingHorizontal: 8, paddingVertical: 4 },
   walletActionText: { color: colors.brand2, fontSize: ts.small, fontWeight: "600" },
+  walletSubAction: { color: colors.muted, fontSize: ts.small, fontWeight: "500" },
 
   mnemonic: { color: colors.textPrimary, fontSize: 15, lineHeight: 24, fontFamily: "monospace" },
   version: {

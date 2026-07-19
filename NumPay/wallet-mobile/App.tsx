@@ -21,8 +21,8 @@ import { chainNameOf } from "@numpay/core/txLog";
 import {
   createVault, getLastArgonMs, getStatus, getUnlockedMnemonic, lock,
   autoLockCheck, touchActivity, unlockWithBiometrics, unlockWithPin,
-  getActiveWalletId, switchWallet, addWallet,
-  VaultError, wipeVault, type VaultStatus,
+  getActiveWalletId, switchWallet, addWallet, listWallets,
+  VaultError, wipeVault, type VaultStatus, type WalletMeta,
 } from "./src/vault/mobileVault";
 import { runSpike, type SpikeResult } from "./spike/runSpike";
 import { runDevnetTx } from "./spike/devnetTx";
@@ -33,6 +33,7 @@ import {
   GradientNumber, LogoMark, ScreenHeader, SectionLabel,
 } from "./src/ui/components";
 import { BottomNav, BOTTOM_NAV_CLEARANCE, type NavTab } from "./src/ui/BottomNav";
+import { WalletAvatar } from "./src/ui/WalletAvatar";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import {
   LayersIcon, LinkIcon, LockIcon, ReceiveIcon, SendIcon, SwapIcon,
@@ -75,6 +76,7 @@ export default function App() {
   const [relocked, setRelocked] = useState(false);
   // Active wallet id (multi-wallet): drives the useMobileWallet reload on switch.
   const [activeWalletId, setActiveWalletId] = useState<string | null>(null);
+  const [activeWallet, setActiveWallet] = useState<WalletMeta | null>(null);
   const [addWalletOpen, setAddWalletOpen] = useState(false);
 
   const unlocked =
@@ -87,14 +89,20 @@ export default function App() {
   const unlockedRef = useRef(unlocked);
   unlockedRef.current = unlocked;
 
+  // Load the active wallet's meta (name + avatar) for the dashboard pill.
+  const loadActiveWallet = useCallback(async () => {
+    const list = await listWallets();
+    setActiveWallet(list.find((w) => w.active) ?? null);
+  }, []);
+
   const refresh = useCallback(async () => {
     const s = await getStatus();
     setStatus(s);
     const mn = await getUnlockedMnemonic();
     setActiveWalletId(await getActiveWalletId());
-    if (mn) setMode("home");
+    if (mn) { setMode("home"); void loadActiveWallet(); }
     else setMode(s.exists ? "locked" : "onboard");
-  }, []);
+  }, [loadActiveWallet]);
 
   // Switch the active wallet (Settings accounts). The hook re-derives on the id
   // change; we land on the dashboard so the switch is visible immediately.
@@ -102,8 +110,9 @@ export default function App() {
     await switchWallet(id);
     await touchActivity();
     setActiveWalletId(id);
+    void loadActiveWallet();
     setMode("home");
-  }, []);
+  }, [loadActiveWallet]);
 
   const showRelock = useCallback(async () => {
     setStatus(await getStatus());
@@ -136,6 +145,12 @@ export default function App() {
   useEffect(() => {
     if (unlocked && !relocked) void touchActivity();
   }, [mode, unlocked, relocked]);
+
+  // Returning to the dashboard: refresh the account pill's name/avatar in case
+  // they were changed in Settings (rename / emoji).
+  useEffect(() => {
+    if (mode === "home") void loadActiveWallet();
+  }, [mode, loadActiveWallet]);
 
   // Arm the closed-app receive watcher once per unlock: asks notification
   // permission on first use, then registers the OS background task. Failure
@@ -287,6 +302,9 @@ export default function App() {
           onLock={async () => { await lock(); setError(""); await refresh(); }}
           onBPAN={() => setMode("bpan")}
           onDapps={() => setMode("dapps")}
+          onAccounts={() => setMode("settings")}
+          walletName={activeWallet?.name ?? "NumPay"}
+          walletAvatar={activeWallet?.avatar}
           onOpenAsset={(row) => { setTokenDetail(row); setMode("token"); }}
         />
       )}
@@ -679,6 +697,9 @@ function Dashboard(p: {
   onBPAN: () => void;
   onDapps: () => void;
   onLock: () => void;
+  onAccounts: () => void;
+  walletName: string;
+  walletAvatar?: string;
   onOpenAsset: (row: AssetRow) => void;
 }) {
   const { w } = p;
@@ -688,12 +709,14 @@ function Dashboard(p: {
   const filterName = filter ? (chainNameOf(filter) ?? filter) : "All Assets";
   return (
     <View style={{ flex: 1 }}>
-      {/* Header: account pill left, dApps + lock right (ext Dashboard header) */}
+      {/* Header: account pill (avatar + wallet name -> Settings/accounts) left,
+          dApps + lock right (ext Dashboard header) */}
       <View style={st.homeHeader}>
-        <View style={st.acctPill}>
-          <LogoMark size={18} />
-          <Text style={st.acctName}>NumPay</Text>
-        </View>
+        <Pressable style={st.acctPill} onPress={p.onAccounts}>
+          <WalletAvatar avatar={p.walletAvatar} name={p.walletName} size={20} />
+          <Text style={st.acctName} numberOfLines={1}>{p.walletName}</Text>
+          <Text style={st.acctChevron}>{"▾"}</Text>
+        </Pressable>
         <View style={{ flex: 1 }} />
         <Pressable onPress={p.onDapps} style={st.iconBtn} hitSlop={8}>
           <LinkIcon size={15} color={colors.muted} />
@@ -970,7 +993,8 @@ const st = StyleSheet.create({
     backgroundColor: colors.card,
     borderWidth: 1, borderColor: colors.border,
   },
-  acctName: { color: colors.textPrimary, fontSize: 13, fontWeight: "600" },
+  acctName: { color: colors.textPrimary, fontSize: 13, fontWeight: "600", maxWidth: 140 },
+  acctChevron: { color: colors.muted, fontSize: 9, marginLeft: 1 },
   heroSub: { color: colors.textSecondary, fontSize: 12, marginTop: 4 },
 
   pillRow: {

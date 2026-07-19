@@ -30,6 +30,7 @@ import * as SecureStore from "expo-secure-store";
 import * as LocalAuthentication from "expo-local-authentication";
 import { gcm } from "@noble/ciphers/aes.js";
 import argon2 from "react-native-argon2";
+import { importFromMnemonic } from "@numpay/core/wallet";
 import {
   getItem, setItem, removeItem,
   getSession, setSession, removeSession,
@@ -82,12 +83,24 @@ export class VaultError extends Error {
 }
 
 // One wallet inside the vault. `id` is stable for the wallet's lifetime and is
-// how the UI addresses it (switch/rename/remove).
+// how the UI addresses it (switch/rename/remove). `avatar` is an optional emoji
+// (extension parity); `evmAddress` is derived once at creation so the accounts
+// list can show it without re-deriving every wallet on every render.
 export interface WalletEntry {
   id: string;
   name: string;
   mnemonic: string;
   createdAt: number;
+  avatar?: string;
+  evmAddress?: string;
+}
+
+function deriveEvm(mnemonic: string): string {
+  try {
+    return importFromMnemonic(mnemonic).address;
+  } catch {
+    return "";
+  }
 }
 // v2: multiple wallets + which one is active. v1 (single mnemonic) is migrated
 // transparently on unlock and rewritten as v2 on the next mutation.
@@ -108,7 +121,10 @@ function migrate(raw: VaultPayloadV1 | VaultPayload): VaultPayload {
   const id = newId();
   return {
     v: 2,
-    wallets: [{ id, name: "Wallet 1", mnemonic: raw.mnemonic, createdAt: raw.createdAt }],
+    wallets: [{
+      id, name: "Wallet 1", mnemonic: raw.mnemonic, createdAt: raw.createdAt,
+      evmAddress: deriveEvm(raw.mnemonic),
+    }],
     activeId: id,
   };
 }
@@ -253,7 +269,7 @@ export async function createVault(
   const id = newId();
   const payload: VaultPayload = {
     v: 2,
-    wallets: [{ id, name: "Wallet 1", mnemonic, createdAt: Date.now() }],
+    wallets: [{ id, name: "Wallet 1", mnemonic, createdAt: Date.now(), evmAddress: deriveEvm(mnemonic) }],
     activeId: id,
   };
   await writeVaultBlob(dataKey, payload);
@@ -377,6 +393,8 @@ export interface WalletMeta {
   name: string;
   active: boolean;
   createdAt: number;
+  avatar?: string;
+  evmAddress?: string;
 }
 
 /** The wallets in the vault (metadata only; no mnemonics), or [] when locked. */
@@ -385,6 +403,15 @@ export async function listWallets(): Promise<WalletMeta[]> {
   if (!u) return [];
   return u.payload.wallets.map((w) => ({
     id: w.id, name: w.name, active: w.id === u.payload.activeId, createdAt: w.createdAt,
+    avatar: w.avatar, evmAddress: w.evmAddress,
+  }));
+}
+
+/** Set (or clear, with "") the active-list emoji avatar for a wallet. */
+export async function setWalletAvatar(id: string, avatar: string): Promise<void> {
+  await mutateUnlocked((p) => ({
+    ...p,
+    wallets: p.wallets.map((w) => (w.id === id ? { ...w, avatar: avatar || undefined } : w)),
   }));
 }
 
@@ -408,9 +435,10 @@ export async function addWallet(mnemonic: string, name: string): Promise<string>
   }
   const id = newId();
   const clean = name.trim() || `Wallet ${u.payload.wallets.length + 1}`;
+  const evmAddress = deriveEvm(mnemonic);
   await mutateUnlocked((p) => ({
     ...p,
-    wallets: [...p.wallets, { id, name: clean, mnemonic, createdAt: Date.now() }],
+    wallets: [...p.wallets, { id, name: clean, mnemonic, createdAt: Date.now(), evmAddress }],
     activeId: id,
   }));
   return id;
