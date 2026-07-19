@@ -438,7 +438,9 @@ const CACHE_PFX = AUTOTOK_CACHE_PFX;
 const CACHE_TTL = 3 * 60 * 1000; // 3 minutes
 // A forced sweep (manual refresh button) may bypass the TTL at most this
 // often, so button-mashing can't burn the indexer quotas.
-const FORCE_MIN_INTERVAL = 15 * 1000;
+// Manual-refresh bypass debounce. Only spends quota when a human actually
+// taps refresh, so it can stay tight: 15s made the button feel broken.
+const FORCE_MIN_INTERVAL = 5 * 1000;
 let lastForcedSweep = 0;
 
 /**

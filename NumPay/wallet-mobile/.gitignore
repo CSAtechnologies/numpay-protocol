@@ -39,3 +39,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Release signing credentials. The keystore itself lives outside the repo
+# (~/.numpay-keys/); this file holds its passwords in plain text.
+# Kept OUTSIDE android/ so `expo prebuild --clean` cannot delete it.
+keystore.properties
