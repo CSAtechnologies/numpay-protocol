@@ -9,7 +9,7 @@ import {
 } from "@numpay/core/wallet";
 import { NETWORKS, BPAN_CHAINS } from "@numpay/core/networks";
 import { findOwnedBPANs } from "@numpay/core/bpan";
-import { type Rates } from "@numpay/core/currency";
+import { formatFiat, type Rates } from "@numpay/core/currency";
 import { classifyToken } from "@numpay/core/tokenSpam";
 import { loadHiddenTokens, setTokenHidden, tokenHideKey } from "@numpay/core/hiddenTokens";
 
@@ -120,6 +120,12 @@ interface DisplayToken {
   name: string;
   logo?: string;
   balance: string;
+  /**
+   * Misnomer kept for churn reasons: this is the value in the ACTIVE DISPLAY
+   * CURRENCY, not USD. It is built with getConvertedPrice / usdToCurrency,
+   * which already apply the rate. Never pass it through a converter again
+   * (formatFiat with rates=null formats it correctly).
+   */
   usdValue: number;
   chainName?: string;
   chainLogo?: string;
@@ -574,12 +580,9 @@ export default function Dashboard({ onLock }: Props) {
     return 0;
   })();
 
-  const sym = currency?.symbol || "$";
-  const portfolioDisplay = livePortfolio >= 1000
-    ? `${sym}${livePortfolio.toLocaleString("en", { maximumFractionDigits: 0 })}`
-    : livePortfolio >= 1
-    ? `${sym}${livePortfolio.toFixed(2)}`
-    : `${sym}${livePortfolio.toFixed(4)}`;
+  // livePortfolio is already in the display currency (getConvertedPrice), so
+  // format it without a second conversion.
+  const portfolioDisplay = formatFiat(livePortfolio, currencyCode, currency, null);
 
   const syncing = multiChainLoading || nonEvmLoading;
 
@@ -1164,7 +1167,7 @@ export default function Dashboard({ onLock }: Props) {
                 </p>
                 {token.usdValue > 0 && (
                   <p className="text-[11px] text-muted tabular-nums">
-                    {sym}{token.usdValue.toFixed(2)}
+                    {formatFiat(token.usdValue, currencyCode, currency, null)}
                   </p>
                 )}
               </div>
