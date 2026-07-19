@@ -50,11 +50,12 @@ import {
   normalizeTxForEthers,
 } from "@/lib/dapp/txDecode";
 import PasswordPrompt from "../popup/components/PasswordPrompt";
+import { DEFAULT_THEME } from "../popup/hooks/useTheme";
 import "../popup/index.css";
 
 document.documentElement.setAttribute(
   "data-theme",
-  localStorage.getItem("numpay_theme") || "dark"
+  localStorage.getItem("numpay_theme") || DEFAULT_THEME
 );
 
 const PENDING_PFX = "numpay_dapp_pending_";
