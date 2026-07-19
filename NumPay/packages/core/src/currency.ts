@@ -94,7 +94,16 @@ export const CURRENCIES: Currency[] = [
 const CURRENCY_KEY = "numpay_currency";
 const RATES_KEY = "numpay_rates";
 const RATES_TS_KEY = "numpay_rates_ts";
-const CACHE_DURATION = 15 * 60 * 1000; // 15 minutes — reduce CoinGecko free-tier rate-limit risk
+// Client-side rates cache. This sits IN FRONT of the wallet-api proxy, which
+// holds its own 5-minute global cache, so a client miss costs a Worker request
+// and NOT a CoinGecko call: the upstream quota is governed entirely by the
+// worker's GLOBAL_FRESH_MS. Caching here for 15 minutes therefore bought no
+// quota headroom and just stacked onto the worker's 5, making prices up to 20
+// minutes stale. 60s keeps the app feeling live at zero upstream cost.
+//
+// Only the direct-to-CoinGecko fallback path below is quota-exposed, and that
+// path already has its own timeout, backoff and stale-cache fallback.
+const CACHE_DURATION = 60 * 1000;
 
 export const DEFAULT_CURRENCY = "usd";
 
