@@ -18,6 +18,7 @@ import { explorerTxUrl } from "../wallet/send";
 import type { MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, radius, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
+import { useCurrencyPref, formatFiatLine } from "../ui/currency";
 import { AssetIcon, ChainIcon } from "../ui/coins";
 import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
 
@@ -40,6 +41,7 @@ export function SwapScreen({ w, onBack, onSessionExpired }: {
     return funded;
   }, [w.rows]);
 
+  const cur = useCurrencyPref();
   const [chainId, setChainId] = useState(chains[0] ?? "ethereum");
   const isSolana = chainId === "solana";
   const net = NETWORKS[chainId];
@@ -257,7 +259,7 @@ export function SwapScreen({ w, onBack, onSessionExpired }: {
             {"  "}
             <Text style={st.maxInline} onPress={() => { void handleMax(); }}>MAX</Text>
           </Text>
-          <Text style={st.subText}>{sellUsd > 0 ? `≈ $${sellUsd.toFixed(2)}` : " "}</Text>
+          <Text style={st.subText}>{sellUsd > 0 ? `≈ ${formatFiatLine(sellUsd, cur.code, cur.currency, w.rates)}` : " "}</Text>
         </View>
 
         {/* Flip */}
@@ -275,7 +277,7 @@ export function SwapScreen({ w, onBack, onSessionExpired }: {
           </Pressable>
           <View style={{ flex: 1, alignItems: "flex-end", paddingRight: 4 }}>
             <Text style={st.receiveText}>{best ? best.destAmount : quoting ? "…" : "0"}</Text>
-            {buyUsd > 0 && <Text style={st.subText}>≈ ${buyUsd.toFixed(2)}</Text>}
+            {buyUsd > 0 && <Text style={st.subText}>≈ {formatFiatLine(buyUsd, cur.code, cur.currency, w.rates)}</Text>}
           </View>
         </Card>
 

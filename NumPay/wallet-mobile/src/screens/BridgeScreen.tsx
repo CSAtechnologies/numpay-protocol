@@ -18,6 +18,7 @@ import { explorerTxUrl } from "../wallet/send";
 import type { MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, radius, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
+import { useCurrencyPref, formatFiatLine } from "../ui/currency";
 import { AssetIcon, ChainIcon } from "../ui/coins";
 import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
 
@@ -40,6 +41,7 @@ export function BridgeScreen({ w, onBack, onSessionExpired }: {
     return [...ids];
   }, [w.rows]);
 
+  const cur = useCurrencyPref();
   const [fromChain, setFromChain] = useState(fromChains[0] ?? "base");
   const [toChain, setToChain] = useState(fromChains[0] === "base" ? "arbitrum" : "base");
 
@@ -219,7 +221,7 @@ export function BridgeScreen({ w, onBack, onSessionExpired }: {
             Balance {parseFloat(fromToken?.balance || "0").toLocaleString(undefined, { maximumFractionDigits: 6 })}
             {"  "}<Text style={st.maxInline} onPress={() => { void handleMax(); }}>MAX</Text>
           </Text>
-          <Text style={st.subText}>{sellUsd > 0 ? `≈ $${sellUsd.toFixed(2)}` : " "}</Text>
+          <Text style={st.subText}>{sellUsd > 0 ? `≈ ${formatFiatLine(sellUsd, cur.code, cur.currency, w.rates)}` : " "}</Text>
         </View>
 
         {/* To chain */}
@@ -240,7 +242,7 @@ export function BridgeScreen({ w, onBack, onSessionExpired }: {
           </Pressable>
           <View style={{ flex: 1, alignItems: "flex-end", paddingRight: 4 }}>
             <Text style={st.receiveText}>{best ? receive : quoting ? "…" : "0"}</Text>
-            {buyUsd > 0 && <Text style={st.subText}>≈ ${buyUsd.toFixed(2)}</Text>}
+            {buyUsd > 0 && <Text style={st.subText}>≈ {formatFiatLine(buyUsd, cur.code, cur.currency, w.rates)}</Text>}
           </View>
         </Card>
 

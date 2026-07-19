@@ -8,9 +8,11 @@ import {
   listWallets, renameWallet, removeWallet, getActiveMnemonic, setWalletAvatar,
   type WalletMeta,
 } from "../vault/mobileVault";
+import { CURRENCIES } from "@numpay/core/currency";
 import { colors, radius, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
 import { WalletAvatar, EmojiPicker } from "../ui/WalletAvatar";
+import { useCurrencyPref } from "../ui/currency";
 
 function shortAddr(a?: string): string {
   return a && a.length >= 10 ? `${a.slice(0, 6)}…${a.slice(-4)}` : (a ?? "");
@@ -56,6 +58,13 @@ export function SettingsScreen({
   const [emojiTargetId, setEmojiTargetId] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<string | null>(null);
   const [confirmWipe, setConfirmWipe] = useState(false);
+  const cur = useCurrencyPref();
+  const [showCurrency, setShowCurrency] = useState(false);
+  const [currencySearch, setCurrencySearch] = useState("");
+  const filteredCurrencies = CURRENCIES.filter((c) => {
+    const q = currencySearch.trim().toLowerCase();
+    return !q || c.name.toLowerCase().includes(q) || c.code.includes(q) || c.symbol.toLowerCase().includes(q);
+  });
 
   const reload = useCallback(() => { listWallets().then(setWallets).catch(() => {}); }, []);
   useEffect(() => { reload(); }, [reload, activeWalletId]);
@@ -182,13 +191,44 @@ export function SettingsScreen({
           <Row label="Connected dApps" hint="WalletConnect sessions and pairing" onPress={onDapps} />
         </Card>
 
-        {/* ── Preferences (display currency / theme land here next) ── */}
+        {/* ── Preferences ── */}
         <SectionLabel text="Preferences" style={{ marginTop: 18, marginBottom: 6 } as object} />
         <Card>
-          <Row label="Display currency" hint="More currencies coming soon" right="USD" />
+          <Row
+            label="Display currency"
+            hint="Prices and balances show in this currency"
+            right={`${cur.currency?.flag ? cur.currency.flag + " " : ""}${cur.currency?.symbol ?? cur.code.toUpperCase()}`}
+            onPress={() => { setShowCurrency((v) => !v); setCurrencySearch(""); }}
+          />
           <View style={st.hairline} />
           <Row label="Theme" hint="Light theme coming soon" right="Dark" />
         </Card>
+        {showCurrency && (
+          <Card style={{ marginTop: 8, maxHeight: 320 }}>
+            <View style={{ padding: 10 }}>
+              <Field placeholder="Search currencies…" value={currencySearch} onChangeText={setCurrencySearch} />
+            </View>
+            <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled">
+              {filteredCurrencies.map((c) => (
+                <Pressable
+                  key={c.code}
+                  style={st.curRow}
+                  onPress={() => { cur.setCode(c.code); setShowCurrency(false); }}
+                >
+                  <Text style={st.curFlag}>{c.flag ?? "🪙"}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={st.rowLabel}>{c.name}</Text>
+                    <Text style={st.rowHint}>{c.code.toUpperCase()}</Text>
+                  </View>
+                  <Text style={[st.curSym, cur.code === c.code && { color: colors.brand2 }]}>{c.symbol}</Text>
+                </Pressable>
+              ))}
+              {filteredCurrencies.length === 0 && (
+                <Text style={[st.rowHint, { textAlign: "center", padding: 16 }]}>No currencies found</Text>
+              )}
+            </ScrollView>
+          </Card>
+        )}
 
         {/* ── Danger zone ── */}
         <SectionLabel text="Danger zone" style={{ marginTop: 18, marginBottom: 6 } as object} />
@@ -257,6 +297,13 @@ const st = StyleSheet.create({
   walletActionText: { color: colors.brand2, fontSize: ts.small, fontWeight: "600" },
   walletSubAction: { color: colors.muted, fontSize: ts.small, fontWeight: "500" },
 
+  curRow: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    paddingHorizontal: 14, paddingVertical: 11,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: "rgba(42, 36, 80, 0.7)",
+  },
+  curFlag: { fontSize: 22 },
+  curSym: { color: colors.textPrimary, fontSize: ts.body, fontWeight: "600" },
   mnemonic: { color: colors.textPrimary, fontSize: 15, lineHeight: 24, fontFamily: "monospace" },
   version: {
     color: colors.muted2, fontSize: ts.label, textAlign: "center",

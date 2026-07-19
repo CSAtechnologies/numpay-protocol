@@ -26,6 +26,7 @@ import {
 import type { MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, radius, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SendErrorCard } from "../ui/components";
+import { useCurrencyPref, formatFiatLine, formatFeeTail } from "../ui/currency";
 import { AssetIcon, ChainIcon } from "../ui/coins";
 import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
 
@@ -46,19 +47,14 @@ function fmtFeeNative(n: number): string {
   return n.toFixed(decimals).replace(/\.?0+$/, "");
 }
 
-// Fiat tail for a fee line: "$0.00" says nothing, so sub-cent fees read
-// "(<$0.01)" instead.
-function feeUsdLabel(usd: number): string {
-  if (!(usd > 0)) return "";
-  return usd < 0.005 ? " (<$0.01)" : ` ($${usd.toFixed(2)})`;
-}
-
-function nonEvmFeeLine(chainId: string, price: number): string {
+// `tail` renders the parenthesised fiat cost in the user's display currency
+// (formatFeeTail, bound by the caller) so these stay pure string builders.
+function nonEvmFeeLine(chainId: string, price: number, tail: (usd: number) => string): string {
   const usd = price > 0 ? (NON_EVM_FEE_NATIVE[chainId] ?? 0) * price : 0;
   switch (chainId) {
-    case "solana": return `Network fee ~0.000005 SOL${feeUsdLabel(usd)}`;
-    case "tron":   return `Network fee up to ~1 TRX${feeUsdLabel(usd)} (new recipients cost ~1 TRX activation)`;
-    case "sui":    return `Network fee ~0.003 SUI${feeUsdLabel(usd)}`;
+    case "solana": return `Network fee ~0.000005 SOL${tail(usd)}`;
+    case "tron":   return `Network fee up to ~1 TRX${tail(usd)} (new recipients cost ~1 TRX activation)`;
+    case "sui":    return `Network fee ~0.003 SUI${tail(usd)}`;
     default:       return "";
   }
 }
@@ -87,6 +83,11 @@ export function SendScreen({ w, onBack, onSessionExpired, initialChainId, initia
     return [...evm, ...Object.keys(NON_EVM_SENDABLE)];
   }, [w.rows]);
 
+  const cur = useCurrencyPref();
+  const feeTail = useCallback(
+    (usd: number) => formatFeeTail(usd, cur.code, cur.currency, w.rates),
+    [cur.code, cur.currency, w.rates],
+  );
   const [chainId, setChainId] = useState(initialChainId ?? "ethereum");
   // null = the chain's native coin; otherwise the picked token.
   const [token, setToken] = useState<SendTokenPick | null>(initialToken ?? null);
@@ -437,11 +438,11 @@ export function SendScreen({ w, onBack, onSessionExpired, initialChainId, initia
           </Pressable>
         </View>
         <View style={st.subRow}>
-          <Text style={st.subText}>{amountUsd > 0 ? `≈ $${amountUsd.toFixed(2)}` : " "}</Text>
+          <Text style={st.subText}>{amountUsd > 0 ? `≈ ${formatFiatLine(amountUsd, cur.code, cur.currency, w.rates)}` : " "}</Text>
           <Text style={st.subText}>
             {isEvm
-              ? (fee ? `Network fee ~${fmtFeeNative(fee.feeNative)} ${nativeSymbol}${feeUsdLabel(feeUsd)}` : "Estimating fee…")
-              : nonEvmFeeLine(chainId, nativePrice)}
+              ? (fee ? `Network fee ~${fmtFeeNative(fee.feeNative)} ${nativeSymbol}${feeTail(feeUsd)}` : "Estimating fee…")
+              : nonEvmFeeLine(chainId, nativePrice, feeTail)}
           </Text>
         </View>
 

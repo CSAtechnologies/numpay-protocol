@@ -34,6 +34,7 @@ import {
 } from "./src/ui/components";
 import { BottomNav, BOTTOM_NAV_CLEARANCE, type NavTab } from "./src/ui/BottomNav";
 import { WalletAvatar } from "./src/ui/WalletAvatar";
+import { CurrencyProvider, useCurrencyPref, formatFiat } from "./src/ui/currency";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import {
   LayersIcon, LinkIcon, LockIcon, ReceiveIcon, SendIcon, SwapIcon,
@@ -59,6 +60,14 @@ type Mode =
   | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity" | "bpan" | "dapps" | "dev" | "settings" | "token";
 
 export default function App() {
+  return (
+    <CurrencyProvider>
+      <AppInner />
+    </CurrencyProvider>
+  );
+}
+
+function AppInner() {
   const [mode, setMode] = useState<Mode>("loading");
   const [receiveAddrs, setReceiveAddrs] = useState<ReceiveAddrs | null>(null);
   // Token-detail target and the Send screen's preselection (TokenDetail entry).
@@ -703,6 +712,7 @@ function Dashboard(p: {
   onOpenAsset: (row: AssetRow) => void;
 }) {
   const { w } = p;
+  const cur = useCurrencyPref();
   const [filter, setFilter] = useState<string | null>(null);
   const [showNetworks, setShowNetworks] = useState(false);
   const rows = filter ? w.rows.filter((r) => r.chainId === filter) : w.rows;
@@ -741,7 +751,7 @@ function Dashboard(p: {
       >
         {/* Hero: the ext's centered gradient portfolio number, no card. */}
         <View style={{ alignItems: "center", marginTop: 14 }}>
-          <GradientNumber text={`$${w.portfolioUsd.toFixed(2)}`} size={42} />
+          <GradientNumber text={formatFiat(w.portfolioUsd, cur.code, cur.currency, w.rates)} size={42} />
           <Text style={st.heroSub}>
             Total Portfolio{w.loading ? "  · syncing…" : ""}
           </Text>
@@ -832,7 +842,12 @@ function Dashboard(p: {
 
         <SectionLabel text="Assets" style={{ marginTop: 18, marginBottom: 2 } as object} />
         {rows.map((r) => (
-          <AssetRowView key={r.key} row={r} onPress={() => p.onOpenAsset(r)} />
+          <AssetRowView
+            key={r.key}
+            row={r}
+            fiat={formatFiat(r.usdValue, cur.code, cur.currency, w.rates)}
+            onPress={() => p.onOpenAsset(r)}
+          />
         ))}
         {rows.length === 0 && !w.loading && (
           <View style={st.emptyState}>
@@ -879,7 +894,7 @@ function DevScreen(p: {
 
 // Token/holdings row (.token-row): flat row with hairline divider, house-framed
 // asset icon + chain corner badge, name/chain left, balance/fiat right.
-function AssetRowView(p: { row: AssetRow; onPress?: () => void }) {
+function AssetRowView(p: { row: AssetRow; fiat: string; onPress?: () => void }) {
   const r = p.row;
   return (
     <Pressable
@@ -904,7 +919,7 @@ function AssetRowView(p: { row: AssetRow; onPress?: () => void }) {
         <Text style={st.tokenBal}>
           {r.balanceNum.toLocaleString(undefined, { maximumFractionDigits: 6 })} {r.symbol}
         </Text>
-        <Text style={st.tokenSub}>${r.usdValue.toFixed(2)}</Text>
+        <Text style={st.tokenSub}>{p.fiat}</Text>
       </View>
     </Pressable>
   );

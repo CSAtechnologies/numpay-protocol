@@ -12,6 +12,7 @@ import { getUnlockedMnemonic } from "../vault/mobileVault";
 import type { AssetRow, MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Card, ScreenHeader, SectionLabel } from "../ui/components";
+import { useCurrencyPref, formatFiat } from "../ui/currency";
 import { AssetIcon, ChainBadge } from "../ui/coins";
 import { TxRow } from "./ActivityScreen";
 
@@ -29,6 +30,7 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onReceive, onSession
     ? row.usdValue / row.balanceNum
     : (w.rates ? getUsdPrice(row.symbol, w.rates) : 0);
 
+  const cur = useCurrencyPref();
   const [txs, setTxs] = useState<TxRecord[]>([]);
   const [unwrapping, setUnwrapping] = useState(false);
   const [unwrapMsg, setUnwrapMsg] = useState("");
@@ -84,7 +86,7 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onReceive, onSession
             {row.balanceNum.toLocaleString(undefined, { maximumFractionDigits: 6 })} {row.symbol}
           </Text>
           <Text style={st.fiat}>
-            {row.usdValue > 0 ? `$${row.usdValue.toFixed(2)}` : price > 0 ? "$0.00" : " "}
+            {row.usdValue > 0 || price > 0 ? formatFiat(row.usdValue, cur.code, cur.currency, w.rates) : " "}
           </Text>
           <Text style={st.chain}>{row.name} · {row.chainName}</Text>
         </Card>

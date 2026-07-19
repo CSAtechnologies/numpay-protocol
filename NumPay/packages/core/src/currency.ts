@@ -226,6 +226,82 @@ export function usdToDisplayCurrency(usdAmount: number, currencyCode: string, ra
   return usdAmount;
 }
 
+// ── Display formatting ───────────────────────────────────────────────────
+// Shared by the extension popup and the mobile app so the two never drift.
+// Every one of these converts before formatting: applying a currency symbol
+// to an unconverted USD figure states a number that is simply wrong.
+
+// BTC and ETH are selectable display currencies and need far more precision
+// than any fiat tier gives: a $12 balance is 0.0001 BTC, which two or even
+// four decimals round away to zero. Same distinction convertBalance makes.
+const CRYPTO_CODES = new Set(["btc", "eth"]);
+const CRYPTO_DECIMALS = 8;
+const CRYPTO_MIN = 1e-8;
+
+function symbolOf(code: string, currency: Currency | undefined): string {
+  return currency?.symbol || code.toUpperCase();
+}
+
+function convert(usd: number, code: string, rates: Rates | null): number {
+  return rates ? usdToDisplayCurrency(usd, code, rates) : usd;
+}
+
+/**
+ * Render an already-converted value. Crypto currencies get 8 decimals; fiat
+ * tiers by magnitude (>=1000 none, >=1 two, below 1 four). Trailing zeros
+ * past two decimals are trimmed, so 0.1175 BTC does not read "0.11750000".
+ */
+function fmtValue(v: number, code: string): string {
+  const max = CRYPTO_CODES.has(code) ? CRYPTO_DECIMALS : v >= 1000 ? 0 : v >= 1 ? 2 : 4;
+  return v.toLocaleString("en", {
+    minimumFractionDigits: Math.min(max, 2),
+    maximumFractionDigits: max,
+  });
+}
+
+/** Smallest value this currency can render, used as the "< x" floor. */
+function floorFor(code: string): number {
+  return CRYPTO_CODES.has(code) ? CRYPTO_MIN : 0.01;
+}
+
+/**
+ * A USD amount in the display currency, for balances and portfolio totals.
+ * Symbol prefix, e.g. "N1,975,790" / "$12.50" / "BTC0.1175".
+ */
+export function formatFiat(usd: number, code: string, currency: Currency | undefined, rates: Rates | null): string {
+  const sym = symbolOf(code, currency);
+  if (!usd || usd <= 0) return `${sym}0.00`;
+  return `${sym}${fmtValue(convert(usd, code, rates), code)}`;
+}
+
+/**
+ * Fiat line under a swap/bridge/send amount. A value too small to render at
+ * this currency's precision reads "< $0.01" rather than a bare "$0.00" that
+ * looks like a failed quote. Returns "" when there is nothing to show, so
+ * callers can render a blank line.
+ */
+export function formatFiatLine(usd: number, code: string, currency: Currency | undefined, rates: Rates | null): string {
+  if (!(usd > 0)) return "";
+  const sym = symbolOf(code, currency);
+  const v = convert(usd, code, rates);
+  const floor = floorFor(code);
+  if (v < floor) return `< ${sym}${fmtValue(floor, code)}`;
+  return `${sym}${fmtValue(v, code)}`;
+}
+
+/**
+ * Parenthesised tail for a network-fee line, e.g. " ($0.42)". A fee too small
+ * to render reads " (<$0.01)" because "$0.00" says nothing about a real cost.
+ */
+export function formatFeeTail(usd: number, code: string, currency: Currency | undefined, rates: Rates | null): string {
+  if (!(usd > 0)) return "";
+  const sym = symbolOf(code, currency);
+  const v = convert(usd, code, rates);
+  const floor = floorFor(code);
+  if (v < floor) return ` (<${sym}${fmtValue(floor, code)})`;
+  return ` (${sym}${fmtValue(v, code)})`;
+}
+
 export function convertBalance(
   balance: string,
   networkSymbol: string,
