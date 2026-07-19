@@ -201,7 +201,7 @@ export function SettingsScreen({
             onPress={() => { setShowCurrency((v) => !v); setCurrencySearch(""); }}
           />
           <View style={st.hairline} />
-          <Row label="Theme" hint="Light theme coming soon" right="Dark" />
+          <Row label="Theme" hint="Dark theme coming soon" right="Light" />
         </Card>
         {showCurrency && (
           <Card style={{ marginTop: 8, maxHeight: 320 }}>
