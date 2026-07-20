@@ -19,14 +19,23 @@ import type { MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, radius, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
 import { useCurrencyPref, formatFiatLine } from "../ui/currency";
-import { AssetIcon, ChainIcon } from "../ui/coins";
+import { AssetIcon, ChainBadge, ChainIcon } from "../ui/coins";
 import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
 
 const QUOTE_DEBOUNCE_MS = 700;
 
-export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initialFromAddr }: {
+// Unfunded chains sort by real-world swap usage, not NETWORKS insertion order
+// (which led with a wall of L2s). Chains outside this list keep their
+// NETWORKS order after it.
+const SWAP_CHAIN_ORDER = [
+  "ethereum", "solana", "base", "bsc", "arbitrum", "polygon", "optimism", "avalanche",
+];
+
+export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChainId, initialFromAddr }: {
   w: MobileWalletState;
   onBack: () => void;
+  /** Cross-chain buy-side pick hands off to the Bridge flow. */
+  onBridge?: () => void;
   onSessionExpired?: () => void;
   /** Preselect (TokenDetail "Swap" entry): the chain, and the sell-side token
    *  by contract/mint address (undefined = the chain's native coin). */
@@ -42,7 +51,12 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
       .filter((r) => r.isNative && r.balanceNum > 0 && (NETWORKS[r.chainId] || r.chainId === "solana"))
       .sort((a, b) => b.usdValue - a.usdValue)
       .map((r) => r.chainId);
-    const rest = [...Object.keys(NETWORKS), "solana"].filter((id) => !funded.includes(id));
+    const rest = [...Object.keys(NETWORKS), "solana"]
+      .filter((id) => !funded.includes(id))
+      .sort((a, b) => {
+        const ai = SWAP_CHAIN_ORDER.indexOf(a), bi = SWAP_CHAIN_ORDER.indexOf(b);
+        return (ai === -1 ? SWAP_CHAIN_ORDER.length : ai) - (bi === -1 ? SWAP_CHAIN_ORDER.length : bi);
+      });
     const list = [...funded, ...rest];
     if (initialChainId && !list.includes(initialChainId) &&
         (NETWORKS[initialChainId] || initialChainId === "solana")) {
@@ -72,6 +86,9 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
   const [fromToken, setFromToken] = useState<SwapToken | null>(null);
   const [toToken, setToToken] = useState<SwapToken | null>(null);
   const [picking, setPicking] = useState<"from" | "to" | null>(null);
+  // The picker has its own chain row (extension parity): it opens on the
+  // swap's chain but can browse any chain's tokens.
+  const [pickerChain, setPickerChain] = useState(chainId);
   const [amount, setAmount] = useState("");
   const [slippage, setSlippage] = useState("0.5");
   const [routes, setRoutes] = useState<RouteOption[]>([]);
@@ -142,9 +159,24 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
 
   function selectToken(t: SwapToken) {
     if (picking === "from") {
+      if (pickerChain !== chainId) {
+        // Selling from another chain: move the whole swap there with this
+        // token preselected (the pair-reset effect consumes the ref).
+        initFromAddr.current = t.address?.toLowerCase();
+        setPicking(null);
+        setChainId(pickerChain);
+        return;
+      }
       setFromToken(t);
       scheduleQuote(amount, t, toToken);
     } else if (picking === "to") {
+      if (pickerChain !== chainId) {
+        // Buying on a different chain than the sell side is a bridge, not a
+        // swap — hand off to the Bridge flow (extension auto-switch parity).
+        setPicking(null);
+        onBridge?.();
+        return;
+      }
       setToToken(t);
       scheduleQuote(amount, fromToken, t);
     }
@@ -213,10 +245,15 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
   // buy-side stables.
   if (picking) {
     const balOf = (t: SwapToken) => parseFloat(t.balance) || 0;
-    const held = tokenList
+    const pickerTokens = pickerChain === chainId
+      ? tokenList
+      : pickerChain === "solana"
+        ? buildSolanaTokenList(w.rows, w.tokensByChain)
+        : buildChainTokenList(pickerChain, w.rows, w.tokensByChain);
+    const held = pickerTokens
       .filter((t) => balOf(t) > 0)
       .sort((a, b) => balOf(b) * price(b) - balOf(a) * price(a));
-    const others = tokenList.filter((t) => balOf(t) <= 0);
+    const others = pickerTokens.filter((t) => balOf(t) <= 0);
     const renderRow = (t: SwapToken) => {
       const bal = balOf(t);
       const usd = bal * price(t);
@@ -226,7 +263,10 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
           onPress={() => selectToken(t)}
           style={st.tokenRow}
         >
-          <AssetIcon symbol={t.symbol} logo={t.logo} chainId={t.chainId} address={t.address} size={32} />
+          <View style={{ width: 32, height: 32 }}>
+            <AssetIcon symbol={t.symbol} logo={t.logo} chainId={t.chainId} address={t.address} size={32} />
+            {!!t.address && <ChainBadge chainId={t.chainId} size={14} />}
+          </View>
           <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
             <Text style={st.tokenSym} numberOfLines={1}>{t.symbol}</Text>
             <Text style={st.tokenSub} numberOfLines={1}>{t.name}</Text>
@@ -249,6 +289,23 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
     return (
       <View style={{ flex: 1 }}>
         <ScreenHeader title={picking === "from" ? "Sell" : "Buy"} onBack={() => setPicking(null)} />
+        {/* Chain row inside the picker: browse any chain's tokens. */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, marginBottom: 8 }}>
+          {chains.map((id) => (
+            <Chip
+              key={id}
+              label={id === "solana" ? "Solana" : NETWORKS[id]?.name ?? id}
+              active={pickerChain === id}
+              onPress={() => setPickerChain(id)}
+              icon={<ChainIcon chainId={id} size={16} />}
+            />
+          ))}
+        </ScrollView>
+        {picking === "to" && pickerChain !== chainId && (
+          <Text style={[st.subText, { marginBottom: 6 }]}>
+            Buying on a different chain than you sell from is a bridge — picking a token here opens Bridge.
+          </Text>
+        )}
         <ScrollView showsVerticalScrollIndicator={false}>
           {held.length > 0 && <SectionLabel text="Your tokens" style={{ marginBottom: 4 } as object} />}
           {held.map(renderRow)}
@@ -281,8 +338,13 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
         {/* SELL */}
         <SectionLabel text="Sell" style={{ marginTop: 10 } as object} />
         <Card style={st.sideCard}>
-          <Pressable onPress={() => setPicking("from")} style={st.tokenBtn}>
-            {fromToken && <AssetIcon symbol={fromToken.symbol} logo={fromToken.logo} chainId={chainId} address={fromToken.address} size={28} />}
+          <Pressable onPress={() => { setPickerChain(chainId); setPicking("from"); }} style={st.tokenBtn}>
+            {fromToken && (
+              <View style={{ width: 28, height: 28 }}>
+                <AssetIcon symbol={fromToken.symbol} logo={fromToken.logo} chainId={chainId} address={fromToken.address} size={28} />
+                {!!fromToken.address && <ChainBadge chainId={chainId} size={12} />}
+              </View>
+            )}
             <Text style={st.tokenBtnText}>{fromToken?.symbol ?? "—"}</Text>
             <Text style={st.chev}>▾</Text>
           </Pressable>
@@ -313,8 +375,13 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
         {/* BUY */}
         <SectionLabel text="Buy" />
         <Card style={st.sideCard}>
-          <Pressable onPress={() => setPicking("to")} style={st.tokenBtn}>
-            {toToken && <AssetIcon symbol={toToken.symbol} logo={toToken.logo} chainId={chainId} address={toToken.address} size={28} />}
+          <Pressable onPress={() => { setPickerChain(chainId); setPicking("to"); }} style={st.tokenBtn}>
+            {toToken && (
+              <View style={{ width: 28, height: 28 }}>
+                <AssetIcon symbol={toToken.symbol} logo={toToken.logo} chainId={chainId} address={toToken.address} size={28} />
+                {!!toToken.address && <ChainBadge chainId={chainId} size={12} />}
+              </View>
+            )}
             <Text style={st.tokenBtnText}>{toToken?.symbol ?? "—"}</Text>
             <Text style={st.chev}>▾</Text>
           </Pressable>

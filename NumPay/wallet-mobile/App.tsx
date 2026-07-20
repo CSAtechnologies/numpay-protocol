@@ -405,6 +405,7 @@ function AppInner() {
           initialChainId={swapInit?.chainId}
           initialFromAddr={swapInit?.fromAddr}
           onBack={() => { setSwapInit(null); setMode("home"); }}
+          onBridge={() => { setSwapInit(null); setMode("bridge"); }}
           onSessionExpired={() => { void showRelock(); }}
         />
       )}
