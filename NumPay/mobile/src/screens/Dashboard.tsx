@@ -19,7 +19,7 @@ function short(addr: string): string {
   return addr.length > 14 ? `${addr.slice(0, 7)}...${addr.slice(-5)}` : addr;
 }
 
-export function Dashboard({ onLock }: { onLock: () => void }) {
+export function Dashboard({ onLock, onSend }: { onLock: () => void; onSend: () => void }) {
   const session = getSessionWallets();
   const active = session?.wallets.find((w) => w.id === session.activeId) ?? session?.wallets[0];
 
@@ -115,6 +115,18 @@ export function Dashboard({ onLock }: { onLock: () => void }) {
           )}
         </LinearGradient>
 
+        <TouchableOpacity onPress={onSend} activeOpacity={0.85}>
+          <LinearGradient
+            colors={[...gradient.button]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.sendBtn}
+          >
+            <Text style={styles.sendBtnTitle}>Send</Text>
+            <Text style={styles.sendBtnSub}>Pay anyone, any chain</Text>
+          </LinearGradient>
+        </TouchableOpacity>
+
         <Text style={styles.section}>Accounts</Text>
         {rows.map((r) => (
           <TouchableOpacity key={r.chain} style={styles.row} onPress={() => copy(`${r.symbol} address`, r.address)}>
@@ -153,6 +165,9 @@ const styles = StyleSheet.create({
   },
   lockText: { color: colors.purpleLight, fontSize: 14, fontWeight: "700" },
   card: { borderRadius: radius.card, padding: spacing.lg, gap: 6 },
+  sendBtn: { borderRadius: radius.card, paddingVertical: 18, paddingHorizontal: spacing.lg },
+  sendBtnTitle: { color: colors.white, fontSize: 19, fontWeight: "800" },
+  sendBtnSub: { color: "rgba(255,255,255,0.8)", fontSize: 13, marginTop: 2 },
   cardLabel: { color: "rgba(255,255,255,0.72)", fontSize: 12, fontWeight: "700", letterSpacing: 2.5 },
   cardValue: { color: colors.white, fontSize: 30, fontWeight: "800", letterSpacing: 1 },
   cardValueSub: { color: colors.white, fontSize: 20, fontWeight: "700" },

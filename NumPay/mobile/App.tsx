@@ -8,8 +8,9 @@ import { CreateWallet } from "./src/screens/CreateWallet";
 import { ImportWallet } from "./src/screens/ImportWallet";
 import { Unlock } from "./src/screens/Unlock";
 import { Dashboard } from "./src/screens/Dashboard";
+import { Send } from "./src/screens/Send";
 
-type Route = "loading" | "welcome" | "create" | "import" | "unlock" | "dashboard";
+type Route = "loading" | "welcome" | "create" | "import" | "unlock" | "dashboard" | "send";
 
 export default function App() {
   const [route, setRoute] = useState<Route>("loading");
@@ -25,7 +26,8 @@ export default function App() {
   // Re-check the lock whenever the app returns to the foreground.
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active" && routeRef.current === "dashboard" && isLocked()) {
+      const guarded = routeRef.current === "dashboard" || routeRef.current === "send";
+      if (state === "active" && guarded && isLocked()) {
         setRoute("unlock");
       }
     });
@@ -56,7 +58,10 @@ export default function App() {
         <ImportWallet onDone={handleOnboarded} onBack={() => setRoute("welcome")} />
       )}
       {route === "unlock" && <Unlock onUnlock={() => setRoute("dashboard")} />}
-      {route === "dashboard" && <Dashboard onLock={() => setRoute("unlock")} />}
+      {route === "dashboard" && (
+        <Dashboard onLock={() => setRoute("unlock")} onSend={() => setRoute("send")} />
+      )}
+      {route === "send" && <Send onClose={() => setRoute("dashboard")} />}
     </View>
   );
 }

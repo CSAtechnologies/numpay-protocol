@@ -1,6 +1,6 @@
 // Standalone crypto verification (run with: node --experimental-strip-types).
 // Proves the ported primitives against known vectors, independent of the UI.
-import { derivePath } from "./src/lib/slip10.ts";
+import { derivePath } from "./src/lib/slip10";
 import { pbkdf2Async } from "@noble/hashes/pbkdf2.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { gcm } from "@noble/ciphers/aes.js";
@@ -69,6 +69,40 @@ function check(name: string, got: string, want: string) {
     gcm(wrongKey, iv).decrypt(cipher);
   } catch { threw = true; }
   check("Wrong password rejected by GCM auth tag", String(threw), "true");
+}
+
+// 5) Solana transfer message: structure, signature validity, base64 encoder
+{
+  const { buildSolTransferMessage, bytesToBase64, deriveSolSecretKey } = await import("./src/lib/tx");
+  const mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+  const secretKey = deriveSolSecretKey(mnemonic);
+  const fromPubkey = secretKey.slice(32);
+  const toPubkey = new Uint8Array(32).fill(7);
+  const blockhash = new Uint8Array(32).fill(9);
+  const lamports = 1_234_567n;
+
+  const message = buildSolTransferMessage(fromPubkey, toPubkey, blockhash, lamports);
+
+  // Header (1,0,1), 3 keys, key order from/to/system, program index 2,
+  // account indices [0,1], data = u32(2) LE + u64 lamports LE
+  const wantLen = 3 + 1 + 96 + 32 + 1 + 1 + 1 + 2 + 1 + 12;
+  check("SOL message length", String(message.length), String(wantLen));
+  check("SOL message header", bytesToHex(message.slice(0, 4)), "01000103");
+  check("SOL from key at offset 4", bytesToHex(message.slice(4, 36)), bytesToHex(fromPubkey));
+  const dataStart = message.length - 12;
+  check("SOL transfer discriminant + lamports",
+    bytesToHex(message.slice(dataStart)),
+    "0200000087d61200" + "00000000".slice(0, 8));
+
+  const sig = nacl.sign.detached(message, secretKey);
+  check("SOL signature verifies", String(nacl.sign.detached.verify(message, sig, fromPubkey)), "true");
+
+  // base64 encoder vs Node's Buffer for several lengths (padding cases)
+  for (const n of [0, 1, 2, 3, 31, 64, 100]) {
+    const bytes = new Uint8Array(n).map((_, i) => (i * 37 + 11) % 256);
+    check(`base64 encoder matches Buffer (len ${n})`,
+      bytesToBase64(bytes), Buffer.from(bytes).toString("base64"));
+  }
 }
 
 console.log(failed === 0 ? "\nALL CHECKS PASSED" : `\n${failed} CHECK(S) FAILED`);
