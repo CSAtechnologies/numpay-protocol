@@ -75,13 +75,14 @@ export function SendScreen({ w, onBack, onSessionExpired, initialChainId, initia
 }) {
   // Sendable chains: every EVM chain the wallet holds native coin on (plus
   // Ethereum so the screen is never empty), then the sendable non-EVM chains.
+  // Custom networks (Manage assets) count as EVM chains here.
   const chains = useMemo(() => {
     const evm = w.rows
-      .filter((r) => r.isNative && NETWORKS[r.chainId] && (r.balanceNum > 0 || r.chainId === "ethereum"))
+      .filter((r) => r.isNative && (NETWORKS[r.chainId] || w.customNets[r.chainId]) && (r.balanceNum > 0 || r.chainId === "ethereum"))
       .map((r) => r.chainId);
     if (!evm.includes("ethereum")) evm.unshift("ethereum");
     return [...evm, ...Object.keys(NON_EVM_SENDABLE)];
-  }, [w.rows]);
+  }, [w.rows, w.customNets]);
 
   const cur = useCurrencyPref();
   const feeTail = useCallback(
@@ -93,7 +94,7 @@ export function SendScreen({ w, onBack, onSessionExpired, initialChainId, initia
   const [token, setToken] = useState<SendTokenPick | null>(initialToken ?? null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const isEvm = !NON_EVM_SENDABLE[chainId];
-  const net = NETWORKS[chainId];
+  const net = NETWORKS[chainId] ?? w.customNets[chainId];
   const nativeSymbol = isEvm ? (net?.symbol ?? "ETH") : NON_EVM_SENDABLE[chainId].symbol;
   const symbol = token?.symbol ?? nativeSymbol;
   const decimalsMax = token?.decimals ?? (isEvm ? (net?.decimals ?? 18) : NON_EVM_SENDABLE[chainId].decimals);
@@ -317,7 +318,7 @@ export function SendScreen({ w, onBack, onSessionExpired, initialChainId, initia
           {chains.map((id) => (
             <Chip
               key={id}
-              label={NON_EVM_NAMES[id] ?? NETWORKS[id]?.name ?? id}
+              label={NON_EVM_NAMES[id] ?? NETWORKS[id]?.name ?? w.customNets[id]?.name ?? id}
               active={chainId === id}
               onPress={() => switchChain(id)}
               icon={<ChainIcon chainId={id} size={16} />}

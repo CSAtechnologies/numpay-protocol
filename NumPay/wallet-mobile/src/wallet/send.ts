@@ -10,6 +10,7 @@
 import { ethers } from "ethers";
 import { importFromMnemonic, getSigner } from "@numpay/core/wallet";
 import { NETWORKS, type Network } from "@numpay/core/networks";
+import { getCustomChains } from "@numpay/core/customChains";
 import {
   deriveNonEvmAddresses, sendSolanaTransfer, sendTronTransfer, sendSuiTransfer,
   sendSolanaTokenTransfer, sendTronTokenTransfer, sendSuiTokenTransfer,
@@ -45,7 +46,7 @@ export interface EvmFeeEstimate {
 }
 
 export async function estimateEvmNativeFee(chainId: string): Promise<EvmFeeEstimate> {
-  const net = requireNetwork(chainId);
+  const net = await requireNetwork(chainId);
   const flat = NATIVE_FEE_RESERVE[chainId] ?? DEFAULT_FEE_RESERVE;
   try {
     const provider = new ethers.JsonRpcProvider(net.rpcUrl, net.chainId, { staticNetwork: true });
@@ -79,10 +80,21 @@ export function toBaseUnits(amount: string, decimals: number): bigint {
   return base;
 }
 
-function requireNetwork(chainId: string): Network {
+// Built-in networks first, then the user's custom networks (Manage assets) —
+// same resolution order as the extension Send page, so a send on a custom
+// chain works identically on both clients.
+async function requireNetwork(chainId: string): Promise<Network> {
   const net = NETWORKS[chainId];
-  if (!net) throw new Error(`Unknown network: ${chainId}`);
-  return net;
+  if (net) return net;
+  const custom = (await getCustomChains().catch(() => [])).find((c) => c.id === chainId);
+  if (custom) {
+    return {
+      id: custom.id, name: custom.name, chainId: custom.chainId,
+      rpcUrl: custom.rpcUrl, symbol: custom.symbol, decimals: custom.decimals,
+      explorer: custom.explorer, logo: custom.logo || "",
+    };
+  }
+  throw new Error(`Unknown network: ${chainId}`);
 }
 
 // ── EVM native send ───────────────────────────────────────────────────────────
@@ -93,7 +105,7 @@ export async function sendEvmNative(
   amount: string,
   overrides?: ethers.Overrides,
 ): Promise<string> {
-  const net = requireNetwork(chainId);
+  const net = await requireNetwork(chainId);
   const w = importFromMnemonic(mnemonic);
   const signer = getSigner(w.privateKey, net.rpcUrl);
 
@@ -194,7 +206,7 @@ export async function sendTokenTransfer(
   }
 
   // EVM ERC-20, with the same wrong-chain RPC guard as native sends.
-  const net = requireNetwork(asset.chainId);
+  const net = await requireNetwork(asset.chainId);
   const w = importFromMnemonic(mnemonic);
   const signer = getSigner(w.privateKey, net.rpcUrl);
   const providerNet = await signer.provider!.getNetwork();

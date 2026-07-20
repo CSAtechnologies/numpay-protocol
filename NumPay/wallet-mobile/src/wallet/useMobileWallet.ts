@@ -17,7 +17,12 @@
  * Send work (they share core fetchers already).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ethers } from "ethers";
 import { importFromMnemonic } from "@numpay/core/wallet";
+import { NETWORKS, type Network } from "@numpay/core/networks";
+import { getTokenBalance } from "@numpay/core/tokens";
+import { getCustomTokens, type CustomToken } from "@numpay/core/customTokens";
+import { getCustomChains } from "@numpay/core/customChains";
 import {
   deriveNonEvmAddresses,
   fetchNonEvmBalancesByAddress,
@@ -81,8 +86,12 @@ export interface MobileWalletState {
   bpan: string;
   rows: AssetRow[];
   chainIds: string[]; // chains with anything to show, dashboard filter chips
-  /** Raw discovered tokens per chain (address/decimals intact) for pickers. */
+  /** Raw discovered tokens per chain (address/decimals intact) for pickers.
+   *  Custom (user-added) tokens are merged in, so Send can pick them. */
   tokensByChain: Record<string, AutoToken[]>;
+  /** User-added EVM networks (Manage assets), keyed by network id, in core
+   *  Network shape so Send/fee code can treat them like built-ins. */
+  customNets: Record<string, Network>;
   portfolioUsd: number;
   rates: Rates | null;
   loading: boolean;
@@ -123,6 +132,30 @@ function tokenRows(
   return rows;
 }
 
+// Custom (user-added) EVM token balances, read straight from the chain RPC —
+// custom tokens exist precisely because no indexer reports them, so the
+// discovery sweep cannot cover them. Solana customs skip this: held mints
+// arrive priced via fetchSolanaTokens, and an unheld one just shows 0.
+async function fetchCustomEvmTokenBalances(
+  owner: string,
+  tokens: CustomToken[],
+  customNets: Record<string, Network>,
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  await Promise.all(tokens.map(async (ct) => {
+    const net = NETWORKS[ct.chainId] ?? customNets[ct.chainId];
+    if (!net) return; // solana / unknown chain: no RPC read here
+    try {
+      const provider = new ethers.JsonRpcProvider(net.rpcUrl, net.chainId, { staticNetwork: true });
+      const bal = await withTimeout(
+        getTokenBalance(ct.address, owner, provider), 8_000, `${ct.symbol} balance`,
+      );
+      out[`${ct.chainId}:${ct.address.toLowerCase()}`] = bal;
+    } catch { /* failed read: the state merge keeps the last-known balance */ }
+  }));
+  return out;
+}
+
 // ── Own-BPAN lookup (auto-display rule): cached per wallet, then a count-gated
 // on-chain ownership scan, mirroring the extension's BPAN page bootstrap. ────
 function bpanCacheKey(owner: string): string {
@@ -153,6 +186,11 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
   const [nonEvmAddresses, setNonEvmAddresses] = useState<NonEvmAddressMap | null>(null);
   const [natives, setNatives] = useState<AssetRow[]>([]);
   const [tokensByChain, setTokensByChain] = useState<Record<string, AutoToken[]>>({});
+  // Manage-assets state: re-read from core storage on every refresh, so adds/
+  // removes made on the ManageAssets screen land on the next sweep.
+  const [customTokens, setCustomTokens] = useState<CustomToken[]>([]);
+  const [customNets, setCustomNets] = useState<Record<string, Network>>({});
+  const [customBal, setCustomBal] = useState<Record<string, string>>({});
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [rates, setRates] = useState<Rates | null>(null);
   const [loading, setLoading] = useState(false);
@@ -212,19 +250,34 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
       setEvmAddress(evm);
       setNonEvmAddresses(addrs);
 
-      const [liveRates, hiddenSet] = await withTimeout(Promise.all([
+      const [liveRates, hiddenSet, ccList, ctList] = await withTimeout(Promise.all([
         fetchRates(),
         loadHiddenTokens(evm.toLowerCase()),
+        getCustomChains().catch(() => []),
+        getCustomTokens().catch(() => []),
       ]), REFRESH_TIMEOUT_MS, "Rates fetch");
       setRates(liveRates);
       setHidden(hiddenSet);
+
+      // User-added networks, in core Network shape (same mapping the extension
+      // useWallet does) so the native sweep and Send treat them like built-ins.
+      const netMap: Record<string, Network> = {};
+      for (const cc of ccList) {
+        netMap[cc.id] = {
+          id: cc.id, name: cc.name, chainId: cc.chainId,
+          rpcUrl: cc.rpcUrl, symbol: cc.symbol, decimals: cc.decimals,
+          explorer: cc.explorer, logo: cc.logo || "",
+        };
+      }
+      setCustomNets(netMap);
+      setCustomTokens(ctList);
 
       // Own-BPAN display is independent of balances; let it land whenever the
       // quorum read finishes (cached after the first success).
       void loadOwnBPAN(evm).then(setBpan);
 
       const [evmSweep, nonEvm] = await withTimeout(Promise.all([
-        sweepEvmNativeBalances(evm, {}, prevEvmByChain.current),
+        sweepEvmNativeBalances(evm, netMap, prevEvmByChain.current),
         fetchNonEvmBalancesByAddress(addrs, prevNonEvm.current),
       ]), REFRESH_TIMEOUT_MS, "Balance sweep");
       prevEvmByChain.current = new Map(evmSweep.results.map((c) => [c.networkId, c]));
@@ -253,6 +306,15 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
         })),
       ];
       setNatives(nativeRows);
+
+      // Custom-token balances ride outside the busy phase like discovery:
+      // per-token 8 s timeouts, and a failed read keeps the previous value
+      // (prev-merge below) instead of zeroing the row.
+      if (ctList.length > 0) {
+        void fetchCustomEvmTokenBalances(evm, ctList, netMap).then((bals) => {
+          setCustomBal((prev) => ({ ...prev, ...bals }));
+        });
+      }
 
       // Token discovery paints as it lands but runs OUTSIDE the busy-guarded
       // phase, with its own single-flight guard: a slow or hung endpoint here
@@ -304,6 +366,7 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
       addrCache.current = null;
       prevEvmByChain.current = new Map();
       prevNonEvm.current = undefined;
+      setCustomBal({});
     }
   }, [unlocked, refresh]);
 
@@ -321,16 +384,40 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
     prevEvmByChain.current = new Map();
     prevNonEvm.current = undefined;
     setNatives([]); setTokensByChain({}); setBpan(""); setEvmAddress("");
-    setNonEvmAddresses(null);
+    setNonEvmAddresses(null); setCustomBal({});
     refresh();
   }, [activeWalletId, unlocked, refresh]);
 
   const tokens = tokenRows(tokensByChain, hidden, rates);
+  // Custom (user-added) token rows. Deliberately EXEMPT from the dust rule and
+  // spam classification: the user explicitly asked for this token, so an
+  // unpriced balance must not vanish (that reads as "add token is broken").
+  // A token discovery also found is skipped — the discovered row carries the
+  // indexer's price/logo metadata and would otherwise duplicate.
+  const customRows: AssetRow[] = [];
+  for (const ct of customTokens) {
+    const addrLc = ct.address.toLowerCase();
+    if (hidden.has(tokenHideKey(ct.chainId, ct.address))) continue;
+    if ((tokensByChain[ct.chainId] ?? []).some((t) => t.address.toLowerCase() === addrLc)) continue;
+    const bal = parseFloat(customBal[`${ct.chainId}:${addrLc}`] ?? "0") || 0;
+    const price = rates ? getUsdPrice(ct.symbol, rates) : 0;
+    customRows.push({
+      key: `${ct.chainId}:${addrLc}`,
+      chainId: ct.chainId,
+      chainName: NETWORKS[ct.chainId]?.name ?? customNets[ct.chainId]?.name ?? (chainNameOf(ct.chainId) ?? ct.chainId),
+      symbol: ct.symbol,
+      name: ct.name,
+      isNative: false,
+      balanceNum: bal,
+      usdValue: price * bal,
+      logo: ct.logo,
+    });
+  }
   // Every native the sweeps return stays VISIBLE, zero balance included —
   // matching the extension dashboard (user directive 2026-07-15: majors must
   // never be hidden). Holders sort to the top by USD value; the zero-balance
   // tail follows a fixed major-chain order instead of alphabet soup.
-  const rows = [...natives, ...tokens].sort((a, b) => {
+  const rows = [...natives, ...tokens, ...customRows].sort((a, b) => {
     if (b.usdValue !== a.usdValue) return b.usdValue - a.usdValue;
     const aHolds = a.balanceNum > 0 ? 0 : 1;
     const bHolds = b.balanceNum > 0 ? 0 : 1;
@@ -342,13 +429,27 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
   const portfolioUsd = rows.reduce((s, r) => s + r.usdValue, 0);
   const chainIds = [...new Set(rows.map((r) => r.chainId))];
 
+  // Merge customs into the picker lists so Send/TokenDetail can select them.
+  // Derived here (not in setTokensByChain) so the discovery sweep's per-chain
+  // list replacement can never race the merge away.
+  const mergedTokensByChain: Record<string, AutoToken[]> = { ...tokensByChain };
+  for (const ct of customTokens) {
+    const list = mergedTokensByChain[ct.chainId] ?? [];
+    if (list.some((t) => t.address.toLowerCase() === ct.address.toLowerCase())) continue;
+    mergedTokensByChain[ct.chainId] = [...list, {
+      symbol: ct.symbol, name: ct.name, address: ct.address, decimals: ct.decimals,
+      balance: customBal[`${ct.chainId}:${ct.address.toLowerCase()}`] ?? "0", logo: ct.logo,
+    }];
+  }
+
   return {
     evmAddress,
     bpan,
     nonEvmAddresses,
     rows,
     chainIds,
-    tokensByChain,
+    tokensByChain: mergedTokensByChain,
+    customNets,
     portfolioUsd,
     rates,
     loading,

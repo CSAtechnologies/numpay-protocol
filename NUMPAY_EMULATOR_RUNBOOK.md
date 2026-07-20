@@ -32,9 +32,9 @@ adb shell getprop sys.boot_completed   # "1" = ready
 
 Two exist. They are not interchangeable.
 
-| AVD | State as of 2026-07-19 | Use |
+| AVD | State as of 2026-07-20 | Use |
 |---|---|---|
-| `Pixel7_API35` | Live/most-used image (~9.3 GB). **App data is gone** — package registers but has no data dir and no launchable activity. | Primary. Needs a fresh install. |
+| `Pixel7_API35` | Live/most-used image (~9.3 GB). App reinstalled 2026-07-20 (debug build) and a **wallet vault exists** — dev PIN `123456`, unfunded "Wallet 1" (`0xC56d…7864`). The 07-19 "data is gone" note was wrong or the state changed: the reinstall came up with the vault intact. | Primary. |
 | `Pixel7_API35_b` | Stale image from 2026-07-11 (~2.4 GB). **Still holds an encrypted wallet vault.** | Wallet recovery. See §5. |
 
 List them: `C:\asdk\emulator\emulator.exe -list-avds`
@@ -88,6 +88,19 @@ Hard-won details:
   derivation, not a hang. Do not kill it.
 - Anything touching native modules (notifications, expo-camera) needs a
   **native rebuild**, not a Metro reload. A JS refresh will not show it.
+- A fresh shell has **neither JAVA_HOME nor ANDROID_HOME**. Gradle needs both:
+  `JAVA_HOME=C:\jbr`, `ANDROID_HOME=C:\asdk` (the junctions). Symptoms are
+  "no 'java' command" and "SDK location not found".
+- Metro's file-map cache can go corrupt: startup logs "Error while reading
+  cache, falling back to a full crawl" and the first bundle takes tens of
+  minutes of CPU. Do NOT wait it out and do NOT use `--clear` (that wipes the
+  transform cache too). Kill Metro and restart it: the per-module transform
+  cache survives, and the same bundle that ran 45+ min cold came back in 13 s
+  on restart (observed 2026-07-20). The corrupt file-map only rewrites on a
+  clean exit, so the warning may repeat — harmless once transforms are warm.
+- `gradlew installDebug` does not set up the Metro port tunnel; run
+  `adb reverse tcp:8081 tcp:8081` before launching the app or it spends ~60 s
+  deciding Metro is unreachable.
 
 ---
 

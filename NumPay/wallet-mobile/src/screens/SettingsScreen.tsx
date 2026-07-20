@@ -42,13 +42,14 @@ function Row({ label, hint, onPress, danger, right }: {
 }
 
 export function SettingsScreen({
-  activeWalletId, onSwitchWallet, onAddWallet, onLock, onDapps, onDev, onWipe,
+  activeWalletId, onSwitchWallet, onAddWallet, onLock, onDapps, onManageAssets, onDev, onWipe,
 }: {
   activeWalletId: string | null;
   onSwitchWallet: (id: string) => void;
   onAddWallet: () => void;
   onLock: () => void;
   onDapps: () => void;
+  onManageAssets: () => void;
   onDev: () => void;
   onWipe: () => void;
 }) {
@@ -194,6 +195,12 @@ export function SettingsScreen({
         {/* ── Preferences ── */}
         <SectionLabel text="Preferences" style={{ marginTop: 18, marginBottom: 6 } as object} />
         <Card>
+          <Row
+            label="Manage assets"
+            hint="Add custom tokens and EVM networks"
+            onPress={onManageAssets}
+          />
+          <View style={st.hairline} />
           <Row
             label="Display currency"
             hint="Prices and balances show in this currency"

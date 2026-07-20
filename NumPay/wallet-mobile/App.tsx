@@ -48,6 +48,7 @@ import { BridgeScreen } from "./src/screens/BridgeScreen";
 import { ActivityScreen } from "./src/screens/ActivityScreen";
 import { BPANScreen } from "./src/screens/BPANScreen";
 import { WalletConnectScreen } from "./src/screens/WalletConnectScreen";
+import { ManageAssetsScreen } from "./src/screens/ManageAssetsScreen";
 import { WcApprovalHost } from "./src/walletconnect/WcApprovalHost";
 // Side-effect import: defines the background receive-watch task at bundle
 // load so headless launches can find it (see notify/backgroundTask.ts).
@@ -57,7 +58,7 @@ import { PinPad } from "./src/ui/PinPad";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
-  | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity" | "bpan" | "dapps" | "dev" | "settings" | "token";
+  | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity" | "bpan" | "dapps" | "dev" | "settings" | "token" | "assets";
 
 export default function App() {
   return (
@@ -89,7 +90,7 @@ function AppInner() {
   const [addWalletOpen, setAddWalletOpen] = useState(false);
 
   const unlocked =
-    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev" || mode === "settings" || mode === "token";
+    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev" || mode === "settings" || mode === "token" || mode === "assets";
   // The floating nav shows on its six tabs; focused flows (swap, bridge,
   // dApps, dev) keep the full screen.
   const navVisible =
@@ -182,6 +183,10 @@ function AppInner() {
       const m = modeRef.current;
       if (m === "spike" || m === "devnet") {
         setMode("dev");
+        return true;
+      }
+      if (m === "assets") {
+        setMode("settings");
         return true;
       }
       if (m === "receive" || m === "send" || m === "swap" || m === "bridge" ||
@@ -326,8 +331,14 @@ function AppInner() {
           onAddWallet={() => { setError(""); setAddWalletOpen(true); }}
           onLock={async () => { await lock(); setError(""); await refresh(); }}
           onDapps={() => setMode("dapps")}
+          onManageAssets={() => setMode("assets")}
           onDev={() => setMode("dev")}
           onWipe={async () => { await wipeVault(); await clearReceiveWatch(); setError(""); await refresh(); }}
+        />
+      )}
+      {mode === "assets" && (
+        <ManageAssetsScreen
+          onBack={() => { setMode("settings"); w.refresh(); }}
         />
       )}
       {mode === "dev" && (
