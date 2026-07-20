@@ -74,6 +74,8 @@ function AppInner() {
   // Token-detail target and the Send screen's preselection (TokenDetail entry).
   const [tokenDetail, setTokenDetail] = useState<AssetRow | null>(null);
   const [sendInit, setSendInit] = useState<{ chainId: string; token: SendTokenPick | null } | null>(null);
+  // Swap preselection (TokenDetail "Swap" button): chain + sell-side token.
+  const [swapInit, setSwapInit] = useState<{ chainId: string; fromAddr?: string } | null>(null);
   const [status, setStatus] = useState<VaultStatus | null>(null);
   const [pendingMnemonic, setPendingMnemonic] = useState("");
   const [error, setError] = useState("");
@@ -385,14 +387,24 @@ function AppInner() {
             });
             setMode("send");
           }}
+          onSwap={() => {
+            setSwapInit({
+              chainId: tokenDetail.chainId,
+              fromAddr: tokenDetail.isNative ? undefined : tokenDetail.key.split(":")[1],
+            });
+            setMode("swap");
+          }}
           onReceive={goReceive}
           onSessionExpired={() => { void showRelock(); }}
         />
       )}
       {mode === "swap" && (
         <SwapScreen
+          key={swapInit ? `${swapInit.chainId}:${swapInit.fromAddr ?? "native"}` : "default"}
           w={w}
-          onBack={() => setMode("home")}
+          initialChainId={swapInit?.chainId}
+          initialFromAddr={swapInit?.fromAddr}
+          onBack={() => { setSwapInit(null); setMode("home"); }}
           onSessionExpired={() => { void showRelock(); }}
         />
       )}

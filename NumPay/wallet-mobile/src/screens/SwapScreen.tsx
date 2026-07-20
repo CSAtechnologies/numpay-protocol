@@ -24,10 +24,14 @@ import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
 
 const QUOTE_DEBOUNCE_MS = 700;
 
-export function SwapScreen({ w, onBack, onSessionExpired }: {
+export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initialFromAddr }: {
   w: MobileWalletState;
   onBack: () => void;
   onSessionExpired?: () => void;
+  /** Preselect (TokenDetail "Swap" entry): the chain, and the sell-side token
+   *  by contract/mint address (undefined = the chain's native coin). */
+  initialChainId?: string;
+  initialFromAddr?: string;
 }) {
   // Funded EVM chains first, then Ethereum and Solana as always-available
   // baselines (Jupiter/aggregator quotes are keyless and work without a
@@ -38,11 +42,19 @@ export function SwapScreen({ w, onBack, onSessionExpired }: {
       .map((r) => r.chainId);
     if (!funded.includes("ethereum")) funded.push("ethereum");
     if (!funded.includes("solana")) funded.push("solana");
+    if (initialChainId && !funded.includes(initialChainId) &&
+        (NETWORKS[initialChainId] || initialChainId === "solana")) {
+      funded.unshift(initialChainId);
+    }
     return funded;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [w.rows]);
 
   const cur = useCurrencyPref();
-  const [chainId, setChainId] = useState(chains[0] ?? "ethereum");
+  const [chainId, setChainId] = useState(initialChainId ?? chains[0] ?? "ethereum");
+  // Consumed once by the pair-reset effect below, then cleared: chain switches
+  // after entry go back to the native→default pairing.
+  const initFromAddr = useRef(initialFromAddr?.toLowerCase());
   const isSolana = chainId === "solana";
   const net = NETWORKS[chainId];
 
@@ -72,11 +84,17 @@ export function SwapScreen({ w, onBack, onSessionExpired }: {
   const quoteSeq = useRef(0);
 
   // Reset the pair when the chain changes: native → first stable-ish default.
+  // On TokenDetail entry the first pass instead sells the entry token → native.
   useEffect(() => {
     const native = tokenList[0] ?? null;
-    const firstDefault = tokenList.find((t) => t.address) ?? null;
-    setFromToken(native);
-    setToToken(firstDefault);
+    let from = native;
+    if (initFromAddr.current) {
+      const m = tokenList.find((t) => t.address?.toLowerCase() === initFromAddr.current);
+      if (m) from = m;
+      initFromAddr.current = undefined;
+    }
+    setFromToken(from);
+    setToToken(from === native ? (tokenList.find((t) => t.address) ?? null) : native);
     setAmount(""); setRoutes([]); setError(""); setTxHash("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chainId]);
