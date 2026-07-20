@@ -33,20 +33,22 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
   initialChainId?: string;
   initialFromAddr?: string;
 }) {
-  // Funded EVM chains first, then Ethereum and Solana as always-available
-  // baselines (Jupiter/aggregator quotes are keyless and work without a
-  // balance, so an empty wallet can still price a swap into either).
+  // Every swappable chain, funded ones first (by USD value) so the chains the
+  // user can actually sell from lead the row — but never HIDE a chain: quotes
+  // are keyless and an empty wallet can still price a swap anywhere (extension
+  // behavior; the funded-only chip row read as "only ETH and Solana").
   const chains = useMemo(() => {
     const funded = w.rows
-      .filter((r) => r.isNative && NETWORKS[r.chainId] && r.balanceNum > 0)
+      .filter((r) => r.isNative && r.balanceNum > 0 && (NETWORKS[r.chainId] || r.chainId === "solana"))
+      .sort((a, b) => b.usdValue - a.usdValue)
       .map((r) => r.chainId);
-    if (!funded.includes("ethereum")) funded.push("ethereum");
-    if (!funded.includes("solana")) funded.push("solana");
-    if (initialChainId && !funded.includes(initialChainId) &&
+    const rest = [...Object.keys(NETWORKS), "solana"].filter((id) => !funded.includes(id));
+    const list = [...funded, ...rest];
+    if (initialChainId && !list.includes(initialChainId) &&
         (NETWORKS[initialChainId] || initialChainId === "solana")) {
-      funded.unshift(initialChainId);
+      list.unshift(initialChainId);
     }
-    return funded;
+    return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [w.rows]);
 
@@ -205,32 +207,55 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
   const buyUsd = best?.destUsd ?? (toToken && best ? parseFloat(best.destAmount) * price(toToken) : 0);
   const errView = error ? parseSwapError(error) : null;
 
-  // Token picker takes over the screen while active.
+  // Token picker takes over the screen while active: the wallet's own
+  // holdings first (with balance + fiat value), then the curated list —
+  // extension picker semantics, so held tokens are never buried under
+  // buy-side stables.
   if (picking) {
     const balOf = (t: SwapToken) => parseFloat(t.balance) || 0;
-    const sorted = [...tokenList].sort((a, b) => balOf(b) * price(b) - balOf(a) * price(a));
+    const held = tokenList
+      .filter((t) => balOf(t) > 0)
+      .sort((a, b) => balOf(b) * price(b) - balOf(a) * price(a));
+    const others = tokenList.filter((t) => balOf(t) <= 0);
+    const renderRow = (t: SwapToken) => {
+      const bal = balOf(t);
+      const usd = bal * price(t);
+      return (
+        <Pressable
+          key={`${t.chainId}:${t.address ?? "native"}`}
+          onPress={() => selectToken(t)}
+          style={st.tokenRow}
+        >
+          <AssetIcon symbol={t.symbol} logo={t.logo} chainId={t.chainId} address={t.address} size={32} />
+          <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
+            <Text style={st.tokenSym} numberOfLines={1}>{t.symbol}</Text>
+            <Text style={st.tokenSub} numberOfLines={1}>{t.name}</Text>
+          </View>
+          {bal > 0 && (
+            <View style={{ alignItems: "flex-end" }}>
+              <Text style={st.tokenBal}>
+                {bal.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+              </Text>
+              {usd > 0 && (
+                <Text style={st.tokenSub}>
+                  {formatFiatLine(usd, cur.code, cur.currency, w.rates)}
+                </Text>
+              )}
+            </View>
+          )}
+        </Pressable>
+      );
+    };
     return (
       <View style={{ flex: 1 }}>
         <ScreenHeader title={picking === "from" ? "Sell" : "Buy"} onBack={() => setPicking(null)} />
         <ScrollView showsVerticalScrollIndicator={false}>
-          {sorted.map((t) => (
-            <Pressable
-              key={`${t.chainId}:${t.address ?? "native"}`}
-              onPress={() => selectToken(t)}
-              style={st.tokenRow}
-            >
-              <AssetIcon symbol={t.symbol} logo={t.logo} chainId={t.chainId} address={t.address} size={32} />
-              <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
-                <Text style={st.tokenSym} numberOfLines={1}>{t.symbol}</Text>
-                <Text style={st.tokenSub} numberOfLines={1}>{t.name}</Text>
-              </View>
-              {balOf(t) > 0 && (
-                <Text style={st.tokenBal}>
-                  {balOf(t).toLocaleString(undefined, { maximumFractionDigits: 6 })}
-                </Text>
-              )}
-            </Pressable>
-          ))}
+          {held.length > 0 && <SectionLabel text="Your tokens" style={{ marginBottom: 4 } as object} />}
+          {held.map(renderRow)}
+          {held.length > 0 && others.length > 0 && (
+            <SectionLabel text="All tokens" style={{ marginTop: 16, marginBottom: 4 } as object} />
+          )}
+          {others.map(renderRow)}
         </ScrollView>
       </View>
     );
@@ -245,7 +270,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
           {chains.map((id) => (
             <Chip
               key={id}
-              label={NETWORKS[id]?.name ?? id}
+              label={id === "solana" ? "Solana" : NETWORKS[id]?.name ?? id}
               active={chainId === id}
               onPress={() => setChainId(id)}
               icon={<ChainIcon chainId={id} size={16} />}
