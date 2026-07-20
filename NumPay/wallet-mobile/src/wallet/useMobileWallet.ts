@@ -11,7 +11,8 @@
  *  - ERC-20 discovery: core autoTokens -> wallet API proxy (/v1/tokens).
  *  - Fiat rates: core currency -> wallet API proxy (/v1/prices).
  *  - Visibility: core hiddenTokens (per-wallet) + tokenSpam + the dashboard
- *    dust rule (hide sub-$0.01 token rows, same cutoff as the extension).
+ *    dust rule (hide priced sub-$0.01 rows; unpriced balances stay visible,
+ *    same semantics as the extension Dashboard).
  *
  * Slice 1 scope: EVM tokens only. SPL/TRC-20/Sui token rows follow with the
  * Send work (they share core fetchers already).
@@ -113,9 +114,16 @@ function tokenRows(
       if (hidden.has(tokenHideKey(chainId, t.address))) continue;
       if (classifyToken(t).hidden) continue;
       const bal = parseFloat(t.balance) || 0;
+      if (bal <= 0) continue;
       const price = t.priceUsd ?? (rates ? getUsdPrice(t.symbol, rates) : 0);
       const usd = price * bal;
-      if (usd < DUST_USD) continue; // dust rule: unpriced or near-zero rows stay off
+      // Extension-parity dust rule: only a PRICED-but-negligible balance is
+      // dust. An unpriced balance is money we can't value yet, not dust —
+      // treating price-unknown as $0 made every received token the indexer
+      // couldn't price (fresh memecoins, RWA, long-tail stables) invisible,
+      // while the extension deliberately keeps them ("unknown price — never
+      // treat as dust", Dashboard.tsx). Spam still filters via classifyToken.
+      if (usd > 0 && usd < DUST_USD) continue;
       rows.push({
         key: `${chainId}:${t.address.toLowerCase()}`,
         chainId,
