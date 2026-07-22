@@ -14,6 +14,8 @@ import {
 } from "@numpay/core/bpan";
 import { NETWORKS } from "@numpay/core/networks";
 import { isValidNonEvmAddress } from "@numpay/core/addressValidation";
+import { parseScannedPayload } from "@numpay/core/qrPayload";
+import { chainNameOf } from "@numpay/core/txLog";
 import { friendlyTxError, parseSendError } from "@numpay/core/sendErrors";
 import { tierOverrides, tierGwei, fetchFeeInfo, type GasTier, type FeeInfo } from "@numpay/core/gas";
 import { getUsdPrice } from "@numpay/core/currency";
@@ -28,6 +30,8 @@ import { colors, radius, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SendErrorCard } from "../ui/components";
 import { useCurrencyPref, formatFiatLine, formatFeeTail } from "../ui/currency";
 import { AssetIcon, ChainIcon } from "../ui/coins";
+import { ScanIcon } from "../ui/icons";
+import { QrScanner } from "../ui/QrScanner";
 import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
 
 interface BpanChange { number: string; chain: string; oldAddr: string; newAddr: string }
@@ -65,14 +69,26 @@ export interface SendTokenPick extends TokenSendAsset {
   priceUsd: number;
 }
 
-export function SendScreen({ w, onBack, onSessionExpired, initialChainId, initialToken }: {
+export function SendScreen({
+  w, onBack, onSessionExpired, initialChainId, initialToken, initialTo, initialAmount,
+}: {
   w: MobileWalletState;
   onBack: () => void;
   onSessionExpired?: () => void;
   /** Preselect (TokenDetail entry): chain and, for token rows, the token. */
   initialChainId?: string;
   initialToken?: SendTokenPick | null;
+  /** Prefill the recipient (dashboard scanner): an address or a BPAN. */
+  initialTo?: string;
+  /** Prefill the amount, when the scanned payload carried one. */
+  initialAmount?: string;
 }) {
+  // A chain a scan selected that the chip row would not otherwise list (it
+  // only lists funded chains). Without this the chips could not show which
+  // chain a scanned payload put the send on — exactly the thing that has to
+  // stay visible when a QR code changes the network.
+  const [extraChain, setExtraChain] = useState<string | null>(null);
+
   // Sendable chains: every EVM chain the wallet holds native coin on (plus
   // Ethereum so the screen is never empty), then the sendable non-EVM chains.
   // Custom networks (Manage assets) count as EVM chains here.
@@ -81,8 +97,10 @@ export function SendScreen({ w, onBack, onSessionExpired, initialChainId, initia
       .filter((r) => r.isNative && (NETWORKS[r.chainId] || w.customNets[r.chainId]) && (r.balanceNum > 0 || r.chainId === "ethereum"))
       .map((r) => r.chainId);
     if (!evm.includes("ethereum")) evm.unshift("ethereum");
-    return [...evm, ...Object.keys(NON_EVM_SENDABLE)];
-  }, [w.rows, w.customNets]);
+    const all = [...evm, ...Object.keys(NON_EVM_SENDABLE)];
+    if (extraChain && !all.includes(extraChain)) all.unshift(extraChain);
+    return all;
+  }, [w.rows, w.customNets, extraChain]);
 
   const cur = useCurrencyPref();
   const feeTail = useCallback(
@@ -121,13 +139,13 @@ export function SendScreen({ w, onBack, onSessionExpired, initialChainId, initia
       .sort((a, b) => b.balanceNum * b.priceUsd - a.balanceNum * a.priceUsd);
   }, [w.tokensByChain, chainId, w.rates]);
 
-  const [to, setTo] = useState("");
+  const [to, setTo] = useState(initialTo ?? "");
   const [resolvedAddr, setResolvedAddr] = useState("");
   const [resolvedBPAN, setResolvedBPAN] = useState("");
   const [resolving, setResolving] = useState(false);
   const [bpanChange, setBpanChange] = useState<BpanChange | null>(null);
   const [bpanChangeAck, setBpanChangeAck] = useState(false);
-  const [amount, setAmount] = useState("");
+  const [amount, setAmount] = useState(initialAmount ?? "");
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
   const [txFx, setTxFx] = useState<TxFxStatus | null>(null);
@@ -138,6 +156,8 @@ export function SendScreen({ w, onBack, onSessionExpired, initialChainId, initia
   const [gasTier, setGasTier] = useState<GasTier>("normal");
   const [feeInfo, setFeeInfo] = useState<FeeInfo | null>(null);
   const resolveSeq = useRef(0);
+  const [scanning, setScanning] = useState(false);
+  const [scanErr, setScanErr] = useState("");
 
   // Fee estimate for the fee row + the MAX reserve.
   useEffect(() => {
@@ -239,6 +259,75 @@ export function SendScreen({ w, onBack, onSessionExpired, initialChainId, initia
       if (seq === resolveSeq.current) setResolving(false);
     }
   }, [chainId, chainName, isEvm]);
+
+  // A scanned BPAN arrives as a prefilled string, which is not enough: it still
+  // has to go through the quorum + TOFU resolution before it can be sent to.
+  // A raw address needs nothing — destinationAddress validates it directly.
+  // MUST stay above the `if (scanning)` early return below: a hook after it
+  // would be skipped whenever the camera is open ("rendered fewer hooks").
+  const scannedBpanRef = useRef(initialTo);
+  useEffect(() => {
+    const seed = scannedBpanRef.current;
+    scannedBpanRef.current = undefined;
+    if (seed && isBPANInput(seed)) void handleToChange(seed);
+  }, [handleToChange]);
+
+  /**
+   * A scanned code, applied to this form. Returns a message to REJECT and keep
+   * the camera open; returns nothing to accept and close.
+   *
+   * The rule that matters: a payload that names no chain only fills the
+   * address, leaving the user's selected chain alone (core/qrPayload never
+   * guesses a chain for a bare EVM address). A payload that DOES name a chain
+   * switches to it, and the chip row is made to show it.
+   */
+  function applyScan(raw: string): string | void {
+    const p = parseScannedPayload(raw);
+    if (p.kind === "walletconnect") {
+      return "That's a WalletConnect code. Use Settings › Connected dApps to pair.";
+    }
+    if (p.kind === "bpan") {
+      setScanning(false); setScanErr("");
+      void handleToChange(p.bpan);
+      return;
+    }
+    if (p.kind !== "address") {
+      return "That QR code isn't an address, a payment link or a BPAN.";
+    }
+    if (p.chainId && p.chainId !== chainId) {
+      const sendable = !!NETWORKS[p.chainId] || !!w.customNets[p.chainId] || !!NON_EVM_SENDABLE[p.chainId];
+      if (!sendable) {
+        return `This code is for ${chainNameOf(p.chainId) ?? p.chainId}, which NumPay can't send on yet.`;
+      }
+      // Chain first: switchChain deliberately clears the form, so the scanned
+      // address has to be applied after it.
+      switchChain(p.chainId);
+      setExtraChain(p.chainId);
+    }
+    setScanning(false); setScanErr("");
+    setTo(p.address);
+    setResolvedAddr(""); setResolvedBPAN("");
+    setBpanChange(null); setBpanChangeAck(false);
+    setError("");
+    // EIP-681 `value` is in the NATIVE coin, so it only applies when no token
+    // is selected. Token-transfer amounts are dropped by the parser (their
+    // units need the token's decimals), so nothing wrong can land here.
+    if (p.amount && !token) setAmount(p.amount);
+  }
+
+  if (scanning) {
+    return (
+      <View style={{ flex: 1 }}>
+        <ScreenHeader title="Scan address" onBack={() => setScanning(false)} />
+        <QrScanner
+          title="Scan address"
+          hint="Point the camera at a wallet address, payment QR or BPAN code."
+          onScan={applyScan}
+          onCancel={() => setScanning(false)}
+        />
+      </View>
+    );
+  }
 
   const destinationAddress =
     resolvedAddr ||
@@ -390,14 +479,28 @@ export function SendScreen({ w, onBack, onSessionExpired, initialChainId, initia
           </Card>
         )}
 
-        {/* Recipient */}
-        <Field
-          placeholder={`Address or 11-digit BPAN`}
-          autoCapitalize="none"
-          autoCorrect={false}
-          value={to}
-          onChangeText={(v) => { void handleToChange(v); }}
-        />
+        {/* Recipient. The scan button sits in the row rather than inside the
+            input: Field is a plain TextInput, and overlaying a control on it
+            would fight the text as an address fills the width. */}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Field
+            placeholder={`Address or 11-digit BPAN`}
+            autoCapitalize="none"
+            autoCorrect={false}
+            value={to}
+            onChangeText={(v) => { void handleToChange(v); }}
+            style={{ flex: 1 }}
+          />
+          <Pressable
+            onPress={() => { setScanErr(""); setScanning(true); }}
+            style={st.scanBtn}
+            hitSlop={6}
+            accessibilityLabel="Scan a QR code"
+          >
+            <ScanIcon size={17} color={colors.brand2} />
+          </Pressable>
+        </View>
+        {!!scanErr && <Text style={st.scanErr}>{scanErr}</Text>}
         {resolving && <Text style={st.resolving}>Verifying BPAN across independent providers…</Text>}
         {!!resolvedBPAN && !!resolvedAddr && !bpanChange && (
           <Text style={st.resolved}>
@@ -516,6 +619,18 @@ const st = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.divider,
   },
+  scanBtn: {
+    marginTop: 10,
+    width: 46,
+    paddingVertical: 12,
+    borderRadius: radius.button,
+    backgroundColor: "rgba(124, 109, 240, 0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(124, 109, 240, 0.32)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  scanErr: { color: colors.danger, fontSize: ts.small, marginTop: 6 },
   resolving: { color: colors.muted, fontSize: ts.small, marginTop: 6 },
   resolved: { color: colors.success, fontSize: ts.small, marginTop: 6 },
   maxBtn: {

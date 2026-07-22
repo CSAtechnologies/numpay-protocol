@@ -122,6 +122,22 @@ export function ChevronLeftIcon({ size = 20, color = "#fff" }: IconProps) {
   );
 }
 
+// DELIBERATE EXCEPTION to the "port, never invent" rule at the top of this
+// file: the extension has no camera, so its Icons.tsx has no scan glyph to
+// port. This is Lucide's `scan-line` — the same library the extension's set is
+// drawn from — rather than new art, so it still sits in the same family.
+export function ScanIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frame(size)} stroke={color}>
+      <Path d="M3 7V5a2 2 0 0 1 2-2h2" />
+      <Path d="M17 3h2a2 2 0 0 1 2 2v2" />
+      <Path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+      <Path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+      <Path d="M7 12h10" />
+    </Svg>
+  );
+}
+
 export function GlobeIcon({ size = 20, color = "#fff" }: IconProps) {
   return (
     <Svg {...frame(size)} stroke={color}>

@@ -33,12 +33,15 @@ import {
   GradientNumber, LogoMark, ScreenHeader, SectionLabel,
 } from "./src/ui/components";
 import { TxResultOverlay, type TxFxKind, type TxFxStatus } from "./src/ui/TxResultOverlay";
+import { QrScanner } from "./src/ui/QrScanner";
+import { parseScannedPayload } from "@numpay/core/qrPayload";
+import { pair } from "./src/walletconnect/client";
 import { BottomNav, BOTTOM_NAV_CLEARANCE, type NavTab } from "./src/ui/BottomNav";
 import { WalletAvatar } from "./src/ui/WalletAvatar";
 import { CurrencyProvider, useCurrencyPref, formatFiat } from "./src/ui/currency";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import {
-  LinkIcon, LockIcon, ReceiveIcon, SendIcon, SwapIcon, TrendingUpIcon,
+  LinkIcon, LockIcon, ReceiveIcon, ScanIcon, SendIcon, SwapIcon, TrendingUpIcon,
 } from "./src/ui/icons";
 import { AssetIcon, ChainBadge, ChainIcon } from "./src/ui/coins";
 import { ReceiveScreen, type ReceiveAddrs } from "./src/screens/ReceiveScreen";
@@ -61,7 +64,11 @@ type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
   // No "bridge" mode: bridging is a cross-chain PAIR inside Swap (extension
   // parity), and slot 3 of the dashboard is DeFi.
-  | "spike" | "devnet" | "receive" | "send" | "swap" | "defi" | "activity" | "bpan" | "dapps" | "dev" | "settings" | "token" | "assets";
+  | "spike" | "devnet" | "receive" | "send" | "swap" | "defi" | "activity" | "bpan" | "dapps" | "dev" | "settings" | "token" | "assets"
+  // Universal scanner reached from the dashboard header. Whatever it reads is
+  // routed by core/qrPayload: an address or BPAN opens Send prefilled, a wc:
+  // code pairs. (Send has its own scanner for the address field alone.)
+  | "scan";
 
 export default function App() {
   return (
@@ -77,6 +84,10 @@ function AppInner() {
   // Token-detail target and the Send screen's preselection (TokenDetail entry).
   const [tokenDetail, setTokenDetail] = useState<AssetRow | null>(null);
   const [sendInit, setSendInit] = useState<{ chainId: string; token: SendTokenPick | null } | null>(null);
+  // Send prefill produced by the dashboard scanner (address/BPAN, optional
+  // chain and amount).
+  const [scanPrefill, setScanPrefill] =
+    useState<{ to: string; chainId?: string; amount?: string } | null>(null);
   // Swap preselection (TokenDetail "Swap" button): chain + sell-side token.
   const [swapInit, setSwapInit] = useState<{ chainId: string; fromAddr?: string } | null>(null);
   const [status, setStatus] = useState<VaultStatus | null>(null);
@@ -95,7 +106,7 @@ function AppInner() {
   const [addWalletOpen, setAddWalletOpen] = useState(false);
 
   const unlocked =
-    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "defi" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev" || mode === "settings" || mode === "token" || mode === "assets";
+    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "defi" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev" || mode === "settings" || mode === "token" || mode === "assets" || mode === "scan";
   // The floating nav shows on its six tabs; focused flows (swap, DeFi,
   // dApps, dev) keep the full screen.
   const navVisible =
@@ -128,6 +139,34 @@ function AppInner() {
     void loadActiveWallet();
     setMode("home");
   }, [loadActiveWallet]);
+
+  /**
+   * The dashboard scanner's router. Returns a message to REJECT the code and
+   * keep scanning, nothing to accept.
+   *
+   * A `wc:` code pairs straight from here (WcApprovalHost is mounted app-wide
+   * and shows the proposal sheet), so the user never has to know a scan was a
+   * dApp connection rather than a payment. Anything address-shaped opens Send.
+   */
+  const routeScan = useCallback((raw: string): string | void => {
+    const p = parseScannedPayload(raw);
+    switch (p.kind) {
+      case "walletconnect":
+        setMode("home");
+        void pair(p.uri).catch((e) => setError(`Could not connect: ${String((e as Error)?.message ?? e)}`));
+        return;
+      case "bpan":
+        setScanPrefill({ to: p.bpan });
+        setMode("send");
+        return;
+      case "address":
+        setScanPrefill({ to: p.address, chainId: p.chainId, amount: p.amount });
+        setMode("send");
+        return;
+      default:
+        return "That QR code isn't an address, a payment link, a BPAN or a WalletConnect code.";
+    }
+  }, []);
 
   const showRelock = useCallback(async () => {
     setStatus(await getStatus());
@@ -201,6 +240,10 @@ function AppInner() {
         // broken" — the token was saved, nothing had re-read it.
         setMode("settings");
         void reloadCustomRef.current?.();
+        return true;
+      }
+      if (m === "scan") {
+        setMode("home");
         return true;
       }
       if (m === "receive" || m === "send" || m === "swap" || m === "defi" ||
@@ -332,6 +375,7 @@ function AppInner() {
           onLock={async () => { await lock(); setError(""); await refresh(); }}
           onBPAN={() => setMode("bpan")}
           onDapps={() => setMode("dapps")}
+          onScan={() => setMode("scan")}
           onAccounts={() => setMode("settings")}
           walletName={activeWallet?.name ?? "NumPay"}
           walletAvatar={activeWallet?.avatar}
@@ -370,13 +414,30 @@ function AppInner() {
       )}
       {mode === "send" && (
         <SendScreen
-          key={sendInit ? `${sendInit.chainId}:${sendInit.token?.address ?? "native"}` : "default"}
+          key={
+            scanPrefill
+              ? `scan:${scanPrefill.to}`
+              : sendInit ? `${sendInit.chainId}:${sendInit.token?.address ?? "native"}` : "default"
+          }
           w={w}
-          initialChainId={sendInit?.chainId}
+          initialChainId={scanPrefill?.chainId ?? sendInit?.chainId}
           initialToken={sendInit?.token}
-          onBack={() => { setSendInit(null); setMode("home"); }}
+          initialTo={scanPrefill?.to}
+          initialAmount={scanPrefill?.amount}
+          onBack={() => { setSendInit(null); setScanPrefill(null); setMode("home"); }}
           onSessionExpired={() => { void showRelock(); }}
         />
+      )}
+      {mode === "scan" && (
+        <View style={{ flex: 1 }}>
+          <ScreenHeader title="Scan" onBack={() => setMode("home")} />
+          <QrScanner
+            title="Scan"
+            hint="Point the camera at a wallet address, payment QR, BPAN or WalletConnect code."
+            onScan={routeScan}
+            onCancel={() => setMode("home")}
+          />
+        </View>
       )}
       {mode === "token" && tokenDetail && (
         <TokenDetailScreen
@@ -736,6 +797,7 @@ function Dashboard(p: {
   onReceive: () => void;
   onBPAN: () => void;
   onDapps: () => void;
+  onScan: () => void;
   onLock: () => void;
   onAccounts: () => void;
   walletName: string;
@@ -759,6 +821,9 @@ function Dashboard(p: {
           <Text style={st.acctChevron}>{"▾"}</Text>
         </Pressable>
         <View style={{ flex: 1 }} />
+        <Pressable onPress={p.onScan} style={st.iconBtn} hitSlop={8} accessibilityLabel="Scan a QR code">
+          <ScanIcon size={15} color={colors.muted} />
+        </Pressable>
         <Pressable onPress={p.onDapps} style={st.iconBtn} hitSlop={8}>
           <LinkIcon size={15} color={colors.muted} />
         </Pressable>
