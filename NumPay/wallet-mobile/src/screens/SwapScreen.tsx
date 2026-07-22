@@ -83,23 +83,9 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
   }, [w.rows]);
 
   const cur = useCurrencyPref();
-  const [chainId, setChainId] = useState(initialChainId ?? chains[0] ?? "ethereum");
-  // Consumed once by the pair-reset effect below, then cleared: chain switches
-  // after entry go back to the native→default pairing.
-  const initFromAddr = useRef(initialFromAddr?.toLowerCase());
-  // A pair the chain-change effect should adopt instead of resetting (flip
-  // across chains, sell-side pick on another chain).
-  const pendingPair = useRef<{ from: SwapToken | null; to: SwapToken | null } | null>(null);
-  const isSolana = chainId === "solana";
 
-  // Native + held + curated tokens for the SELL chain (EVM builder, or the
-  // Solana one — Solana lives outside NETWORKS/DEFAULT_TOKENS).
-  const tokenList = useMemo(
-    () => isSolana
-      ? buildSolanaTokenList(w.rows, w.tokensByChain)
-      : buildChainTokenList(chainId, w.rows, w.tokensByChain),
-    [chainId, isSolana, w.rows, w.tokensByChain],
-  );
+  // Tokens for one chain: the EVM builder, or the Solana one (Solana lives
+  // outside NETWORKS/DEFAULT_TOKENS).
   const listFor = useCallback(
     (id: string) => (id === "solana"
       ? buildSolanaTokenList(w.rows, w.tokensByChain)
@@ -109,11 +95,20 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
 
   const [fromToken, setFromToken] = useState<SwapToken | null>(null);
   const [toToken, setToToken] = useState<SwapToken | null>(null);
+
+  // The pair is the only state that matters (extension parity). This screen
+  // has NO chain selector: the sell chain is simply wherever the sell token
+  // lives, you change it by picking a token on another chain inside the
+  // picker, and the pair alone decides swap vs bridge. Deriving it rather
+  // than storing it is what lets a cross-chain pick stand instead of being
+  // reset by a chain-change effect.
+  const chainId = fromToken?.chainId ?? initialChainId ?? chains[0] ?? "ethereum";
+
   const [picking, setPicking] = useState<"from" | "to" | null>(null);
-  // The picker has its own chain row (extension parity): it opens on the
-  // current side's chain but can browse any chain's tokens. Picking a buy-side
-  // token on another chain turns the pair into a bridge — no separate page.
-  const [pickerChain, setPickerChain] = useState(chainId);
+  // The picker's own chain row is the only place chains are chosen. It opens
+  // on the current side's chain and can browse any chain's tokens; picking a
+  // buy-side token on another chain turns the pair into a bridge in place.
+  const [pickerChain, setPickerChain] = useState(initialChainId ?? chains[0] ?? "ethereum");
   const [amount, setAmount] = useState("");
   const [slippage, setSlippage] = useState("0.5");
   const [routes, setRoutes] = useState<RouteOption[]>([]);
@@ -132,29 +127,40 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
   const isBridge = !!fromToken && !!toToken && fromToken.chainId !== toToken.chainId;
   const solanaAddress = w.nonEvmAddresses?.solana;
 
-  // Reset the pair when the sell chain changes: native → first stable-ish
-  // default. On TokenDetail entry the first pass instead sells the entry token
-  // → native. A pendingPair (flip / cross-chain sell pick) wins over both.
+  // Seed the pair once, on the entry chain: native → first stable-ish default,
+  // or the TokenDetail entry token → native. Runs once and never again, so a
+  // later cross-chain pick is never undone.
+  const seeded = useRef(false);
   useEffect(() => {
-    if (pendingPair.current) {
-      setFromToken(pendingPair.current.from);
-      setToToken(pendingPair.current.to);
-      pendingPair.current = null;
-      setRoutes([]); setBRoutes([]); setError(""); setTxHash("");
-      return;
-    }
-    const native = tokenList[0] ?? null;
+    if (seeded.current) return;
+    const list = listFor(initialChainId ?? chains[0] ?? "ethereum");
+    if (list.length === 0) return;
+    seeded.current = true;
+    const native = list[0];
     let from = native;
-    if (initFromAddr.current) {
-      const m = tokenList.find((t) => t.address?.toLowerCase() === initFromAddr.current);
+    if (initialFromAddr) {
+      const m = list.find((t) => t.address?.toLowerCase() === initialFromAddr.toLowerCase());
       if (m) from = m;
-      initFromAddr.current = undefined;
     }
     setFromToken(from);
-    setToToken(from === native ? (tokenList.find((t) => t.address) ?? null) : native);
-    setAmount(""); setRoutes([]); setBRoutes([]); setError(""); setTxHash("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chainId]);
+    setToToken(from === native ? (list.find((t) => t.address) ?? null) : native);
+  }, [chains, listFor, initialChainId, initialFromAddr]);
+
+  // Held balances stream in after mount, and with no chain-change effect left
+  // to rebuild the pair there is nothing else to pick them up: re-read the
+  // selected tokens' balances as their chain's data lands, or a funded wallet
+  // keeps reading "Balance 0" and MAX yields nothing.
+  useEffect(() => {
+    const sync = (prev: SwapToken | null): SwapToken | null => {
+      if (!prev) return prev;
+      const found = listFor(prev.chainId).find(
+        (t) => (t.address ?? "").toLowerCase() === (prev.address ?? "").toLowerCase(),
+      );
+      return found && found.balance !== prev.balance ? { ...prev, balance: found.balance } : prev;
+    };
+    setFromToken(sync);
+    setToToken(sync);
+  }, [listFor]);
 
   const scheduleQuote = useCallback((amt: string, from: SwapToken | null, to: SwapToken | null) => {
     if (quoteTimer.current) clearTimeout(quoteTimer.current);
@@ -214,21 +220,15 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
     scheduleQuote(s, fromToken, toToken);
   }
 
+  // Only the picked side changes. The other side stands, so picking a token on
+  // another chain is what turns the pair into a bridge (either direction) and
+  // the sell chain follows the sell token with no separate state to keep in
+  // step.
   function selectToken(t: SwapToken) {
     if (picking === "from") {
-      if (pickerChain !== chainId) {
-        // Selling from another chain: move the whole swap there, keeping the
-        // buy side so a cross-chain pick stays a bridge instead of resetting.
-        pendingPair.current = { from: t, to: toToken };
-        setPicking(null);
-        setChainId(pickerChain);
-        setAmount("");
-        return;
-      }
       setFromToken(t);
       scheduleQuote(amount, t, toToken);
     } else if (picking === "to") {
-      // Buying on another chain is simply a bridge — same screen, same flow.
       setToToken(t);
       scheduleQuote(amount, fromToken, t);
     }
@@ -237,13 +237,6 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
 
   function flip() {
     const f = fromToken, t = toToken;
-    if (t && t.chainId !== chainId) {
-      // The buy side lives on another chain: the whole screen follows it.
-      pendingPair.current = { from: t, to: f };
-      setChainId(t.chainId);
-      setAmount("");
-      return;
-    }
     setFromToken(t); setToToken(f);
     scheduleQuote(amount, t, f);
   }
@@ -323,7 +316,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
   // buy-side stables.
   if (picking) {
     const balOf = (t: SwapToken) => parseFloat(t.balance) || 0;
-    const pickerTokens = pickerChain === chainId ? tokenList : listFor(pickerChain);
+    const pickerTokens = listFor(pickerChain);
     const held = pickerTokens
       .filter((t) => balOf(t) > 0)
       .sort((a, b) => balOf(b) * price(b) - balOf(a) * price(a));
@@ -399,19 +392,6 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
     <View style={{ flex: 1 }}>
       <ScreenHeader title={isBridge ? "Bridge" : "Swap"} onBack={onBack} />
       <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-        {/* Sell-chain selector */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, marginBottom: 4 }}>
-          {chains.map((id) => (
-            <Chip
-              key={id}
-              label={chainLabel(id)}
-              active={chainId === id}
-              onPress={() => setChainId(id)}
-              icon={<ChainIcon chainId={id} size={16} />}
-            />
-          ))}
-        </ScrollView>
-
         {/* SELL */}
         <SectionLabel text={isBridge ? `Sell on ${chainLabel(chainId)}` : "Sell"} style={{ marginTop: 10 } as object} />
         <Card style={st.sideCard}>
@@ -422,7 +402,10 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
                 {!!fromToken.address && <ChainBadge chainId={chainId} size={12} />}
               </View>
             )}
-            <Text style={st.tokenBtnText}>{fromToken?.symbol ?? "—"}</Text>
+            <View>
+              <Text style={st.tokenBtnText}>{fromToken?.symbol ?? "—"}</Text>
+              <Text style={st.tokenBtnChain}>{chainLabel(chainId)}</Text>
+            </View>
             <Text style={st.chev}>▾</Text>
           </Pressable>
           <View style={{ flex: 1 }}>
@@ -470,7 +453,10 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
                 <ChainBadge chainId={toChainId} size={12} />
               </View>
             )}
-            <Text style={st.tokenBtnText}>{toToken?.symbol ?? "—"}</Text>
+            <View>
+              <Text style={st.tokenBtnText}>{toToken?.symbol ?? "—"}</Text>
+              <Text style={st.tokenBtnChain}>{chainLabel(toChainId)}</Text>
+            </View>
             <Text style={st.chev}>▾</Text>
           </Pressable>
           <View style={{ flex: 1, alignItems: "flex-end", paddingRight: 4 }}>
@@ -588,6 +574,9 @@ const st = StyleSheet.create({
     backgroundColor: "rgba(124, 109, 240, 0.10)",
   },
   tokenBtnText: { color: colors.textPrimary, fontSize: ts.body, fontWeight: "600" },
+  // With no chain row on the screen, the token button is the only thing that
+  // says which chain this side is on.
+  tokenBtnChain: { color: colors.muted, fontSize: 9.5, marginTop: 1 },
   chev: { color: colors.muted, fontSize: 11 },
   receiveText: { color: colors.textPrimary, fontSize: 20, fontWeight: "600", fontVariant: ["tabular-nums"] },
   subRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 6, gap: 10 },
