@@ -48,6 +48,8 @@ const ALL_CHAINS: ReceiveChain[] = [
   return 0;
 });
 
+const QR_TILE = 50; // white cover square behind the mark
+
 // Pure-JS QR with the NumPay mark centered. Error correction H tolerates the
 // covered center modules (~30% damage budget; the tile uses well under half).
 function QrView({ value }: { value: string }) {
@@ -59,20 +61,28 @@ function QrView({ value }: { value: string }) {
   }, [value]);
   const n = qr.getModuleCount();
   const cell = Math.max(3, Math.floor(264 / n));
+  // The grid wrapper is exactly the symbol's size and carries no padding, so
+  // the overlay can be placed with plain numbers. Percentage offsets ("50%")
+  // are measured against the padded card, not the symbol, and land the mark
+  // off-centre.
+  const size = n * cell;
+  const inset = Math.round((size - QR_TILE) / 2);
   return (
     <View style={st.qrBox}>
-      {Array.from({ length: n }, (_, r) => (
-        <View key={r} style={{ flexDirection: "row" }}>
-          {Array.from({ length: n }, (_, c) => (
-            <View
-              key={c}
-              style={{ width: cell, height: cell, backgroundColor: qr.isDark(r, c) ? "#000" : "#fff" }}
-            />
-          ))}
+      <View style={{ width: size, height: size }}>
+        {Array.from({ length: n }, (_, r) => (
+          <View key={r} style={{ flexDirection: "row" }}>
+            {Array.from({ length: n }, (_, c) => (
+              <View
+                key={c}
+                style={{ width: cell, height: cell, backgroundColor: qr.isDark(r, c) ? "#000" : "#fff" }}
+              />
+            ))}
+          </View>
+        ))}
+        <View style={[st.qrLogoTile, { top: inset, left: inset }]}>
+          <NumPayMark size={34} />
         </View>
-      ))}
-      <View style={st.qrLogoTile}>
-        <NumPayMark size={34} />
       </View>
     </View>
   );
@@ -201,9 +211,7 @@ const st = StyleSheet.create({
   },
   qrLogoTile: {
     position: "absolute",
-    top: "50%", left: "50%",
-    marginTop: -25, marginLeft: -25,
-    width: 50, height: 50,
+    width: QR_TILE, height: QR_TILE,
     borderRadius: 12,
     backgroundColor: "#fff",
     alignItems: "center", justifyContent: "center",
