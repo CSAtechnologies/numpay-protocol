@@ -24,6 +24,7 @@ import { colors, radius, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
 import { useCurrencyPref, formatFiatLine } from "../ui/currency";
 import { AssetIcon, ChainBadge, ChainIcon } from "../ui/coins";
+import { LayersIcon, SwapIcon } from "../ui/icons";
 import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
 
 const QUOTE_DEBOUNCE_MS = 700;
@@ -443,9 +444,20 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
           <Text style={st.subText}>{sellUsd > 0 ? `≈ ${formatFiatLine(sellUsd, cur.code, cur.currency, w.rates)}` : " "}</Text>
         </View>
 
-        {/* Flip */}
-        <Pressable onPress={flip} style={st.flipBtn}>
-          <Text style={{ color: colors.brand2, fontSize: 16, fontWeight: "700" }}>⇅</Text>
+        {/* Flip. Doubles as the mode indicator, the way the extension's does:
+            a plain swap arrow while the pair is same-chain, and a brand-tinted
+            "BRIDGE" pill the moment the pair spans two chains. It is the cue
+            that tells the user a cross-chain pick changed what this screen
+            will do, without ever leaving the screen. */}
+        <Pressable onPress={flip} style={[st.flipBtn, isBridge && st.flipBtnBridge]}>
+          {isBridge ? (
+            <>
+              <LayersIcon size={12} color={colors.brand2} />
+              <Text style={st.flipLabel}>BRIDGE</Text>
+            </>
+          ) : (
+            <SwapIcon size={14} color={colors.muted} />
+          )}
         </Pressable>
 
         {/* BUY */}
@@ -583,10 +595,19 @@ const st = StyleSheet.create({
   maxInline: { color: colors.brand2, fontWeight: "700" },
   flipBtn: {
     alignSelf: "center",
-    width: 34, height: 34, borderRadius: 17,
-    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
+    flexDirection: "row",
     alignItems: "center", justifyContent: "center",
+    gap: 5,
+    minWidth: 34, height: 34,
+    paddingHorizontal: 10,
+    borderRadius: radius.button,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
     marginVertical: 8,
+  },
+  flipBtnBridge: { backgroundColor: colors.brandTint, borderColor: colors.brand },
+  flipLabel: {
+    color: colors.brand2, fontSize: 10, fontWeight: "700",
+    letterSpacing: 0.8,
   },
   slipRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 12 },
   routeRow: {
