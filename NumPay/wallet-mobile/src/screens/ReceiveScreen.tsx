@@ -1,20 +1,58 @@
-// Receive: per-chain address + QR (pure-JS qrcode-generator, no native module).
-// Restyled onto the shared UI library in the design-token pass; behaviour is
-// unchanged from the first committed version (306c6aa).
+// Receive — the extension Receive page at mobile scope: a searchable chain
+// DROPDOWN (every EVM chain listed by name plus the non-EVM six, priority
+// order), a QR with the NumPay mark centered (error correction H so the
+// overlay never breaks scans), the address card, and a Copy Address button.
+// QR stays pure-JS (qrcode-generator); copy is expo-clipboard (native module,
+// ships with the same rebuild cycle as the other expo modules).
 import { useMemo, useState } from "react";
-import { ScrollView, Share, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import qrcode from "qrcode-generator";
+import * as Clipboard from "expo-clipboard";
+import { NETWORKS } from "@numpay/core/networks";
 import type { NonEvmAddressMap } from "@numpay/core/chains";
 import { colors, radius, type as ts } from "../ui/theme";
-import { AlertCard, Btn, Chip, Card, ScreenHeader } from "../ui/components";
+import { Btn, Card, Field, ScreenHeader } from "../ui/components";
+import { NumPayMark } from "../ui/NumPayLogo";
 import { ChainIcon } from "../ui/coins";
 
 export interface ReceiveAddrs { evm: string; nonEvm: NonEvmAddressMap | null }
 
-// Pure-JS QR: qrcode-generator computes the module matrix, rendered as Views.
+interface ReceiveChain { id: string; name: string; symbol: string; isEVM: boolean }
+
+// Extension Receive page ordering: the majors first, the rest as declared.
+const PRIORITY = [
+  "ethereum", "bitcoin", "solana", "polygon", "arbitrum",
+  "optimism", "base", "bsc", "avalanche", "sui",
+  "tron", "xrp", "litecoin",
+];
+
+const NON_EVM_CHAINS: ReceiveChain[] = [
+  { id: "bitcoin",  name: "Bitcoin",    symbol: "BTC", isEVM: false },
+  { id: "solana",   name: "Solana",     symbol: "SOL", isEVM: false },
+  { id: "sui",      name: "Sui",        symbol: "SUI", isEVM: false },
+  { id: "tron",     name: "Tron",       symbol: "TRX", isEVM: false },
+  { id: "xrp",      name: "XRP Ledger", symbol: "XRP", isEVM: false },
+  { id: "litecoin", name: "Litecoin",   symbol: "LTC", isEVM: false },
+];
+
+const ALL_CHAINS: ReceiveChain[] = [
+  ...Object.values(NETWORKS)
+    .filter((n) => n.id !== "sepolia")
+    .map((n) => ({ id: n.id, name: n.name, symbol: n.symbol, isEVM: true })),
+  ...NON_EVM_CHAINS,
+].sort((a, b) => {
+  const ai = PRIORITY.indexOf(a.id), bi = PRIORITY.indexOf(b.id);
+  if (ai !== -1 && bi !== -1) return ai - bi;
+  if (ai !== -1) return -1;
+  if (bi !== -1) return 1;
+  return 0;
+});
+
+// Pure-JS QR with the NumPay mark centered. Error correction H tolerates the
+// covered center modules (~30% damage budget; the tile uses well under half).
 function QrView({ value }: { value: string }) {
   const qr = useMemo(() => {
-    const q = qrcode(0, "M"); // type 0 = auto-size for the payload
+    const q = qrcode(0, "H");
     q.addData(value);
     q.make();
     return q;
@@ -33,60 +71,105 @@ function QrView({ value }: { value: string }) {
           ))}
         </View>
       ))}
+      <View style={st.qrLogoTile}>
+        <NumPayMark size={34} />
+      </View>
     </View>
   );
 }
 
 export function ReceiveScreen({ addrs, onBack }: { addrs: ReceiveAddrs; onBack: () => void }) {
-  const entries = useMemo(() => {
-    const list = [
-      { id: "evm", chainIcon: "ethereum", label: "EVM", note: "Ethereum, Base, BSC, Polygon and every EVM chain", address: addrs.evm },
-    ];
-    const n = addrs.nonEvm;
-    if (n) {
-      list.push(
-        { id: "bitcoin",  chainIcon: "bitcoin",  label: "BTC", note: "Bitcoin",     address: n.bitcoin },
-        { id: "solana",   chainIcon: "solana",   label: "SOL", note: "Solana",      address: n.solana },
-        { id: "sui",      chainIcon: "sui",      label: "SUI", note: "Sui",         address: n.sui },
-        { id: "tron",     chainIcon: "tron",     label: "TRX", note: "Tron",        address: n.tron },
-        { id: "xrp",      chainIcon: "xrp",      label: "XRP", note: "XRP Ledger",  address: n.xrp },
-        { id: "litecoin", chainIcon: "litecoin", label: "LTC", note: "Litecoin",    address: n.litecoin },
-      );
-    }
-    return list;
-  }, [addrs]);
-  const [sel, setSel] = useState("evm");
-  const active = entries.find((e) => e.id === sel) ?? entries[0];
+  const [selId, setSelId] = useState("ethereum");
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const sel = ALL_CHAINS.find((c) => c.id === selId) ?? ALL_CHAINS[0];
+  const address = sel.isEVM
+    ? addrs.evm
+    : (addrs.nonEvm?.[sel.id as keyof NonEvmAddressMap] ?? "");
+
+  const filtered = search.trim()
+    ? ALL_CHAINS.filter((c) => {
+        const q = search.trim().toLowerCase();
+        return c.name.toLowerCase().includes(q) || c.symbol.toLowerCase().includes(q);
+      })
+    : ALL_CHAINS;
+
+  async function handleCopy() {
+    if (!address) return;
+    try {
+      await Clipboard.setStringAsync(address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard unavailable: the Share button still works */ }
+  }
 
   return (
     <View style={{ flex: 1 }}>
       <ScreenHeader title="Receive" onBack={onBack} />
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
-        {entries.map((e) => (
-          <Chip
-            key={e.id}
-            label={e.label}
-            active={sel === e.id}
-            onPress={() => setSel(e.id)}
-            icon={<ChainIcon chainId={e.chainIcon} size={16} />}
-          />
-        ))}
-      </ScrollView>
-      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
-        <Text style={st.note}>{active.note}</Text>
-        <Card style={{ padding: 16, marginTop: 12, alignItems: "center" }}>
-          <QrView value={active.address} />
-          <Text style={st.addr} selectable>{active.address}</Text>
+      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        <Text style={st.subLine}>
+          Receive <Text style={{ color: colors.textPrimary, fontWeight: "600" }}>{sel.symbol} on {sel.name}</Text>
+        </Text>
+
+        {/* Chain dropdown (extension parity) */}
+        <Pressable onPress={() => { setOpen((v) => !v); setSearch(""); }}>
+          <Card style={st.selector}>
+            <ChainIcon chainId={sel.id} size={22} />
+            <Text style={st.selectorText}>{sel.name}</Text>
+            <Text style={[st.chev, open && { transform: [{ rotate: "180deg" }] }]}>▾</Text>
+          </Card>
+        </Pressable>
+        {open && (
+          <Card style={{ marginTop: 6, maxHeight: 340 }}>
+            <View style={{ paddingHorizontal: 10, paddingBottom: 6 }}>
+              <Field placeholder="Search networks…" value={search} onChangeText={setSearch} />
+            </View>
+            <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled">
+              {filtered.length === 0 && <Text style={st.noResults}>No results</Text>}
+              {filtered.map((c) => {
+                const disabled = !c.isEVM && !addrs.nonEvm;
+                const active = c.id === selId;
+                return (
+                  <Pressable
+                    key={c.id}
+                    disabled={disabled}
+                    onPress={() => { setSelId(c.id); setOpen(false); setCopied(false); }}
+                    style={[st.chainRow, active && { backgroundColor: colors.brandTint }]}
+                  >
+                    <ChainIcon chainId={c.id} size={22} />
+                    <Text style={[st.chainRowText, active && { color: colors.brand2 }, disabled && { color: colors.muted2 }]}>
+                      {c.name} ({c.symbol})
+                    </Text>
+                    {active && <Text style={{ color: colors.brand2, fontWeight: "700" }}>✓</Text>}
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </Card>
+        )}
+
+        {/* QR with the NumPay mark centered */}
+        <Card style={{ padding: 16, marginTop: 14, alignItems: "center" }}>
+          {address ? <QrView value={address} /> : <Text style={st.noResults}>Address unavailable</Text>}
         </Card>
-        <AlertCard
-          tone="amber"
-          title="Wrong-chain deposits are lost"
-          body={`Only send ${active.label === "EVM" ? "EVM-chain assets" : `${active.label} assets`} to this address. Anything else is lost.`}
-          style={{ marginTop: 12 }}
+
+        {/* Address */}
+        <Card style={{ paddingVertical: 12, paddingHorizontal: 16, marginTop: 12, alignItems: "center" }}>
+          <Text style={st.addrLabel}>YOUR {sel.name.toUpperCase()} ADDRESS</Text>
+          <Text style={st.addr} selectable>{address || "—"}</Text>
+        </Card>
+
+        <Btn
+          label={copied ? "✓ Copied!" : "Copy Address"}
+          onPress={() => { void handleCopy(); }}
+          style={copied ? { opacity: 0.85 } : undefined}
         />
         <Btn
           label="Share address"
-          onPress={() => { Share.share({ message: active.address }).catch(() => {}); }}
+          variant="secondary"
+          onPress={() => { Share.share({ message: address }).catch(() => {}); }}
         />
         <View style={{ height: 24 }} />
       </ScrollView>
@@ -95,18 +178,43 @@ export function ReceiveScreen({ addrs, onBack }: { addrs: ReceiveAddrs; onBack: 
 }
 
 const st = StyleSheet.create({
-  note: { color: colors.muted, fontSize: ts.sub, marginTop: 14 },
+  subLine: { color: colors.muted, fontSize: ts.row, textAlign: "center", marginBottom: 12 },
+
+  selector: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
+  selectorText: { color: colors.textPrimary, fontSize: ts.body, fontWeight: "600", flex: 1 },
+  chev: { color: colors.muted, fontSize: 12 },
+
+  chainRow: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    paddingHorizontal: 14, paddingVertical: 11,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.divider,
+  },
+  chainRowText: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "500", flex: 1 },
+  noResults: { color: colors.muted, fontSize: ts.small, textAlign: "center", paddingVertical: 14 },
+
   qrBox: {
     backgroundColor: "#fff",
     padding: 12,
     borderRadius: radius.tile,
     alignSelf: "center",
+    position: "relative",
   },
+  qrLogoTile: {
+    position: "absolute",
+    top: "50%", left: "50%",
+    marginTop: -25, marginLeft: -25,
+    width: 50, height: 50,
+    borderRadius: 12,
+    backgroundColor: "#fff",
+    alignItems: "center", justifyContent: "center",
+  },
+
+  addrLabel: { color: colors.muted, fontSize: ts.label, fontWeight: "600", letterSpacing: 1, marginBottom: 4 },
   addr: {
     color: colors.textPrimary,
     fontFamily: "monospace",
     fontSize: 12.5,
-    marginTop: 14,
     textAlign: "center",
+    lineHeight: 18,
   },
 });

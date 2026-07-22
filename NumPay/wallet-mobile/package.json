@@ -14,6 +14,7 @@
     "expo": "~57.0.4",
     "expo-background-fetch": "~57.0.2",
     "expo-camera": "~57.0.1",
+    "expo-clipboard": "~57.0.1",
     "expo-linear-gradient": "~57.0.0",
     "expo-linking": "~57.0.2",
     "expo-local-authentication": "~57.0.0",
