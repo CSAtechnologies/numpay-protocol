@@ -182,6 +182,10 @@ function AppInner() {
   modeRef.current = mode;
   const relockedRef = useRef(relocked);
   relockedRef.current = relocked;
+  // The back handler is registered once, so it reads the current callback
+  // through a ref rather than closing over a stale one.
+  const reloadCustomRef = useRef(w.reloadCustom);
+  reloadCustomRef.current = w.reloadCustom;
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
       if (relockedRef.current) return true; // re-auth is mandatory, not dismissible
@@ -191,7 +195,12 @@ function AppInner() {
         return true;
       }
       if (m === "assets") {
+        // Same reload as the header back button. Without it a token added in
+        // Manage assets and dismissed with the hardware back never reached the
+        // dashboard or the Send/Swap pickers, which read like "add token is
+        // broken" — the token was saved, nothing had re-read it.
         setMode("settings");
+        void reloadCustomRef.current?.();
         return true;
       }
       if (m === "receive" || m === "send" || m === "swap" || m === "defi" ||
@@ -343,7 +352,7 @@ function AppInner() {
       )}
       {mode === "assets" && (
         <ManageAssetsScreen
-          onBack={() => { setMode("settings"); w.refresh(); }}
+          onBack={() => { setMode("settings"); void w.reloadCustom(); }}
         />
       )}
       {mode === "dev" && (

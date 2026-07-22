@@ -23,7 +23,7 @@ import { importFromMnemonic } from "@numpay/core/wallet";
 import { NETWORKS, type Network } from "@numpay/core/networks";
 import { getTokenBalance } from "@numpay/core/tokens";
 import { getCustomTokens, type CustomToken } from "@numpay/core/customTokens";
-import { getCustomChains } from "@numpay/core/customChains";
+import { getCustomChains, type CustomChain } from "@numpay/core/customChains";
 import {
   deriveNonEvmAddresses,
   fetchNonEvmBalancesByAddress,
@@ -98,6 +98,8 @@ export interface MobileWalletState {
   loading: boolean;
   error: string;
   refresh: () => void;
+  /** Re-read user-added tokens/networks from storage without a full sweep. */
+  reloadCustom: () => Promise<void>;
 }
 
 // Non-EVM token fetchers return priceUsd only where the source provides it
@@ -138,6 +140,20 @@ function tokenRows(
     }
   }
   return rows;
+}
+
+// User-added networks, in core Network shape (same mapping the extension's
+// useWallet does) so the native sweep and Send treat them like built-ins.
+function toNetMap(list: CustomChain[]): Record<string, Network> {
+  const netMap: Record<string, Network> = {};
+  for (const cc of list) {
+    netMap[cc.id] = {
+      id: cc.id, name: cc.name, chainId: cc.chainId,
+      rpcUrl: cc.rpcUrl, symbol: cc.symbol, decimals: cc.decimals,
+      explorer: cc.explorer, logo: cc.logo || "",
+    };
+  }
+  return netMap;
 }
 
 // Custom (user-added) EVM token balances, read straight from the chain RPC —
@@ -267,16 +283,7 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
       setRates(liveRates);
       setHidden(hiddenSet);
 
-      // User-added networks, in core Network shape (same mapping the extension
-      // useWallet does) so the native sweep and Send treat them like built-ins.
-      const netMap: Record<string, Network> = {};
-      for (const cc of ccList) {
-        netMap[cc.id] = {
-          id: cc.id, name: cc.name, chainId: cc.chainId,
-          rpcUrl: cc.rpcUrl, symbol: cc.symbol, decimals: cc.decimals,
-          explorer: cc.explorer, logo: cc.logo || "",
-        };
-      }
+      const netMap = toNetMap(ccList);
       setCustomNets(netMap);
       setCustomTokens(ctList);
 
@@ -364,6 +371,31 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
         setLoading(false);
       });
   }, [unlocked]);
+
+  /**
+   * Re-read the user's custom tokens and networks from storage, and fetch
+   * balances for them.
+   *
+   * Adding a token in Manage assets is a purely LOCAL change, so surfacing it
+   * must not depend on the full refresh() network sweep: that is slow, it can
+   * be in-flight already (busy guard), and it made a freshly added token look
+   * like it had not been saved. Cheap enough to call on every exit from
+   * Manage assets.
+   */
+  const reloadCustom = useCallback(async () => {
+    const [ccList, ctList] = await Promise.all([
+      getCustomChains().catch(() => []),
+      getCustomTokens().catch(() => []),
+    ]);
+    const netMap = toNetMap(ccList);
+    setCustomNets(netMap);
+    setCustomTokens(ctList);
+    if (ctList.length > 0 && addrCache.current?.evm) {
+      void fetchCustomEvmTokenBalances(addrCache.current.evm, ctList, netMap)
+        .then((bals) => setCustomBal((prev) => ({ ...prev, ...bals })))
+        .catch(() => {});
+    }
+  }, []);
 
   useEffect(() => {
     if (unlocked) refresh();
@@ -463,5 +495,6 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
     loading,
     error,
     refresh,
+    reloadCustom,
   };
 }
