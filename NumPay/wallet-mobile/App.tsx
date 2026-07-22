@@ -32,6 +32,7 @@ import {
   AlertCard, AmbientBackground, AnimatedLogo, Btn, Card, Field,
   GradientNumber, LogoMark, ScreenHeader, SectionLabel,
 } from "./src/ui/components";
+import { TxResultOverlay, type TxFxKind, type TxFxStatus } from "./src/ui/TxResultOverlay";
 import { BottomNav, BOTTOM_NAV_CLEARANCE, type NavTab } from "./src/ui/BottomNav";
 import { WalletAvatar } from "./src/ui/WalletAvatar";
 import { CurrencyProvider, useCurrencyPref, formatFiat } from "./src/ui/currency";
@@ -893,6 +894,11 @@ function DevScreen(p: {
   onWipe: () => void;
 }) {
   const [confirmWipe, setConfirmWipe] = useState(false);
+  // Drives a preview of the tx result overlay. The real thing only appears
+  // after a signed transaction, so without this the send/swap/bridge animation
+  // could not be checked without spending funds. Mobile counterpart of the
+  // extension's run-txfx-visual harness.
+  const [fx, setFx] = useState<{ status: TxFxStatus; kind: TxFxKind } | null>(null);
   return (
     <View style={{ flex: 1 }}>
       <ScreenHeader title="Developer tools" onBack={p.onBack} />
@@ -903,6 +909,20 @@ function DevScreen(p: {
       <Btn label="Refresh balances" onPress={p.w.refresh} variant="secondary" />
       <Btn label="Run core spike" onPress={p.onSpike} variant="secondary" />
       <Btn label="Devnet tx (Phase 0 gate)" onPress={p.onDevnet} variant="secondary" />
+
+      <SectionLabel text="Tx overlay preview" style={{ marginTop: 14 } as object} />
+      <View style={{ flexDirection: "row", gap: 8 }}>
+        <View style={{ flex: 1 }}>
+          <Btn label="Pending" variant="secondary" onPress={() => setFx({ status: "pending", kind: "send" })} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Btn label="Success" variant="secondary" onPress={() => setFx({ status: "success", kind: "swap" })} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Btn label="Error" variant="secondary" onPress={() => setFx({ status: "error", kind: "bridge" })} />
+        </View>
+      </View>
+
       <View style={{ flex: 1 }} />
       <Btn
         label={confirmWipe ? "Tap again to WIPE vault (seed is the only recovery)" : "Wipe vault"}
@@ -910,6 +930,29 @@ function DevScreen(p: {
         variant="danger"
         style={{ marginBottom: 24 }}
       />
+
+      {fx && (
+        <TxResultOverlay
+          status={fx.status}
+          kind={fx.kind}
+          amountLabel="0.05 ETH → 1.229394 SOL"
+          detail={fx.status === "pending" ? "Approving USDC (1 of 2)…" : undefined}
+          txHash="0x8eee4ba6c0f1d2e3a4b5c6d7e8f90112233445566778899aabbccddeeff947d7"
+          explorerUrl="https://basescan.org"
+          errorTitle="Bridge failed"
+          errorMessage="Preview only. No transaction was signed."
+          onClose={() => setFx(null)}
+        />
+      )}
+      {/* Pending has no Done button by design, so give the preview a way out. */}
+      {fx?.status === "pending" && (
+        <Pressable
+          onPress={() => setFx(null)}
+          style={{ position: "absolute", top: 8, right: 8, padding: 12, zIndex: 60 }}
+        >
+          <Text style={{ color: colors.textPrimary, fontWeight: "700" }}>Close</Text>
+        </Pressable>
+      )}
     </View>
   );
 }

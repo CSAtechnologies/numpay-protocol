@@ -7,7 +7,7 @@
 // core can route (23 incl. Solana) is offered here, not a hand-kept list.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ethers } from "ethers";
-import { Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Keyboard, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { NETWORKS } from "@numpay/core/networks";
 import { getUsdPrice } from "@numpay/core/currency";
 import {
@@ -47,6 +47,16 @@ function bridgeReceive(r: BridgeRoute, to: SwapToken | null): string {
 
 function bridgeName(r: BridgeRoute): string {
   return r.steps?.[0]?.toolDetails?.name || r.steps?.[0]?.tool || "Bridge";
+}
+
+/** One label/value line in the pre-sign preview. */
+function ConfirmRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={st.confirmRow}>
+      <Text style={st.confirmLabel}>{label}</Text>
+      <Text style={st.confirmValue}>{value}</Text>
+    </View>
+  );
 }
 
 export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initialFromAddr }: {
@@ -120,6 +130,8 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
   const [txFx, setTxFx] = useState<TxFxStatus | null>(null);
   const [txDetail, setTxDetail] = useState("");
   const [txHash, setTxHash] = useState("");
+  // Pre-sign preview. The CTA opens this; only its own confirm button signs.
+  const [showConfirm, setShowConfirm] = useState(false);
   const quoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const quoteSeq = useRef(0);
 
@@ -309,6 +321,22 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
        : (toToken && receiveAmt ? parseFloat(receiveAmt) * price(toToken) : 0))
     : (bestSwap?.destUsd ?? (toToken && bestSwap ? parseFloat(bestSwap.destAmount) * price(toToken) : 0));
   const errView = error ? parseSwapError(error, isBridge ? "Bridge" : "Swap") : null;
+
+  // ── Pre-sign preview figures ──────────────────────────────────────────────
+  // A bridge quote already prices the destination net of the bridge's own
+  // fees and its toAmount is not a slippage-bounded DEX output, so the
+  // minimum-received line is swap-only (the extension does the same).
+  const minReceived = !isBridge && receiveAmt && toToken
+    ? (parseFloat(receiveAmt) * (1 - sanitizeSlippagePct(slippage) / 100))
+        .toFixed(Math.min(toToken.decimals, 6))
+    : "";
+  const routeLabel = isBridge
+    ? (bestBridge ? bridgeName(bestBridge) : "—")
+    : (bestSwap?.label ?? "—");
+  // Which key signs decides where the funds land: a Solana-side leg pays out
+  // to the Solana address, everything else to the EVM one.
+  const payoutChain = isBridge ? toChainId : chainId;
+  const recipient = (payoutChain === "solana" ? solanaAddress : w.evmAddress) || "";
 
   // Token picker takes over the screen while active: the wallet's own
   // holdings first (with balance + fiat value), then the curated list —
@@ -533,11 +561,60 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
                     : `Swap ${fromToken.symbol} for ${toToken.symbol}`)
                 : "Swap"
           }
-          onPress={() => { void handleSubmit(); }}
+          onPress={() => { Keyboard.dismiss(); setShowConfirm(true); }}
           disabled={busy || quoting || !hasRoute || !(parseFloat(amount) > 0)}
           style={{ marginTop: 16, marginBottom: 24 }}
         />
       </ScrollView>
+
+      {/* Pre-sign preview (extension parity). Nothing is signed until the
+          confirm button here is pressed, and the figures shown are the ones
+          the execute path binds against. */}
+      {showConfirm && fromToken && toToken && (
+        <Modal transparent animationType="fade" onRequestClose={() => setShowConfirm(false)}>
+          <Pressable style={st.confirmScrim} onPress={() => setShowConfirm(false)}>
+            <Pressable style={st.confirmSheet} onPress={() => {}}>
+              <Text style={st.confirmTitle}>{isBridge ? "Confirm bridge" : "Confirm swap"}</Text>
+              <View>
+                <ConfirmRow label="You pay" value={`${amount} ${fromToken.symbol} · ${chainLabel(chainId)}`} />
+                <ConfirmRow
+                  label="You receive (est.)"
+                  value={`≈ ${receiveAmt || "—"} ${toToken.symbol} · ${chainLabel(toChainId)}`}
+                />
+                {minReceived && (
+                  <ConfirmRow
+                    label="Minimum received"
+                    value={`${minReceived} ${toToken.symbol} (slippage ${sanitizeSlippagePct(slippage)}%)`}
+                  />
+                )}
+                <ConfirmRow label="Route" value={routeLabel} />
+                <ConfirmRow
+                  label="Recipient"
+                  value={recipient
+                    ? `Your wallet · ${recipient.slice(0, 6)}…${recipient.slice(-4)}`
+                    : "Your wallet"}
+                />
+              </View>
+              <Text style={st.confirmNote}>
+                The transaction is checked against this quote before it is signed. Funds are sent to
+                your own wallet.
+              </Text>
+              <View style={st.confirmActions}>
+                <Pressable style={st.confirmCancel} onPress={() => setShowConfirm(false)}>
+                  <Text style={st.confirmCancelText}>Cancel</Text>
+                </Pressable>
+                <View style={{ flex: 1 }}>
+                  <Btn
+                    label={isBridge ? "Confirm & bridge" : "Confirm & swap"}
+                    onPress={() => { setShowConfirm(false); void handleSubmit(); }}
+                    style={{ marginTop: 0 }}
+                  />
+                </View>
+              </View>
+            </Pressable>
+          </Pressable>
+        </Modal>
+      )}
 
       {txFx && (
         <TxResultOverlay
@@ -625,6 +702,48 @@ const st = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.divider,
   },
+  // Pre-sign preview: bottom sheet, so the summary sits under the thumb on
+  // the same edge as the CTA that opened it.
+  confirmScrim: {
+    flex: 1,
+    backgroundColor: colors.scrim,
+    justifyContent: "flex-end",
+    padding: 12,
+  },
+  confirmSheet: {
+    backgroundColor: colors.card,
+    borderRadius: radius.card,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    padding: 18,
+  },
+  confirmTitle: {
+    color: colors.textPrimary, fontSize: 15, fontWeight: "700", marginBottom: 10,
+  },
+  confirmRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingVertical: 7,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.divider,
+  },
+  confirmLabel: { color: colors.muted, fontSize: 11, flexShrink: 0 },
+  confirmValue: {
+    color: colors.textPrimary, fontSize: 12, fontWeight: "600",
+    flexShrink: 1, textAlign: "right",
+  },
+  confirmNote: { color: colors.muted, fontSize: 10, lineHeight: 15, marginTop: 12 },
+  confirmActions: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 16 },
+  confirmCancel: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: radius.button,
+    backgroundColor: colors.surface2,
+    alignItems: "center",
+  },
+  confirmCancelText: { color: colors.textPrimary, fontSize: 13, fontWeight: "600" },
   tokenSym: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "600" },
   tokenSub: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
   tokenBal: { color: colors.textPrimary, fontSize: ts.row, fontVariant: ["tabular-nums"] },
