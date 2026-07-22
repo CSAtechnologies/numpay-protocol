@@ -121,6 +121,15 @@ export function TokenIcon({
   return <FramedCoin sources={sources} spec={tokenFallbackSpec(symbol)} size={size} />;
 }
 
+// ── LogoCoin — house framing for a logo we already have the URL for (DeFi
+// protocol marks): no ticker resolution, just the disc + the same deterministic
+// fallback (label monogram) when the image fails.
+export function LogoCoin({
+  uri, label, size = 32,
+}: { uri: string; label: string; size?: number }) {
+  return <FramedCoin sources={[uri]} spec={tokenFallbackSpec(label)} size={size} />;
+}
+
 // ── AssetIcon — the rule for every asset row (same exception as the popup:
 // a native coin on an ETH-L2 shows the chain mark instead of the ETH diamond) ─
 export function AssetIcon({

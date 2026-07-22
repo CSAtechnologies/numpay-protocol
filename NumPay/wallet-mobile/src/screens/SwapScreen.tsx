@@ -1,18 +1,22 @@
-// Mobile Swap — same-chain swaps through the shared core engine
-// (@numpay/core/swap): EVM via ParaSwap / KyberSwap / Relay, Solana via
-// Jupiter, with the fee config baked in, guard-checked execution, and the
-// same error copy as the extension. Pickers offer the chain's native coin,
-// the wallet's discovered tokens, and a curated buy-side list.
+// Mobile Swap — one screen for same-chain swaps AND cross-chain bridges, the
+// way the extension's Swap page works: the mode is DERIVED from the pair
+// (fromToken.chainId !== toToken.chainId is a bridge), never chosen from a
+// menu. Same-chain runs through the shared swap engine (@numpay/core/swap:
+// ParaSwap / KyberSwap / Relay on EVM, Jupiter on Solana); cross-chain runs
+// through LI.FI routes + executeBridge in the same core module, so every chain
+// core can route (23 incl. Solana) is offered here, not a hand-kept list.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ethers } from "ethers";
 import { Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { NETWORKS } from "@numpay/core/networks";
 import { getUsdPrice } from "@numpay/core/currency";
 import {
   evmSwapReserve, SOL_FEE_RESERVE, parseSwapError, sanitizeSlippagePct,
-  type RouteOption, type SwapToken,
+  type BridgeRoute, type RouteOption, type SwapToken,
 } from "@numpay/core/swap";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import { fetchEvmQuotes, swapEvm, fetchSolanaSwapQuotes, swapSolana } from "../wallet/swap";
+import { bridgeTokens, canBridge, fetchBridgeRoutes } from "../wallet/bridge";
 import { buildChainTokenList, buildSolanaTokenList } from "../wallet/tokenList";
 import { explorerTxUrl } from "../wallet/send";
 import type { MobileWalletState } from "../wallet/useMobileWallet";
@@ -31,11 +35,22 @@ const SWAP_CHAIN_ORDER = [
   "ethereum", "solana", "base", "bsc", "arbitrum", "polygon", "optimism", "avalanche",
 ];
 
-export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChainId, initialFromAddr }: {
+const chainLabel = (id: string) => (id === "solana" ? "Solana" : NETWORKS[id]?.name ?? id);
+
+/** Bridge routes carry a raw destination amount; swap routes carry a formatted one. */
+function bridgeReceive(r: BridgeRoute, to: SwapToken | null): string {
+  if (!to) return "";
+  try { return parseFloat(ethers.formatUnits(r.toAmount, to.decimals)).toFixed(Math.min(to.decimals, 6)); }
+  catch { return "0"; }
+}
+
+function bridgeName(r: BridgeRoute): string {
+  return r.steps?.[0]?.toolDetails?.name || r.steps?.[0]?.tool || "Bridge";
+}
+
+export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initialFromAddr }: {
   w: MobileWalletState;
   onBack: () => void;
-  /** Cross-chain buy-side pick hands off to the Bridge flow. */
-  onBridge?: () => void;
   onSessionExpired?: () => void;
   /** Preselect (TokenDetail "Swap" entry): the chain, and the sell-side token
    *  by contract/mint address (undefined = the chain's native coin). */
@@ -71,40 +86,62 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
   // Consumed once by the pair-reset effect below, then cleared: chain switches
   // after entry go back to the native→default pairing.
   const initFromAddr = useRef(initialFromAddr?.toLowerCase());
+  // A pair the chain-change effect should adopt instead of resetting (flip
+  // across chains, sell-side pick on another chain).
+  const pendingPair = useRef<{ from: SwapToken | null; to: SwapToken | null } | null>(null);
   const isSolana = chainId === "solana";
-  const net = NETWORKS[chainId];
 
-  // Native + held + curated tokens for the chain (EVM builder, or the Solana
-  // one — Solana lives outside NETWORKS/DEFAULT_TOKENS).
+  // Native + held + curated tokens for the SELL chain (EVM builder, or the
+  // Solana one — Solana lives outside NETWORKS/DEFAULT_TOKENS).
   const tokenList = useMemo(
     () => isSolana
       ? buildSolanaTokenList(w.rows, w.tokensByChain)
       : buildChainTokenList(chainId, w.rows, w.tokensByChain),
     [chainId, isSolana, w.rows, w.tokensByChain],
   );
+  const listFor = useCallback(
+    (id: string) => (id === "solana"
+      ? buildSolanaTokenList(w.rows, w.tokensByChain)
+      : buildChainTokenList(id, w.rows, w.tokensByChain)),
+    [w.rows, w.tokensByChain],
+  );
 
   const [fromToken, setFromToken] = useState<SwapToken | null>(null);
   const [toToken, setToToken] = useState<SwapToken | null>(null);
   const [picking, setPicking] = useState<"from" | "to" | null>(null);
   // The picker has its own chain row (extension parity): it opens on the
-  // swap's chain but can browse any chain's tokens.
+  // current side's chain but can browse any chain's tokens. Picking a buy-side
+  // token on another chain turns the pair into a bridge — no separate page.
   const [pickerChain, setPickerChain] = useState(chainId);
   const [amount, setAmount] = useState("");
   const [slippage, setSlippage] = useState("0.5");
   const [routes, setRoutes] = useState<RouteOption[]>([]);
+  const [bRoutes, setBRoutes] = useState<BridgeRoute[]>([]);
   const [selRoute, setSelRoute] = useState(0);
   const [quoting, setQuoting] = useState(false);
   const [error, setError] = useState("");
-  const [swapping, setSwapping] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [txFx, setTxFx] = useState<TxFxStatus | null>(null);
   const [txDetail, setTxDetail] = useState("");
   const [txHash, setTxHash] = useState("");
   const quoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const quoteSeq = useRef(0);
 
-  // Reset the pair when the chain changes: native → first stable-ish default.
-  // On TokenDetail entry the first pass instead sells the entry token → native.
+  const toChainId = toToken?.chainId ?? chainId;
+  const isBridge = !!fromToken && !!toToken && fromToken.chainId !== toToken.chainId;
+  const solanaAddress = w.nonEvmAddresses?.solana;
+
+  // Reset the pair when the sell chain changes: native → first stable-ish
+  // default. On TokenDetail entry the first pass instead sells the entry token
+  // → native. A pendingPair (flip / cross-chain sell pick) wins over both.
   useEffect(() => {
+    if (pendingPair.current) {
+      setFromToken(pendingPair.current.from);
+      setToToken(pendingPair.current.to);
+      pendingPair.current = null;
+      setRoutes([]); setBRoutes([]); setError(""); setTxHash("");
+      return;
+    }
     const native = tokenList[0] ?? null;
     let from = native;
     if (initFromAddr.current) {
@@ -114,27 +151,43 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
     }
     setFromToken(from);
     setToToken(from === native ? (tokenList.find((t) => t.address) ?? null) : native);
-    setAmount(""); setRoutes([]); setError(""); setTxHash("");
+    setAmount(""); setRoutes([]); setBRoutes([]); setError(""); setTxHash("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chainId]);
 
   const scheduleQuote = useCallback((amt: string, from: SwapToken | null, to: SwapToken | null) => {
     if (quoteTimer.current) clearTimeout(quoteTimer.current);
-    setRoutes([]); setSelRoute(0); setError("");
+    setRoutes([]); setBRoutes([]); setSelRoute(0); setError("");
     if (!from || !to || !(parseFloat(amt) > 0)) return;
-    if (from.address === to.address && !from.address === !to.address) return;
+    const cross = from.chainId !== to.chainId;
+    if (!cross && from.address === to.address && !from.address === !to.address) return;
+    if (cross && (!canBridge(from.chainId) || !canBridge(to.chainId))) {
+      setError(`Bridge not supported for ${chainLabel(from.chainId)} → ${chainLabel(to.chainId)} yet`);
+      return;
+    }
     const seq = ++quoteSeq.current;
     setQuoting(true);
     quoteTimer.current = setTimeout(async () => {
-      const found = isSolana
+      if (cross) {
+        // Cross-chain: LI.FI routes, fetched in core (shared with the extension).
+        const { routes: found, error: err } = await fetchBridgeRoutes(
+          from, to, amt, w.evmAddress, sanitizeSlippagePct(slippage), solanaAddress,
+        );
+        if (seq !== quoteSeq.current) return;
+        setQuoting(false);
+        setBRoutes(found);
+        if (err) setError(err);
+        return;
+      }
+      const found = from.chainId === "solana"
         ? await fetchSolanaSwapQuotes(from, to, amt, sanitizeSlippagePct(slippage))
-        : await fetchEvmQuotes(chainId, from, to, amt, w.evmAddress, sanitizeSlippagePct(slippage));
+        : await fetchEvmQuotes(from.chainId, from, to, amt, w.evmAddress, sanitizeSlippagePct(slippage));
       if (seq !== quoteSeq.current) return;
       setQuoting(false);
       setRoutes(found);
       if (found.length === 0) setError("No routes found. Try a different amount or pair.");
     }, QUOTE_DEBOUNCE_MS);
-  }, [chainId, isSolana, slippage, w.evmAddress]);
+  }, [slippage, w.evmAddress, solanaAddress]);
 
   function handleAmount(v: string) {
     const clean = v.replace(/[^0-9.]/g, "");
@@ -148,8 +201,11 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
     if (bal <= 0) return;
     let v = bal;
     if (!fromToken.address) {
-      // Native coin: hold back the network fee (SOL rent+fee, or live EVM gas).
-      const reserve = isSolana ? SOL_FEE_RESERVE : await evmSwapReserve(chainId);
+      // Native coin: hold back the network fee (SOL rent+fee, or live EVM gas —
+      // a bridge costs more gas than a swap, hence the forBridge flag).
+      const reserve = fromToken.chainId === "solana"
+        ? SOL_FEE_RESERVE
+        : await evmSwapReserve(fromToken.chainId, isBridge);
       v = Math.max(0, bal - reserve);
     }
     const s = v > 0 ? String(Number(v.toFixed(8))) : "0";
@@ -160,23 +216,18 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
   function selectToken(t: SwapToken) {
     if (picking === "from") {
       if (pickerChain !== chainId) {
-        // Selling from another chain: move the whole swap there with this
-        // token preselected (the pair-reset effect consumes the ref).
-        initFromAddr.current = t.address?.toLowerCase();
+        // Selling from another chain: move the whole swap there, keeping the
+        // buy side so a cross-chain pick stays a bridge instead of resetting.
+        pendingPair.current = { from: t, to: toToken };
         setPicking(null);
         setChainId(pickerChain);
+        setAmount("");
         return;
       }
       setFromToken(t);
       scheduleQuote(amount, t, toToken);
     } else if (picking === "to") {
-      if (pickerChain !== chainId) {
-        // Buying on a different chain than the sell side is a bridge, not a
-        // swap — hand off to the Bridge flow (extension auto-switch parity).
-        setPicking(null);
-        onBridge?.();
-        return;
-      }
+      // Buying on another chain is simply a bridge — same screen, same flow.
       setToToken(t);
       scheduleQuote(amount, fromToken, t);
     }
@@ -185,13 +236,25 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
 
   function flip() {
     const f = fromToken, t = toToken;
+    if (t && t.chainId !== chainId) {
+      // The buy side lives on another chain: the whole screen follows it.
+      pendingPair.current = { from: t, to: f };
+      setChainId(t.chainId);
+      setAmount("");
+      return;
+    }
     setFromToken(t); setToToken(f);
     scheduleQuote(amount, t, f);
   }
 
-  async function handleSwap() {
-    const route = routes[selRoute];
-    if (!route || !fromToken || !toToken || !(parseFloat(amount) > 0)) return;
+  const price = (t: SwapToken | null): number => {
+    if (!t) return 0;
+    if (t.priceUsd) return t.priceUsd;
+    return w.rates ? getUsdPrice(t.symbol, w.rates) : 0;
+  };
+
+  async function handleSubmit() {
+    if (!fromToken || !toToken || !(parseFloat(amount) > 0)) return;
     const bal = parseFloat(fromToken.balance) || 0;
     if (parseFloat(amount) > bal) { setError("Insufficient balance"); return; }
     const mnemonic = await getUnlockedMnemonic();
@@ -201,43 +264,57 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
       return;
     }
     Keyboard.dismiss();
-    setSwapping(true); setError(""); setTxHash(""); setTxDetail(""); setTxFx("pending");
+    setBusy(true); setError(""); setTxHash(""); setTxDetail(""); setTxFx("pending");
     try {
       let hash: string;
-      if (isSolana) {
-        const solBal = w.rows.find((r) => r.isNative && r.chainId === "solana")?.balanceNum ?? 0;
-        setTxDetail("Confirming your swap on-chain…");
-        hash = await swapSolana(
-          mnemonic, route, fromToken, toToken, amount, route.destAmount, slippage, solBal,
-          // Price moved past slippage during the fresh re-quote: refresh the display.
-          () => scheduleQuote(amount, fromToken, toToken),
+      if (isBridge) {
+        const route = bRoutes[selRoute];
+        if (!route) return;
+        hash = await bridgeTokens(
+          mnemonic, fromToken, toToken, amount, bridgeReceive(route, toToken),
+          price(fromToken), setTxDetail, () => w.refresh(),
         );
       } else {
-        hash = await swapEvm(
-          mnemonic, chainId, route, fromToken, toToken, amount, route.destAmount, slippage,
-          setTxDetail, () => w.refresh(),
-        );
+        const route = routes[selRoute];
+        if (!route) return;
+        if (fromToken.chainId === "solana") {
+          const solBal = w.rows.find((r) => r.isNative && r.chainId === "solana")?.balanceNum ?? 0;
+          setTxDetail("Confirming your swap on-chain…");
+          hash = await swapSolana(
+            mnemonic, route, fromToken, toToken, amount, route.destAmount, slippage, solBal,
+            // Price moved past slippage during the fresh re-quote: refresh the display.
+            () => scheduleQuote(amount, fromToken, toToken),
+          );
+        } else {
+          hash = await swapEvm(
+            mnemonic, fromToken.chainId, route, fromToken, toToken, amount, route.destAmount, slippage,
+            setTxDetail, () => w.refresh(),
+          );
+        }
       }
       setTxHash(hash);
       setTxFx("success");
       w.refresh();
     } catch (e: any) {
-      setError(e?.message || "Swap failed");
+      setError(e?.message || (isBridge ? "Bridge failed" : "Swap failed"));
       setTxFx("error");
     } finally {
-      setSwapping(false);
+      setBusy(false);
     }
   }
 
-  const price = (t: SwapToken | null): number => {
-    if (!t) return 0;
-    if (t.priceUsd) return t.priceUsd;
-    return w.rates ? getUsdPrice(t.symbol, w.rates) : 0;
-  };
+  const bestSwap = routes[selRoute];
+  const bestBridge = bRoutes[selRoute];
+  const hasRoute = isBridge ? !!bestBridge : !!bestSwap;
+  const receiveAmt = isBridge
+    ? (bestBridge ? bridgeReceive(bestBridge, toToken) : "")
+    : (bestSwap?.destAmount ?? "");
   const sellUsd = fromToken && parseFloat(amount) > 0 ? parseFloat(amount) * price(fromToken) : 0;
-  const best = routes[selRoute];
-  const buyUsd = best?.destUsd ?? (toToken && best ? parseFloat(best.destAmount) * price(toToken) : 0);
-  const errView = error ? parseSwapError(error) : null;
+  const buyUsd = isBridge
+    ? (bestBridge?.toAmountUSD ? parseFloat(bestBridge.toAmountUSD)
+       : (toToken && receiveAmt ? parseFloat(receiveAmt) * price(toToken) : 0))
+    : (bestSwap?.destUsd ?? (toToken && bestSwap ? parseFloat(bestSwap.destAmount) * price(toToken) : 0));
+  const errView = error ? parseSwapError(error, isBridge ? "Bridge" : "Swap") : null;
 
   // Token picker takes over the screen while active: the wallet's own
   // holdings first (with balance + fiat value), then the curated list —
@@ -245,11 +322,7 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
   // buy-side stables.
   if (picking) {
     const balOf = (t: SwapToken) => parseFloat(t.balance) || 0;
-    const pickerTokens = pickerChain === chainId
-      ? tokenList
-      : pickerChain === "solana"
-        ? buildSolanaTokenList(w.rows, w.tokensByChain)
-        : buildChainTokenList(pickerChain, w.rows, w.tokensByChain);
+    const pickerTokens = pickerChain === chainId ? tokenList : listFor(pickerChain);
     const held = pickerTokens
       .filter((t) => balOf(t) > 0)
       .sort((a, b) => balOf(b) * price(b) - balOf(a) * price(a));
@@ -286,6 +359,7 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
         </Pressable>
       );
     };
+    const crossPick = picking === "to" && pickerChain !== chainId;
     return (
       <View style={{ flex: 1 }}>
         <ScreenHeader title={picking === "from" ? "Sell" : "Buy"} onBack={() => setPicking(null)} />
@@ -294,16 +368,18 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
           {chains.map((id) => (
             <Chip
               key={id}
-              label={id === "solana" ? "Solana" : NETWORKS[id]?.name ?? id}
+              label={chainLabel(id)}
               active={pickerChain === id}
               onPress={() => setPickerChain(id)}
               icon={<ChainIcon chainId={id} size={16} />}
             />
           ))}
         </ScrollView>
-        {picking === "to" && pickerChain !== chainId && (
+        {crossPick && (
           <Text style={[st.subText, { marginBottom: 6 }]}>
-            Buying on a different chain than you sell from is a bridge — picking a token here opens Bridge.
+            {canBridge(pickerChain) && canBridge(chainId)
+              ? `Buying on ${chainLabel(pickerChain)} while selling on ${chainLabel(chainId)} bridges across chains.`
+              : `Bridging ${chainLabel(chainId)} → ${chainLabel(pickerChain)} is not supported yet.`}
           </Text>
         )}
         <ScrollView showsVerticalScrollIndicator={false}>
@@ -320,14 +396,14 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
 
   return (
     <View style={{ flex: 1 }}>
-      <ScreenHeader title="Swap" onBack={onBack} />
+      <ScreenHeader title={isBridge ? "Bridge" : "Swap"} onBack={onBack} />
       <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-        {/* Chain selector */}
+        {/* Sell-chain selector */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, marginBottom: 4 }}>
           {chains.map((id) => (
             <Chip
               key={id}
-              label={id === "solana" ? "Solana" : NETWORKS[id]?.name ?? id}
+              label={chainLabel(id)}
               active={chainId === id}
               onPress={() => setChainId(id)}
               icon={<ChainIcon chainId={id} size={16} />}
@@ -336,7 +412,7 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
         </ScrollView>
 
         {/* SELL */}
-        <SectionLabel text="Sell" style={{ marginTop: 10 } as object} />
+        <SectionLabel text={isBridge ? `Sell on ${chainLabel(chainId)}` : "Sell"} style={{ marginTop: 10 } as object} />
         <Card style={st.sideCard}>
           <Pressable onPress={() => { setPickerChain(chainId); setPicking("from"); }} style={st.tokenBtn}>
             {fromToken && (
@@ -373,20 +449,20 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
         </Pressable>
 
         {/* BUY */}
-        <SectionLabel text="Buy" />
+        <SectionLabel text={isBridge ? `Buy on ${chainLabel(toChainId)}` : "Buy"} />
         <Card style={st.sideCard}>
-          <Pressable onPress={() => { setPickerChain(chainId); setPicking("to"); }} style={st.tokenBtn}>
+          <Pressable onPress={() => { setPickerChain(toChainId); setPicking("to"); }} style={st.tokenBtn}>
             {toToken && (
               <View style={{ width: 28, height: 28 }}>
-                <AssetIcon symbol={toToken.symbol} logo={toToken.logo} chainId={chainId} address={toToken.address} size={28} />
-                {!!toToken.address && <ChainBadge chainId={chainId} size={12} />}
+                <AssetIcon symbol={toToken.symbol} logo={toToken.logo} chainId={toChainId} address={toToken.address} size={28} />
+                <ChainBadge chainId={toChainId} size={12} />
               </View>
             )}
             <Text style={st.tokenBtnText}>{toToken?.symbol ?? "—"}</Text>
             <Text style={st.chev}>▾</Text>
           </Pressable>
           <View style={{ flex: 1, alignItems: "flex-end", paddingRight: 4 }}>
-            <Text style={st.receiveText}>{best ? best.destAmount : quoting ? "…" : "0"}</Text>
+            <Text style={st.receiveText}>{hasRoute ? receiveAmt : quoting ? "…" : "0"}</Text>
             {buyUsd > 0 && <Text style={st.subText}>≈ {formatFiatLine(buyUsd, cur.code, cur.currency, w.rates)}</Text>}
           </View>
         </Card>
@@ -400,7 +476,23 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
         </View>
 
         {/* Routes */}
-        {routes.length > 0 && (
+        {isBridge && bRoutes.length > 0 && (
+          <View style={{ marginTop: 10 }}>
+            <SectionLabel text="Routes" />
+            {bRoutes.map((r, i) => (
+              <Pressable key={r.id} onPress={() => setSelRoute(i)} style={[st.routeRow, i === selRoute && st.routeSel]}>
+                <Text style={st.routeName}>{bridgeName(r)}</Text>
+                {r.tags?.[0] && <Text style={st.routeTag}>{r.tags[0]}</Text>}
+                <View style={{ flex: 1 }} />
+                <View style={{ alignItems: "flex-end" }}>
+                  <Text style={st.routeAmt}>{bridgeReceive(r, toToken)} {toToken?.symbol}</Text>
+                  <Text style={st.subText}>Gas ~${parseFloat(r.gasCostUSD || "0").toFixed(2)}</Text>
+                </View>
+              </Pressable>
+            ))}
+          </View>
+        )}
+        {!isBridge && routes.length > 0 && (
           <View style={{ marginTop: 10 }}>
             <SectionLabel text="Routes" />
             {routes.map((r, i) => (
@@ -416,7 +508,11 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
             ))}
           </View>
         )}
-        {quoting && routes.length === 0 && <Text style={[st.subText, { marginTop: 10 }]}>Fetching quotes…</Text>}
+        {quoting && !hasRoute && (
+          <Text style={[st.subText, { marginTop: 10 }]}>
+            {isBridge ? "Finding bridge routes…" : "Fetching quotes…"}
+          </Text>
+        )}
 
         {errView && (
           <AlertCard
@@ -430,9 +526,17 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
         )}
 
         <Btn
-          label={swapping ? "Swapping…" : fromToken && toToken ? `Swap ${fromToken.symbol} for ${toToken.symbol}` : "Swap"}
-          onPress={() => { void handleSwap(); }}
-          disabled={swapping || quoting || !routes.length || !(parseFloat(amount) > 0)}
+          label={
+            busy
+              ? (isBridge ? "Bridging…" : "Swapping…")
+              : fromToken && toToken
+                ? (isBridge
+                    ? `Bridge ${fromToken.symbol} → ${toToken.symbol}`
+                    : `Swap ${fromToken.symbol} for ${toToken.symbol}`)
+                : "Swap"
+          }
+          onPress={() => { void handleSubmit(); }}
+          disabled={busy || quoting || !hasRoute || !(parseFloat(amount) > 0)}
           style={{ marginTop: 16, marginBottom: 24 }}
         />
       </ScrollView>
@@ -440,8 +544,8 @@ export function SwapScreen({ w, onBack, onBridge, onSessionExpired, initialChain
       {txFx && (
         <TxResultOverlay
           status={txFx}
-          kind="swap"
-          amountLabel={fromToken && toToken ? `${amount} ${fromToken.symbol} → ${best?.destAmount ?? ""} ${toToken.symbol}` : ""}
+          kind={isBridge ? "bridge" : "swap"}
+          amountLabel={fromToken && toToken ? `${amount} ${fromToken.symbol} → ${receiveAmt} ${toToken.symbol}` : ""}
           detail={txDetail || undefined}
           txHash={txHash || undefined}
           explorerUrl={txHash ? explorerTxUrl(chainId, txHash) : undefined}

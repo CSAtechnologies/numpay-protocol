@@ -37,14 +37,14 @@ import { WalletAvatar } from "./src/ui/WalletAvatar";
 import { CurrencyProvider, useCurrencyPref, formatFiat } from "./src/ui/currency";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import {
-  LayersIcon, LinkIcon, LockIcon, ReceiveIcon, SendIcon, SwapIcon,
+  LinkIcon, LockIcon, ReceiveIcon, SendIcon, SwapIcon, TrendingUpIcon,
 } from "./src/ui/icons";
 import { AssetIcon, ChainBadge, ChainIcon } from "./src/ui/coins";
 import { ReceiveScreen, type ReceiveAddrs } from "./src/screens/ReceiveScreen";
 import { SendScreen, type SendTokenPick } from "./src/screens/SendScreen";
 import { TokenDetailScreen } from "./src/screens/TokenDetailScreen";
 import { SwapScreen } from "./src/screens/SwapScreen";
-import { BridgeScreen } from "./src/screens/BridgeScreen";
+import { DeFiScreen } from "./src/screens/DeFiScreen";
 import { ActivityScreen } from "./src/screens/ActivityScreen";
 import { BPANScreen } from "./src/screens/BPANScreen";
 import { WalletConnectScreen } from "./src/screens/WalletConnectScreen";
@@ -58,7 +58,9 @@ import { PinPad } from "./src/ui/PinPad";
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
-  | "spike" | "devnet" | "receive" | "send" | "swap" | "bridge" | "activity" | "bpan" | "dapps" | "dev" | "settings" | "token" | "assets";
+  // No "bridge" mode: bridging is a cross-chain PAIR inside Swap (extension
+  // parity), and slot 3 of the dashboard is DeFi.
+  | "spike" | "devnet" | "receive" | "send" | "swap" | "defi" | "activity" | "bpan" | "dapps" | "dev" | "settings" | "token" | "assets";
 
 export default function App() {
   return (
@@ -92,8 +94,8 @@ function AppInner() {
   const [addWalletOpen, setAddWalletOpen] = useState(false);
 
   const unlocked =
-    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "bridge" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev" || mode === "settings" || mode === "token" || mode === "assets";
-  // The floating nav shows on its six tabs; focused flows (swap, bridge,
+    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "defi" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev" || mode === "settings" || mode === "token" || mode === "assets";
+  // The floating nav shows on its six tabs; focused flows (swap, DeFi,
   // dApps, dev) keep the full screen.
   const navVisible =
     mode === "home" || mode === "send" || mode === "receive" || mode === "bpan" || mode === "activity" || mode === "settings";
@@ -191,7 +193,7 @@ function AppInner() {
         setMode("settings");
         return true;
       }
-      if (m === "receive" || m === "send" || m === "swap" || m === "bridge" ||
+      if (m === "receive" || m === "send" || m === "swap" || m === "defi" ||
           m === "activity" || m === "bpan" || m === "dapps" || m === "dev" ||
           m === "settings" || m === "token") {
         setMode("home");
@@ -314,7 +316,7 @@ function AppInner() {
           w={w}
           onSend={() => setMode("send")}
           onSwap={() => setMode("swap")}
-          onBridge={() => setMode("bridge")}
+          onDeFi={() => setMode("defi")}
           onActivity={() => setMode("activity")}
           onReceive={goReceive}
           onLock={async () => { await lock(); setError(""); await refresh(); }}
@@ -405,17 +407,10 @@ function AppInner() {
           initialChainId={swapInit?.chainId}
           initialFromAddr={swapInit?.fromAddr}
           onBack={() => { setSwapInit(null); setMode("home"); }}
-          onBridge={() => { setSwapInit(null); setMode("bridge"); }}
           onSessionExpired={() => { void showRelock(); }}
         />
       )}
-      {mode === "bridge" && (
-        <BridgeScreen
-          w={w}
-          onBack={() => setMode("home")}
-          onSessionExpired={() => { void showRelock(); }}
-        />
-      )}
+      {mode === "defi" && <DeFiScreen onBack={() => setMode("home")} />}
       {mode === "activity" && (
         <ActivityScreen owner={w.evmAddress} onBack={() => setMode("home")} />
       )}
@@ -726,7 +721,7 @@ function Dashboard(p: {
   w: MobileWalletState;
   onSend: () => void;
   onSwap: () => void;
-  onBridge: () => void;
+  onDeFi: () => void;
   onActivity: () => void;
   onReceive: () => void;
   onBPAN: () => void;
@@ -844,12 +839,13 @@ function Dashboard(p: {
           </LinearGradient>
         </Pressable>
 
-        {/* Secondary row: Receive / Swap / Bridge (ext has DeFi in slot 3) */}
+        {/* Secondary row: Receive / Swap / DeFi — same three as the extension.
+            Bridging is not a slot here: it is a cross-chain pair inside Swap. */}
         <View style={st.actionCards}>
           {([
             { label: "Receive", Icon: ReceiveIcon, onPress: p.onReceive },
             { label: "Swap", Icon: SwapIcon, onPress: p.onSwap },
-            { label: "Bridge", Icon: LayersIcon, onPress: p.onBridge },
+            { label: "DeFi", Icon: TrendingUpIcon, onPress: p.onDeFi },
           ] as const).map(({ label, Icon, onPress }) => (
             <Pressable
               key={label}
