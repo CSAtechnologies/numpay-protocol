@@ -14,8 +14,8 @@ import Svg, {
   Stop, Ellipse, Text as SvgText,
 } from "react-native-svg";
 import type { SendErrorView } from "@numpay/core/sendErrors";
-import { colors, gradients, radius, type as ts } from "./theme";
-import { ChevronLeftIcon } from "./icons";
+import { activeTheme, colors, gradients, radius, type as ts } from "./theme";
+import { AlertIcon, ArrowLeftIcon } from "./icons";
 
 // ── Buttons (.btn-primary-premium / .btn-secondary + danger tone) ────────────
 export function Btn({
@@ -219,16 +219,164 @@ export function SectionLabel({ text, style }: { text: string; style?: StyleProp<
   return <Text style={[st.sectionLabel, style as object]}>{text.toUpperCase()}</Text>;
 }
 
-// ── Screen header: back chevron + title (Layout.tsx pattern, phone-sized) ────
-export function ScreenHeader({ title, onBack }: { title: string; onBack?: () => void }) {
+// ── Screen header — Layout.tsx's header bar, 1:1 ─────────────────────────────
+// A GHOST back button (no card fill or border) with ArrowLeftIcon, a 15px
+// tracking-tight title, and the brand gradient hairline that fades out at both
+// ends. `right` takes the trailing action the extension puts on some pages
+// (explorer link, refresh).
+export function ScreenHeader({ title, onBack, right }: {
+  title: string;
+  onBack?: () => void;
+  right?: ReactNode;
+}) {
   return (
     <View style={st.header}>
       {onBack && (
-        <Pressable onPress={onBack} style={st.iconBtn} hitSlop={8}>
-          <ChevronLeftIcon size={17} color={colors.muted} />
+        <Pressable
+          onPress={onBack}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          style={({ pressed }) => [st.ghostBtn, pressed && { backgroundColor: colors.surface2 }]}
+        >
+          <ArrowLeftIcon size={16} color={colors.muted} />
         </Pressable>
       )}
-      <Text style={st.headerTitle}>{title}</Text>
+      <Text style={st.headerTitle} numberOfLines={1}>{title}</Text>
+      {right != null && <View style={{ marginLeft: "auto" }}>{right}</View>}
+      <View style={st.headerRule} pointerEvents="none">
+        <LinearGradient
+          colors={["rgba(139,92,246,0)", "rgba(139,92,246,0.2)", "rgba(139,92,246,0)"]}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
+          style={{ flex: 1 }}
+        />
+      </View>
+    </View>
+  );
+}
+
+/** Square bordered icon button (.icon-btn): header bell/avatar/explorer slots. */
+export function IconBtn({ children, onPress, label }: {
+  children: ReactNode;
+  onPress?: () => void;
+  label?: string;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={({ pressed }) => [st.iconBtn, pressed && { borderColor: colors.borderLight }]}
+    >
+      {children}
+    </Pressable>
+  );
+}
+
+// ── Hero section (.hero-section) ─────────────────────────────────────────────
+// The dashboard's gradient header block: a wide brand wash from the top centre,
+// a second cooler wash from the upper left, over a vertical ramp that settles
+// into the page background. Radials are SVG (RN gradients are linear only), and
+// the ramp is a LinearGradient underneath them.
+export function HeroSection({ children, style }: {
+  children: ReactNode;
+  /** Callers bleed this past the screen's horizontal padding with negative
+   *  margins, so the wash reaches the edges the way the popup's does. */
+  style?: StyleProp<ViewStyle>;
+}) {
+  const light = activeTheme === "light";
+  return (
+    <View style={[{ position: "relative" }, style]}>
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <LinearGradient
+          colors={light
+            ? ["#ede9ff", "#f4f2ff", colors.bg]
+            : ["#13102a", "#0d0b1e", colors.bg]}
+          locations={[0, 0.55, 1]}
+          style={StyleSheet.absoluteFill}
+        />
+        <Svg style={StyleSheet.absoluteFill} width="100%" height="100%">
+          <Defs>
+            <SvgRadialGradient id="heroA" cx="50%" cy="50%" r="50%">
+              <Stop offset="0%" stopColor="#7c6df0" stopOpacity={light ? 0.16 : 0.32} />
+              <Stop offset="55%" stopColor="#7c6df0" stopOpacity={0} />
+            </SvgRadialGradient>
+            <SvgRadialGradient id="heroB" cx="50%" cy="50%" r="50%">
+              <Stop offset="0%" stopColor="#5b4cdb" stopOpacity={light ? 0.08 : 0.2} />
+              <Stop offset="50%" stopColor="#5b4cdb" stopOpacity={0} />
+            </SvgRadialGradient>
+          </Defs>
+          <Ellipse cx="50%" cy="-5%" rx="260" ry="180" fill="url(#heroA)" />
+          <Ellipse cx="5%" cy="15%" rx="140" ry="110" fill="url(#heroB)" />
+        </Svg>
+      </View>
+      {children}
+    </View>
+  );
+}
+
+// ── Skeletons (the extension's animate-pulse placeholder blocks) ─────────────
+
+/** A single pulsing placeholder block. */
+export function SkeletonBlock({ width, height, radius: r = 4, style }: {
+  width: number | `${number}%`;
+  height: number;
+  radius?: number;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+  return (
+    <Animated.View
+      style={[
+        { width, height, borderRadius: r, backgroundColor: colors.surface3 },
+        { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.85, 0.35] }) },
+        style,
+      ]}
+    />
+  );
+}
+
+/** Placeholder token/tx row: disc + two text bars left, two right. */
+export function SkeletonRow({ discSize = 36 }: { discSize?: number }) {
+  return (
+    <View style={st.skeletonRow}>
+      <SkeletonBlock width={discSize} height={discSize} radius={discSize / 2} />
+      <View style={{ flex: 1, marginLeft: 12, gap: 6 }}>
+        <SkeletonBlock width={56} height={12} />
+        <SkeletonBlock width={80} height={10} />
+      </View>
+      <View style={{ alignItems: "flex-end", gap: 6 }}>
+        <SkeletonBlock width={56} height={12} />
+        <SkeletonBlock width={40} height={10} />
+      </View>
+    </View>
+  );
+}
+
+// ── Empty state (ext: circular premium-card icon tile + title + hint) ────────
+export function EmptyState({ icon, title, hint, style }: {
+  icon?: ReactNode;
+  title: string;
+  hint?: string;
+  style?: StyleProp<ViewStyle>;
+}) {
+  return (
+    <View style={[st.emptyState, style]}>
+      {icon && <View style={st.emptyIcon}>{icon}</View>}
+      <Text style={st.emptyTitle}>{title}</Text>
+      {!!hint && <Text style={st.emptyHint}>{hint}</Text>}
     </View>
   );
 }
@@ -257,7 +405,7 @@ export function AlertCard({
       <View style={{ padding: 14 }}>
         <View style={{ flexDirection: "row", gap: 12 }}>
           <View style={[st.alertIconTile, { backgroundColor: iconBg }]}>
-            <Text style={{ color, fontSize: 15, fontWeight: "700" }}>!</Text>
+            <AlertIcon size={17} color={color} />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={{ color, fontSize: 13, fontWeight: "700", marginBottom: 2 }}>{title}</Text>
@@ -402,15 +550,53 @@ const st = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    marginBottom: 12,
+    height: 50,
+    marginBottom: 6,
+    position: "relative",
   },
-  headerTitle: { color: colors.textPrimary, fontSize: ts.h2, fontWeight: "600" },
+  headerTitle: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontWeight: "600",
+    letterSpacing: -0.2,
+    flexShrink: 1,
+  },
+  // The gradient separator under Layout's header bar.
+  headerRule: { position: "absolute", left: 0, right: 0, bottom: 0, height: 1 },
+  // Ghost back button: no fill or border until pressed (Layout's hover state).
+  ghostBtn: {
+    width: 32, height: 32,
+    borderRadius: radius.button,
+    alignItems: "center", justifyContent: "center",
+  },
   iconBtn: {
     width: 32, height: 32,
     borderRadius: radius.iconBtn,
     backgroundColor: colors.card,
     borderWidth: 1, borderColor: colors.border,
     alignItems: "center", justifyContent: "center",
+  },
+
+  skeletonRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.divider,
+  },
+
+  emptyState: { alignItems: "center", paddingVertical: 44 },
+  emptyIcon: {
+    width: 48, height: 48, borderRadius: 24,
+    backgroundColor: colors.card,
+    borderWidth: 1, borderColor: colors.border,
+    alignItems: "center", justifyContent: "center",
+    marginBottom: 12,
+  },
+  emptyTitle: { color: colors.textSecondary, fontSize: ts.row },
+  emptyHint: {
+    color: colors.muted2, fontSize: ts.small, marginTop: 4,
+    textAlign: "center", paddingHorizontal: 24, lineHeight: 16,
   },
 
   alertIconTile: {

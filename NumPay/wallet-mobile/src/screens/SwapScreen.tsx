@@ -7,14 +7,18 @@
 // core can route (23 incl. Solana) is offered here, not a hand-kept list.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ethers } from "ethers";
-import { Keyboard, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { BackHandler, Keyboard, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { NETWORKS } from "@numpay/core/networks";
 import { getUsdPrice } from "@numpay/core/currency";
 import {
   evmSwapReserve, SOL_FEE_RESERVE, parseSwapError, sanitizeSlippagePct,
   type BridgeRoute, type RouteOption, type SwapToken,
 } from "@numpay/core/swap";
+import { upsertCustomToken } from "@numpay/core/customTokens";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
+import {
+  detectToken, detectErrorMessage, isTokenAddressFor, looksLikeTokenAddress,
+} from "../wallet/tokenDetect";
 import { fetchEvmQuotes, swapEvm, fetchSolanaSwapQuotes, swapSolana } from "../wallet/swap";
 import { bridgeTokens, canBridge, fetchBridgeRoutes } from "../wallet/bridge";
 import { buildChainTokenList, buildSolanaTokenList } from "../wallet/tokenList";
@@ -24,7 +28,8 @@ import { colors, radius, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
 import { useCurrencyPref, formatFiatLine } from "../ui/currency";
 import { AssetIcon, ChainBadge, ChainIcon } from "../ui/coins";
-import { LayersIcon, SwapIcon } from "../ui/icons";
+import { ChevronDownIcon, LayersIcon, SearchIcon, SwapIcon, XIcon } from "../ui/icons";
+import { ImportTokenCard } from "../ui/ImportTokenCard";
 import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
 
 const QUOTE_DEBOUNCE_MS = 700;
@@ -119,6 +124,14 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
   // on the current side's chain and can browse any chain's tokens; picking a
   // buy-side token on another chain turns the pair into a bridge in place.
   const [pickerChain, setPickerChain] = useState(initialChainId ?? chains[0] ?? "ethereum");
+  // One field does both jobs: it filters the list, and when what you typed is
+  // a contract address instead of a name it becomes the import flow. A wallet
+  // that lists 23 chains of tokens is unusable without the first, and the
+  // second is the only way to reach a token free-tier discovery never returned.
+  const [search, setSearch] = useState("");
+  const [importState, setImportState] = useState<"idle" | "loading" | "preview">("idle");
+  const [importToken, setImportToken] = useState<SwapToken | null>(null);
+  const [importError, setImportError] = useState("");
   const [amount, setAmount] = useState("");
   const [slippage, setSlippage] = useState("0.5");
   const [routes, setRoutes] = useState<RouteOption[]>([]);
@@ -173,6 +186,29 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
     setFromToken(sync);
     setToToken(sync);
   }, [listFor]);
+
+  // The token picker is internal screen state (the `if (picking)` block below),
+  // not a route, so App.tsx's global back handler can't see it: a hardware back
+  // there would fall through to the "swap" case and unwind the whole screen,
+  // losing any typed search or half-finished import. Register a picker-scoped
+  // handler while `picking` is set — RN fires the newest listener first, so
+  // returning true here consumes the press before App's ever runs. This hook
+  // sits ABOVE the early return on purpose: moving it below would change the
+  // hook count between renders and throw. A back inside an open import
+  // preview/loading backs out to the list first, one level at a time.
+  useEffect(() => {
+    if (!picking) return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (importState !== "idle") {
+        setImportState("idle"); setImportToken(null); setImportError("");
+        return true;
+      }
+      setPicking(null);
+      resetSearch();
+      return true;
+    });
+    return () => sub.remove();
+  }, [picking, importState]);
 
   const scheduleQuote = useCallback((amt: string, from: SwapToken | null, to: SwapToken | null) => {
     if (quoteTimer.current) clearTimeout(quoteTimer.current);
@@ -245,6 +281,51 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
       scheduleQuote(amount, fromToken, t);
     }
     setPicking(null);
+    resetSearch();
+  }
+
+  function resetSearch() {
+    setSearch(""); setImportState("idle"); setImportToken(null); setImportError("");
+  }
+
+  // ── Import by address ─────────────────────────────────────────────────────
+  // The chain row above the field is the only chain selector on this screen
+  // (see the pair comment), so an import always targets pickerChain. A pasted
+  // address whose shape belongs to the other family is a wrong-network hint,
+  // never a silent chain switch: the network a token lands on is exactly the
+  // thing that must stay visible.
+  async function handleImport() {
+    const raw = search.trim();
+    setImportState("loading"); setImportError("");
+    try {
+      const found = await detectToken(pickerChain, raw, {
+        evmAddress: w.evmAddress, solanaAddress: solanaAddress,
+      });
+      setImportToken({
+        symbol: found.symbol, name: found.name, logo: found.logo,
+        address: pickerChain === "solana" ? raw : raw.toLowerCase(),
+        decimals: found.decimals, balance: found.balance ?? "0",
+        chainId: pickerChain, chainName: chainLabel(pickerChain), custom: true,
+      });
+      setImportState("preview");
+    } catch (e: any) {
+      setImportError(detectErrorMessage(e));
+      setImportState("idle");
+    }
+  }
+
+  async function confirmImport() {
+    const t = importToken;
+    if (!t?.address) return;
+    // Persist through the shared store (dedupes by chain+address), then have
+    // the wallet re-read it so the token also shows on the dashboard and in
+    // the other pickers, not just in this swap.
+    await upsertCustomToken({
+      chainId: t.chainId, address: t.address, symbol: t.symbol,
+      name: t.name, decimals: t.decimals, logo: t.logo,
+    });
+    void w.reloadCustom();
+    selectToken(t);
   }
 
   function flip() {
@@ -344,11 +425,23 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
   // buy-side stables.
   if (picking) {
     const balOf = (t: SwapToken) => parseFloat(t.balance) || 0;
-    const pickerTokens = listFor(pickerChain);
+    const q = search.trim().toLowerCase();
+    // A pasted address is matched against the list FIRST. Pasting the address
+    // of a token already listed should just find it, not walk the user through
+    // importing something they already have.
+    const matches = (t: SwapToken) =>
+      !q || t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q) ||
+      (t.address ?? "").toLowerCase() === q;
+    const pickerTokens = listFor(pickerChain).filter(matches);
     const held = pickerTokens
       .filter((t) => balOf(t) > 0)
       .sort((a, b) => balOf(b) * price(b) - balOf(a) * price(a));
     const others = pickerTokens.filter((t) => balOf(t) <= 0);
+    // Import is offered only when the query is an address, nothing in the list
+    // already matches it, and the shape belongs to the selected chain.
+    const isAddrQuery = looksLikeTokenAddress(search.trim());
+    const rightShape = isTokenAddressFor(pickerChain, search.trim());
+    const showImport = isAddrQuery && pickerTokens.length === 0;
     const renderRow = (t: SwapToken) => {
       const bal = balOf(t);
       const usd = bal * price(t);
@@ -384,7 +477,10 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
     const crossPick = picking === "to" && pickerChain !== chainId;
     return (
       <View style={{ flex: 1 }}>
-        <ScreenHeader title={picking === "from" ? "Sell" : "Buy"} onBack={() => setPicking(null)} />
+        <ScreenHeader
+          title={picking === "from" ? "Sell" : "Buy"}
+          onBack={() => { setPicking(null); resetSearch(); }}
+        />
         {/* Chain row inside the picker: browse any chain's tokens. */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, marginBottom: 8 }}>
           {chains.map((id) => (
@@ -392,11 +488,36 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
               key={id}
               label={chainLabel(id)}
               active={pickerChain === id}
-              onPress={() => setPickerChain(id)}
+              onPress={() => {
+                setPickerChain(id);
+                // A half-finished import belongs to the chain it was started
+                // on; carrying its preview across would offer to add a token
+                // on a network it was never looked up against.
+                setImportState("idle"); setImportToken(null); setImportError("");
+              }}
               icon={<ChainIcon chainId={id} size={16} />}
             />
           ))}
         </ScrollView>
+        <View style={st.searchRow}>
+          <SearchIcon size={15} color={colors.muted} />
+          <Field
+            placeholder="Search or paste a token address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            value={search}
+            onChangeText={(v) => {
+              setSearch(v);
+              setImportState("idle"); setImportToken(null); setImportError("");
+            }}
+            style={st.searchField}
+          />
+          {search.length > 0 && (
+            <Pressable onPress={resetSearch} hitSlop={8} accessibilityLabel="Clear search">
+              <XIcon size={12} color={colors.muted} />
+            </Pressable>
+          )}
+        </View>
         {crossPick && (
           <Text style={[st.subText, { marginBottom: 6 }]}>
             {canBridge(pickerChain) && canBridge(chainId)
@@ -404,7 +525,27 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
               : `Bridging ${chainLabel(chainId)} → ${chainLabel(pickerChain)} is not supported yet.`}
           </Text>
         )}
-        <ScrollView showsVerticalScrollIndicator={false}>
+        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          {showImport && (
+            <ImportTokenCard
+              address={search.trim()}
+              chainId={pickerChain}
+              chainName={chainLabel(pickerChain)}
+              rightShape={rightShape}
+              state={importState}
+              token={importToken}
+              error={importError}
+              onFetch={() => { void handleImport(); }}
+              onCancel={() => { setImportState("idle"); setImportToken(null); }}
+              onAdd={() => { void confirmImport(); }}
+            />
+          )}
+          {!showImport && pickerTokens.length === 0 && (
+            <Text style={[st.subText, { textAlign: "center", marginTop: 28 }]}>
+              No token matches “{search.trim()}” on {chainLabel(pickerChain)}.{"\n"}
+              Paste its contract address to import it.
+            </Text>
+          )}
           {held.length > 0 && <SectionLabel text="Your tokens" style={{ marginBottom: 4 } as object} />}
           {held.map(renderRow)}
           {held.length > 0 && others.length > 0 && (
@@ -434,7 +575,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
               <Text style={st.tokenBtnText}>{fromToken?.symbol ?? "—"}</Text>
               <Text style={st.tokenBtnChain}>{chainLabel(chainId)}</Text>
             </View>
-            <Text style={st.chev}>▾</Text>
+            <ChevronDownIcon size={12} color={colors.muted} />
           </Pressable>
           <View style={{ flex: 1 }}>
             <Field
@@ -485,7 +626,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
               <Text style={st.tokenBtnText}>{toToken?.symbol ?? "—"}</Text>
               <Text style={st.tokenBtnChain}>{chainLabel(toChainId)}</Text>
             </View>
-            <Text style={st.chev}>▾</Text>
+            <ChevronDownIcon size={12} color={colors.muted} />
           </Pressable>
           <View style={{ flex: 1, alignItems: "flex-end", paddingRight: 4 }}>
             <Text style={st.receiveText}>{hasRoute ? receiveAmt : quoting ? "…" : "0"}</Text>
@@ -654,7 +795,6 @@ const st = StyleSheet.create({
   // With no chain row on the screen, the token button is the only thing that
   // says which chain this side is on.
   tokenBtnChain: { color: colors.muted, fontSize: 9.5, marginTop: 1 },
-  chev: { color: colors.muted, fontSize: 11 },
   receiveText: { color: colors.textPrimary, fontSize: 20, fontWeight: "600", fontVariant: ["tabular-nums"] },
   subRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 6, gap: 10 },
   subText: { color: colors.muted2, fontSize: 10.5 },
@@ -696,6 +836,22 @@ const st = StyleSheet.create({
     overflow: "hidden",
   },
   routeAmt: { color: colors.textPrimary, fontSize: ts.row, fontVariant: ["tabular-nums"] },
+  // Search row: the icon and the clear control sit beside the input rather
+  // than floating on top of it (Field is a plain TextInput, and a 42-character
+  // pasted address fills the full width).
+  searchRow: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    paddingHorizontal: 12,
+    borderRadius: radius.input,
+    backgroundColor: colors.card,
+    borderWidth: 1, borderColor: colors.border,
+    marginBottom: 10,
+  },
+  searchField: {
+    flex: 1, marginTop: 0,
+    backgroundColor: "transparent", borderWidth: 0,
+    paddingHorizontal: 0, paddingVertical: 11,
+  },
   tokenRow: {
     flexDirection: "row", alignItems: "center",
     paddingVertical: 10,

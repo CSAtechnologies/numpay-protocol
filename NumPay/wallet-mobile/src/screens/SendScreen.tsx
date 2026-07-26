@@ -6,7 +6,7 @@
 // core/sendErrors, and the TxResultOverlay. ENS/SNS name resolution is not in
 // this slice.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { BackHandler, Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { ethers } from "ethers";
 import {
   isBPANInput, isValidBPAN, resolveBPANChecked, acceptBPANChange,
@@ -19,7 +19,11 @@ import { chainNameOf } from "@numpay/core/txLog";
 import { friendlyTxError, parseSendError } from "@numpay/core/sendErrors";
 import { tierOverrides, tierGwei, fetchFeeInfo, type GasTier, type FeeInfo } from "@numpay/core/gas";
 import { getUsdPrice } from "@numpay/core/currency";
+import { upsertCustomToken } from "@numpay/core/customTokens";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
+import {
+  detectToken, detectErrorMessage, isTokenAddressFor, looksLikeTokenAddress,
+} from "../wallet/tokenDetect";
 import {
   estimateEvmNativeFee, explorerTxUrl, sendEvmNative, sendNonEvmNative,
   sendTokenTransfer, nonEvmNativeReserve, NON_EVM_SENDABLE,
@@ -30,7 +34,8 @@ import { colors, radius, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SendErrorCard } from "../ui/components";
 import { useCurrencyPref, formatFiatLine, formatFeeTail } from "../ui/currency";
 import { AssetIcon, ChainIcon } from "../ui/coins";
-import { ScanIcon } from "../ui/icons";
+import { ScanIcon, SearchIcon, XIcon } from "../ui/icons";
+import { ImportTokenCard } from "../ui/ImportTokenCard";
 import { QrScanner } from "../ui/QrScanner";
 import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
 
@@ -139,6 +144,73 @@ export function SendScreen({
       .sort((a, b) => b.balanceNum * b.priceUsd - a.balanceNum * a.priceUsd);
   }, [w.tokensByChain, chainId, w.rates]);
 
+  // Picker search. Doubles as import-by-address, which matters more here than
+  // anywhere else in the app: discovery misses tokens outright on the chains
+  // with no indexer coverage, and until now a held token it missed could not
+  // be sent at all without a detour through Manage assets.
+  const [search, setSearch] = useState("");
+  const [importState, setImportState] = useState<"idle" | "loading" | "preview">("idle");
+  // The pick is what Send needs; the name is only for the preview card and the
+  // stored custom token, so it rides alongside rather than widening SendTokenPick.
+  const [importToken, setImportToken] = useState<{ pick: SendTokenPick; name: string } | null>(null);
+  const [importError, setImportError] = useState("");
+
+  const searchQ = search.trim().toLowerCase();
+  const visibleTokens = useMemo(
+    () => chainTokens.filter((t) =>
+      !searchQ || t.symbol.toLowerCase().includes(searchQ) || t.address.toLowerCase() === searchQ),
+    [chainTokens, searchQ],
+  );
+  // Only EVM chains and Solana can be looked up by address (Tron and Sui have
+  // no detection path yet), so the import affordance is not offered elsewhere.
+  const canImport = isEvm || chainId === "solana";
+  const showImport = canImport && looksLikeTokenAddress(search.trim()) && visibleTokens.length === 0;
+
+  function resetSearch() {
+    setSearch(""); setImportState("idle"); setImportToken(null); setImportError("");
+  }
+
+  async function handleImport() {
+    const raw = search.trim();
+    setImportState("loading"); setImportError("");
+    try {
+      const found = await detectToken(chainId, raw, {
+        evmAddress: w.evmAddress,
+        solanaAddress: w.nonEvmAddresses?.solana,
+        customNets: w.customNets,
+      });
+      setImportToken({
+        name: found.name,
+        pick: {
+          chainId,
+          address: chainId === "solana" ? raw : raw.toLowerCase(),
+          symbol: found.symbol, decimals: found.decimals, logo: found.logo,
+          balanceNum: parseFloat(found.balance ?? "0") || 0,
+          priceUsd: w.rates ? getUsdPrice(found.symbol, w.rates) : 0,
+        },
+      });
+      setImportState("preview");
+    } catch (e: any) {
+      setImportError(detectErrorMessage(e));
+      setImportState("idle");
+    }
+  }
+
+  async function confirmImport() {
+    if (!importToken) return;
+    const { pick, name } = importToken;
+    await upsertCustomToken({
+      chainId: pick.chainId, address: pick.address, symbol: pick.symbol,
+      name, decimals: pick.decimals, logo: pick.logo,
+    });
+    void w.reloadCustom();
+    // Select it straight away with the balance the lookup returned: the
+    // discovery sweep is what missed this token in the first place, so waiting
+    // for it to appear in the list would strand the send.
+    setToken(pick); setPickerOpen(false); setAmount(""); setError("");
+    resetSearch();
+  }
+
   const [to, setTo] = useState(initialTo ?? "");
   const [resolvedAddr, setResolvedAddr] = useState("");
   const [resolvedBPAN, setResolvedBPAN] = useState("");
@@ -179,7 +251,7 @@ export function SendScreen({
 
   function switchChain(id: string) {
     setChainId(id);
-    setToken(null); setPickerOpen(false);
+    setToken(null); setPickerOpen(false); resetSearch();
     setTo(""); setResolvedAddr(""); setResolvedBPAN("");
     setBpanChange(null); setBpanChangeAck(false);
     setError(""); setAmount(""); setTxHash("");
@@ -271,6 +343,29 @@ export function SendScreen({
     scannedBpanRef.current = undefined;
     if (seed && isBPANInput(seed)) void handleToChange(seed);
   }, [handleToChange]);
+
+  // The token picker is an inline dropdown, not a route, so App.tsx's global
+  // back handler can't see it: a hardware back while it's open (now that it
+  // holds typed search + a half-finished import) would fall through to the
+  // "send" case and exit the whole screen. Register a picker-scoped handler
+  // while it's open — RN fires the newest listener first, so returning true
+  // consumes the press before App's runs. Skip while the scanner is up (its
+  // own early return owns the screen then), and keep this ABOVE the
+  // `if (scanning)` return so the hook count never changes. A back inside an
+  // open import preview backs out to the list first.
+  useEffect(() => {
+    if (!pickerOpen || scanning) return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (importState !== "idle") {
+        setImportState("idle"); setImportToken(null); setImportError("");
+        return true;
+      }
+      setPickerOpen(false);
+      resetSearch();
+      return true;
+    });
+    return () => sub.remove();
+  }, [pickerOpen, scanning, importState]);
 
   /**
    * A scanned code, applied to this form. Returns a message to REJECT and keep
@@ -416,7 +511,7 @@ export function SendScreen({
         </ScrollView>
 
         {/* Asset picker: the chain's native coin or any discovered token */}
-        <Pressable onPress={() => setPickerOpen((v) => !v)}>
+        <Pressable onPress={() => { setPickerOpen((v) => !v); resetSearch(); }}>
           <Card style={st.assetCard}>
             <AssetIcon
               symbol={symbol} logo={token?.logo} chainId={chainId}
@@ -440,6 +535,52 @@ export function SendScreen({
         {/* Token list (native first, holdings by value) */}
         {pickerOpen && (
           <Card style={{ marginTop: 6 }}>
+            {/* Search doubles as import-by-address; the native coin row stays
+                visible only while the field is empty, since it can never be
+                what a typed query is looking for. */}
+            {(chainTokens.length > 2 || canImport) && (
+              <View style={st.searchRow}>
+                <SearchIcon size={15} color={colors.muted} />
+                <Field
+                  placeholder={canImport ? "Search or paste a token address" : "Search tokens"}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  value={search}
+                  onChangeText={(v) => {
+                    setSearch(v);
+                    setImportState("idle"); setImportToken(null); setImportError("");
+                  }}
+                  style={st.searchField}
+                />
+                {search.length > 0 && (
+                  <Pressable onPress={resetSearch} hitSlop={8} accessibilityLabel="Clear search">
+                    <XIcon size={12} color={colors.muted} />
+                  </Pressable>
+                )}
+              </View>
+            )}
+            {showImport && (
+              <ImportTokenCard
+                address={search.trim()}
+                chainId={chainId}
+                chainName={chainName}
+                rightShape={isTokenAddressFor(chainId, search.trim())}
+                state={importState}
+                token={importToken
+                  ? {
+                      symbol: importToken.pick.symbol, name: importToken.name,
+                      logo: importToken.pick.logo, decimals: importToken.pick.decimals,
+                      balance: String(importToken.pick.balanceNum),
+                      address: importToken.pick.address, chainId: importToken.pick.chainId,
+                    }
+                  : null}
+                error={importError}
+                onFetch={() => { void handleImport(); }}
+                onCancel={() => { setImportState("idle"); setImportToken(null); }}
+                onAdd={() => { void confirmImport(); }}
+              />
+            )}
+            {!searchQ && (
             <Pressable
               style={st.pickRow}
               onPress={() => { setToken(null); setPickerOpen(false); setAmount(""); setError(""); }}
@@ -453,7 +594,8 @@ export function SendScreen({
                 {nativeBalance.toLocaleString(undefined, { maximumFractionDigits: 6 })}
               </Text>
             </Pressable>
-            {chainTokens.map((t) => (
+            )}
+            {visibleTokens.map((t) => (
               <Pressable
                 key={t.address}
                 style={st.pickRow}
@@ -471,9 +613,13 @@ export function SendScreen({
                 </Text>
               </Pressable>
             ))}
-            {chainTokens.length === 0 && (
+            {visibleTokens.length === 0 && !showImport && (
               <Text style={[st.assetChain, { padding: 12 }]}>
-                No tokens discovered on {chainName} yet.
+                {searchQ
+                  ? (canImport
+                      ? `No token matches “${search.trim()}” on ${chainName}. Paste its contract address to import it.`
+                      : `No token matches “${search.trim()}” on ${chainName}.`)
+                  : `No tokens discovered on ${chainName} yet.`}
               </Text>
             )}
           </Card>
@@ -611,6 +757,19 @@ const st = StyleSheet.create({
   assetSym: { color: colors.textPrimary, fontSize: ts.body, fontWeight: "600" },
   assetChain: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
   assetBal: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "500", fontVariant: ["tabular-nums"] },
+  // Search sits inside the picker card, so it carries only a bottom hairline
+  // rather than its own border and background.
+  searchRow: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    paddingHorizontal: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.divider,
+  },
+  searchField: {
+    flex: 1, marginTop: 0,
+    backgroundColor: "transparent", borderWidth: 0,
+    paddingHorizontal: 0, paddingVertical: 11,
+  },
   pickRow: {
     flexDirection: "row",
     alignItems: "center",

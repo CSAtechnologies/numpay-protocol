@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // which animates the logo in itself. No separate JS splash (no double reveal).
 SplashScreen.preventAutoHideAsync().catch(() => {});
 import { LinearGradient } from "expo-linear-gradient";
+import * as Clipboard from "expo-clipboard";
 import { BackHandler, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 
 import { createWallet, importFromMnemonic } from "@numpay/core/wallet";
@@ -29,8 +30,8 @@ import { runDevnetTx } from "./spike/devnetTx";
 import { useMobileWallet, type AssetRow, type MobileWalletState } from "./src/wallet/useMobileWallet";
 import { activeTheme, colors, radius, type as ts, spacing } from "./src/ui/theme";
 import {
-  AlertCard, AmbientBackground, AnimatedLogo, Btn, Card, Field,
-  GradientNumber, LogoMark, ScreenHeader, SectionLabel,
+  AlertCard, AmbientBackground, AnimatedLogo, Btn, Card, EmptyState, Field,
+  GradientNumber, HeroSection, ScreenHeader, SectionLabel, SkeletonRow,
 } from "./src/ui/components";
 import { TxResultOverlay, type TxFxKind, type TxFxStatus } from "./src/ui/TxResultOverlay";
 import { QrScanner } from "./src/ui/QrScanner";
@@ -41,7 +42,9 @@ import { WalletAvatar } from "./src/ui/WalletAvatar";
 import { CurrencyProvider, useCurrencyPref, formatFiat } from "./src/ui/currency";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import {
-  LinkIcon, LockIcon, ReceiveIcon, ScanIcon, SendIcon, SwapIcon, TrendingUpIcon,
+  ArrowUpRightIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon,
+  CopyIcon, HashIcon, LinkIcon, LockIcon, PlusIcon, ReceiveIcon, RefreshIcon,
+  ScanIcon, SwapIcon, TrendingUpIcon, WalletIcon,
 } from "./src/ui/icons";
 import { AssetIcon, ChainBadge, ChainIcon } from "./src/ui/coins";
 import { ReceiveScreen, type ReceiveAddrs } from "./src/screens/ReceiveScreen";
@@ -104,6 +107,10 @@ function AppInner() {
   const [activeWalletId, setActiveWalletId] = useState<string | null>(null);
   const [activeWallet, setActiveWallet] = useState<WalletMeta | null>(null);
   const [addWalletOpen, setAddWalletOpen] = useState(false);
+  // Manage assets is reachable from BOTH the dashboard (network dropdown, the
+  // Assets "+" button) and Settings, so back has to return where it came from
+  // rather than always dropping the user into Settings.
+  const [assetsReturn, setAssetsReturn] = useState<Mode>("settings");
 
   const unlocked =
     mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "defi" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev" || mode === "settings" || mode === "token" || mode === "assets" || mode === "scan";
@@ -225,6 +232,8 @@ function AppInner() {
   // through a ref rather than closing over a stale one.
   const reloadCustomRef = useRef(w.reloadCustom);
   reloadCustomRef.current = w.reloadCustom;
+  const assetsReturnRef = useRef(assetsReturn);
+  assetsReturnRef.current = assetsReturn;
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
       if (relockedRef.current) return true; // re-auth is mandatory, not dismissible
@@ -238,7 +247,7 @@ function AppInner() {
         // Manage assets and dismissed with the hardware back never reached the
         // dashboard or the Send/Swap pickers, which read like "add token is
         // broken" — the token was saved, nothing had re-read it.
-        setMode("settings");
+        setMode(assetsReturnRef.current);
         void reloadCustomRef.current?.();
         return true;
       }
@@ -307,7 +316,17 @@ function AppInner() {
   };
 
   return (
-    <View style={[st.container, navVisible && { paddingBottom: BOTTOM_NAV_CLEARANCE }]}>
+    <View
+      style={[
+        st.container,
+        // The dashboard's hero has to reach the screen edges (and up behind the
+        // status bar), which negative margins cannot do inside a ScrollView —
+        // Android clips them. So home drops the shell's padding and each
+        // dashboard section pads itself instead.
+        mode === "home" && st.containerFlush,
+        navVisible && { paddingBottom: BOTTOM_NAV_CLEARANCE },
+      ]}
+    >
       <AmbientBackground />
       {/* Status bar glyphs are the INVERSE of the background: dark icons on
           the light theme's near-white bg, light icons on the dark one. */}
@@ -377,6 +396,7 @@ function AppInner() {
           onDapps={() => setMode("dapps")}
           onScan={() => setMode("scan")}
           onAccounts={() => setMode("settings")}
+          onManageAssets={() => { setAssetsReturn("home"); setMode("assets"); }}
           walletName={activeWallet?.name ?? "NumPay"}
           walletAvatar={activeWallet?.avatar}
           onOpenAsset={(row) => { setTokenDetail(row); setMode("token"); }}
@@ -389,14 +409,14 @@ function AppInner() {
           onAddWallet={() => { setError(""); setAddWalletOpen(true); }}
           onLock={async () => { await lock(); setError(""); await refresh(); }}
           onDapps={() => setMode("dapps")}
-          onManageAssets={() => setMode("assets")}
+          onManageAssets={() => { setAssetsReturn("settings"); setMode("assets"); }}
           onDev={() => setMode("dev")}
           onWipe={async () => { await wipeVault(); await clearReceiveWatch(); setError(""); await refresh(); }}
         />
       )}
       {mode === "assets" && (
         <ManageAssetsScreen
-          onBack={() => { setMode("settings"); void w.reloadCustom(); }}
+          onBack={() => { setMode(assetsReturn); void w.reloadCustom(); }}
         />
       )}
       {mode === "dev" && (
@@ -800,6 +820,7 @@ function Dashboard(p: {
   onScan: () => void;
   onLock: () => void;
   onAccounts: () => void;
+  onManageAssets: () => void;
   walletName: string;
   walletAvatar?: string;
   onOpenAsset: (row: AssetRow) => void;
@@ -808,30 +829,25 @@ function Dashboard(p: {
   const cur = useCurrencyPref();
   const [filter, setFilter] = useState<string | null>(null);
   const [showNetworks, setShowNetworks] = useState(false);
+  const [showDust, setShowDust] = useState(false);
+  const [bpanCopied, setBpanCopied] = useState(false);
   const rows = filter ? w.rows.filter((r) => r.chainId === filter) : w.rows;
+  const dust = filter ? w.dustRows.filter((r) => r.chainId === filter) : w.dustRows;
   const filterName = filter ? (chainNameOf(filter) ?? filter) : "All Assets";
+
+  // The BPAN pill copies on tap, like the extension's. Tapping the "get one"
+  // state instead opens the BPAN screen, since there is nothing to copy yet.
+  const copyBpan = async () => {
+    if (!w.bpan) return;
+    try {
+      await Clipboard.setStringAsync(w.bpan);
+      setBpanCopied(true);
+      setTimeout(() => setBpanCopied(false), 2000);
+    } catch { /* clipboard unavailable; the BPAN screen still shows the number */ }
+  };
+
   return (
     <View style={{ flex: 1 }}>
-      {/* Header: account pill (avatar + wallet name -> Settings/accounts) left,
-          dApps + lock right (ext Dashboard header) */}
-      <View style={st.homeHeader}>
-        <Pressable style={st.acctPill} onPress={p.onAccounts}>
-          <WalletAvatar avatar={p.walletAvatar} name={p.walletName} size={20} />
-          <Text style={st.acctName} numberOfLines={1}>{p.walletName}</Text>
-          <Text style={st.acctChevron}>{"▾"}</Text>
-        </Pressable>
-        <View style={{ flex: 1 }} />
-        <Pressable onPress={p.onScan} style={st.iconBtn} hitSlop={8} accessibilityLabel="Scan a QR code">
-          <ScanIcon size={15} color={colors.muted} />
-        </Pressable>
-        <Pressable onPress={p.onDapps} style={st.iconBtn} hitSlop={8}>
-          <LinkIcon size={15} color={colors.muted} />
-        </Pressable>
-        <Pressable onPress={p.onLock} style={st.iconBtn} hitSlop={8}>
-          <LockIcon size={15} color={colors.muted} />
-        </Pressable>
-      </View>
-
       <ScrollView
         style={{ flex: 1 }}
         showsVerticalScrollIndicator={false}
@@ -842,117 +858,227 @@ function Dashboard(p: {
             tintColor={colors.brand}
             colors={[colors.brand]}
             progressBackgroundColor={colors.card}
+            // The dashboard scrolls flush to the top edge, so without this the
+            // spinner drops in behind the status bar.
+            progressViewOffset={56}
           />
         }
       >
-        {/* Hero: the ext's centered gradient portfolio number, no card. */}
-        <View style={{ alignItems: "center", marginTop: 14 }}>
-          <GradientNumber text={formatFiat(w.portfolioUsd, cur.code, cur.currency, w.rates)} size={42} />
-          <Text style={st.heroSub}>
-            Total Portfolio{w.loading ? "  · syncing…" : ""}
-          </Text>
-        </View>
-
-        {/* Pills: chain filter + the wallet's BPAN (identity rule) */}
-        <View style={st.pillRow}>
-          <Pressable style={st.filterPill} onPress={() => setShowNetworks((v) => !v)}>
-            {filter && <ChainIcon chainId={filter} size={15} />}
-            <Text style={st.filterPillText}>{filterName}</Text>
-            <Text style={st.pillChevron}>{showNetworks ? "▴" : "▾"}</Text>
-          </Pressable>
-          <Pressable style={st.bpanPill} onPress={p.onBPAN}>
-            <Text style={st.bpanHash}>#</Text>
-            <Text style={st.bpanPillText}>
-              {w.bpan ? formatBPAN(w.bpan) : "Set up BPAN ›"}
-            </Text>
-          </Pressable>
-        </View>
-
-        {/* Network filter dropdown (ext parity) */}
-        {showNetworks && (
-          <Card style={{ marginBottom: 12, maxHeight: 250 }}>
-            <ScrollView nestedScrollEnabled>
-              <Pressable
-                style={st.netRow}
-                onPress={() => { setFilter(null); setShowNetworks(false); }}
-              >
-                <Text style={[st.netName, filter === null && { color: colors.brand2 }]}>All Assets</Text>
+        {/* ── Hero gradient section (.hero-section): header, balance, pills and
+            the action row all sit on the extension's gradient block. ── */}
+        <HeroSection>
+          <View style={st.heroInner}>
+            {/* Header: account pill (avatar + wallet name -> Settings/accounts)
+                left, scan + dApps + lock right. Scan is mobile-only (camera). */}
+            <View style={st.homeHeader}>
+              <Pressable style={st.acctPill} onPress={p.onAccounts}>
+                <WalletAvatar avatar={p.walletAvatar} name={p.walletName} size={20} />
+                <Text style={st.acctName} numberOfLines={1}>{p.walletName}</Text>
+                <ChevronDownIcon size={11} color={colors.muted} />
               </Pressable>
-              {w.chainIds.map((id) => (
+              <View style={{ flex: 1 }} />
+              <Pressable onPress={p.onScan} style={st.iconBtn} hitSlop={8} accessibilityLabel="Scan a QR code">
+                <ScanIcon size={15} color={colors.muted} />
+              </Pressable>
+              <Pressable onPress={p.onDapps} style={st.iconBtn} hitSlop={8} accessibilityLabel="Connected dApps">
+                <LinkIcon size={15} color={colors.muted} />
+              </Pressable>
+              <Pressable onPress={p.onLock} style={st.iconBtn} hitSlop={8} accessibilityLabel="Lock wallet">
+                <LockIcon size={15} color={colors.muted} />
+              </Pressable>
+            </View>
+
+            {/* Balance: the ext's centered gradient portfolio number, no card. */}
+            <View style={{ alignItems: "center", marginTop: 10 }}>
+              <GradientNumber text={formatFiat(w.portfolioUsd, cur.code, cur.currency, w.rates)} size={42} />
+              <Text style={st.heroSub}>
+                Total Portfolio{w.loading ? "  · syncing…" : ""}
+              </Text>
+            </View>
+
+            {/* Pills: chain filter + the wallet's BPAN (identity rule) */}
+            <View style={st.pillRow}>
+              <Pressable style={st.filterPill} onPress={() => setShowNetworks((v) => !v)}>
+                {filter
+                  ? <ChainIcon chainId={filter} size={15} />
+                  : <View style={st.allDisc}><Text style={st.allDiscText}>All</Text></View>}
+                <Text style={st.filterPillText}>{filterName}</Text>
+                {showNetworks
+                  ? <ChevronUpIcon size={10} color={colors.muted} />
+                  : <ChevronDownIcon size={10} color={colors.muted} />}
+              </Pressable>
+              {w.bpan ? (
+                <Pressable style={st.bpanPill} onPress={() => { void copyBpan(); }}>
+                  <HashIcon size={9} color={colors.brand2} />
+                  <Text style={st.bpanPillText}>{formatBPAN(w.bpan)}</Text>
+                  {bpanCopied
+                    ? <CheckIcon size={10} color={colors.success} />
+                    : <CopyIcon size={10} color={colors.brand2} />}
+                </Pressable>
+              ) : (
+                <Pressable style={st.getBpanPill} onPress={p.onBPAN}>
+                  <HashIcon size={9} color={colors.textSecondary} />
+                  <Text style={st.getBpanText}>Get BPAN</Text>
+                </Pressable>
+              )}
+            </View>
+
+            {/* Network / filter dropdown, grouped the way the extension groups
+                it. Mobile lists only the chains that actually have something to
+                show (w.chainIds) rather than every network. */}
+            {showNetworks && (
+              <Card style={{ marginBottom: 14, maxHeight: 250 }}>
+                <ScrollView nestedScrollEnabled>
+                  <Pressable
+                    style={st.netRow}
+                    onPress={() => { setFilter(null); setShowNetworks(false); }}
+                  >
+                    <View style={st.allDiscLg}><Text style={st.allDiscText}>All</Text></View>
+                    <Text style={[st.netName, filter === null && { color: colors.brand2 }]}>All Assets</Text>
+                    {filter === null && <CheckIcon size={14} color={colors.brand2} />}
+                  </Pressable>
+                  {w.chainIds.map((id) => (
+                    <Pressable
+                      key={id}
+                      style={st.netRow}
+                      onPress={() => { setFilter(id); setShowNetworks(false); }}
+                    >
+                      <ChainIcon chainId={id} size={18} />
+                      <Text style={[st.netName, filter === id && { color: colors.brand2 }]}>
+                        {chainNameOf(id) ?? id}
+                      </Text>
+                      {filter === id && <CheckIcon size={14} color={colors.brand2} />}
+                    </Pressable>
+                  ))}
+                  <Pressable
+                    style={[st.netRow, { borderBottomWidth: 0 }]}
+                    onPress={() => { setShowNetworks(false); p.onManageAssets(); }}
+                  >
+                    <View style={st.dashedDisc}><PlusIcon size={11} color={colors.brand2} /></View>
+                    <Text style={[st.netName, { color: colors.brand2 }]}>Manage Tokens &amp; Networks</Text>
+                  </Pressable>
+                </ScrollView>
+              </Card>
+            )}
+
+            {/* Primary Send CTA (ext: gradient bar, "Pay anyone, any chain") */}
+            <Pressable onPress={p.onSend} style={({ pressed }) => [pressed && { transform: [{ scale: 0.99 }] }]}>
+              <LinearGradient
+                colors={["#b5a8ff", "#7c6df0", "#5b4cdb"]}
+                locations={[0, 0.5, 1]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={st.sendCta}
+              >
+                {/* Specular gloss: a soft highlight from the top-right corner,
+                    the same overlay the extension paints over the CTA. */}
+                <LinearGradient
+                  colors={["rgba(255,255,255,0.18)", "rgba(255,255,255,0)"]}
+                  start={{ x: 1, y: 0 }}
+                  end={{ x: 0.15, y: 1 }}
+                  style={StyleSheet.absoluteFill}
+                  pointerEvents="none"
+                />
+                <View style={st.sendCtaChip}>
+                  <ArrowUpRightIcon size={15} color="#fff" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={st.sendCtaTitle}>Send</Text>
+                  <Text style={st.sendCtaSub}>Pay anyone, any chain</Text>
+                </View>
+                <ChevronRightIcon size={16} color="rgba(255,255,255,0.7)" />
+              </LinearGradient>
+            </Pressable>
+
+            {/* Secondary row: Receive / Swap / DeFi — same three as the extension.
+                Bridging is not a slot here: it is a cross-chain pair inside Swap. */}
+            <View style={st.actionCards}>
+              {([
+                { label: "Receive", Icon: ReceiveIcon, onPress: p.onReceive },
+                { label: "Swap", Icon: SwapIcon, onPress: p.onSwap },
+                { label: "DeFi", Icon: TrendingUpIcon, onPress: p.onDeFi },
+              ] as const).map(({ label, Icon, onPress }) => (
                 <Pressable
-                  key={id}
-                  style={st.netRow}
-                  onPress={() => { setFilter(id); setShowNetworks(false); }}
+                  key={label}
+                  onPress={onPress}
+                  style={({ pressed }) => [st.actionCard, pressed && { borderColor: colors.brand }]}
                 >
-                  <ChainIcon chainId={id} size={16} />
-                  <Text style={[st.netName, filter === id && { color: colors.brand2 }]}>
-                    {chainNameOf(id) ?? id}
-                  </Text>
+                  <Icon size={14} color={colors.muted} />
+                  <Text style={st.actionCardLabel}>{label}</Text>
                 </Pressable>
               ))}
-            </ScrollView>
-          </Card>
-        )}
-
-        {/* Primary Send CTA (ext: gradient bar, "Pay anyone, any chain") */}
-        <Pressable onPress={p.onSend} style={({ pressed }) => [pressed && { transform: [{ scale: 0.99 }] }]}>
-          <LinearGradient
-            colors={["#b5a8ff", "#7c6df0", "#5b4cdb"]}
-            locations={[0, 0.5, 1]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={st.sendCta}
-          >
-            <View style={st.sendCtaChip}>
-              <SendIcon size={15} color="#fff" />
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={st.sendCtaTitle}>Send</Text>
-              <Text style={st.sendCtaSub}>Pay anyone, any chain</Text>
-            </View>
-            <Text style={st.sendCtaChevron}>{"›"}</Text>
-          </LinearGradient>
-        </Pressable>
-
-        {/* Secondary row: Receive / Swap / DeFi — same three as the extension.
-            Bridging is not a slot here: it is a cross-chain pair inside Swap. */}
-        <View style={st.actionCards}>
-          {([
-            { label: "Receive", Icon: ReceiveIcon, onPress: p.onReceive },
-            { label: "Swap", Icon: SwapIcon, onPress: p.onSwap },
-            { label: "DeFi", Icon: TrendingUpIcon, onPress: p.onDeFi },
-          ] as const).map(({ label, Icon, onPress }) => (
-            <Pressable
-              key={label}
-              onPress={onPress}
-              style={({ pressed }) => [st.actionCard, pressed && { borderColor: colors.brand }]}
-            >
-              <Icon size={15} color={colors.muted} />
-              <Text style={st.actionCardLabel}>{label}</Text>
-            </Pressable>
-          ))}
-        </View>
-
-        {!!w.error && (
-          <AlertCard tone="danger" title="Refresh failed" body={w.error} style={{ marginBottom: 8 }} />
-        )}
-
-        <SectionLabel text="Assets" style={{ marginTop: 18, marginBottom: 2 } as object} />
-        {rows.map((r) => (
-          <AssetRowView
-            key={r.key}
-            row={r}
-            fiat={formatFiat(r.usdValue, cur.code, cur.currency, w.rates)}
-            onPress={() => p.onOpenAsset(r)}
-          />
-        ))}
-        {rows.length === 0 && !w.loading && (
-          <View style={st.emptyState}>
-            <Text style={st.emptyTitle}>No assets yet</Text>
-            <Text style={st.dim}>Receive funds to get started.</Text>
           </View>
-        )}
-        <View style={{ height: 24 }} />
+        </HeroSection>
+
+        {/* ── Assets section ── */}
+        <View style={st.assetsSection}>
+          {!!w.error && (
+            <AlertCard tone="danger" title="Refresh failed" body={w.error} style={{ marginBottom: 8 }} />
+          )}
+
+          <View style={st.assetsHead}>
+            <SectionLabel text="Assets" />
+            <View style={{ flexDirection: "row", gap: 2 }}>
+              <Pressable hitSlop={8} onPress={p.onManageAssets} style={st.headBtn} accessibilityLabel="Manage tokens and networks">
+                <PlusIcon size={14} color={colors.muted} />
+              </Pressable>
+              <Pressable hitSlop={8} onPress={w.refresh} style={st.headBtn} accessibilityLabel="Refresh balances">
+                <RefreshIcon size={14} color={colors.muted} />
+              </Pressable>
+            </View>
+          </View>
+
+          {rows.map((r) => (
+            <AssetRowView
+              key={r.key}
+              row={r}
+              fiat={formatFiat(r.usdValue, cur.code, cur.currency, w.rates)}
+              onPress={() => p.onOpenAsset(r)}
+              onHide={r.isNative ? undefined : () => { void w.setRowHidden(r, true); }}
+            />
+          ))}
+
+          {/* First paint of a scope: placeholder rows rather than a blank page. */}
+          {rows.length === 0 && w.loading && (
+            <>
+              <SkeletonRow /><SkeletonRow /><SkeletonRow />
+            </>
+          )}
+
+          {rows.length === 0 && !w.loading && (
+            <EmptyState
+              icon={<WalletIcon size={20} color={colors.muted} />}
+              title="No assets found"
+              hint="Receive funds to get started."
+            />
+          )}
+
+          {/* Dust + hidden tokens, behind a disclosure (ext parity). */}
+          {dust.length > 0 && (
+            <View style={{ marginTop: 16 }}>
+              <Pressable style={st.dustToggle} onPress={() => setShowDust((v) => !v)}>
+                {showDust
+                  ? <ChevronUpIcon size={12} color={colors.muted} />
+                  : <ChevronDownIcon size={12} color={colors.muted} />}
+                <Text style={st.dustToggleText}>Hidden ({dust.length})</Text>
+              </Pressable>
+              {showDust && dust.map((r) => (
+                <View key={`dust-${r.key}`} style={{ opacity: 0.55 }}>
+                  <AssetRowView
+                    row={r}
+                    fiat={formatFiat(r.usdValue, cur.code, cur.currency, w.rates)}
+                    onPress={() => p.onOpenAsset(r)}
+                    onUnhide={r.manualHidden ? () => { void w.setRowHidden(r, false); } : undefined}
+                    compact
+                  />
+                </View>
+              ))}
+            </View>
+          )}
+
+          <View style={{ height: 24 }} />
+        </View>
       </ScrollView>
     </View>
   );
@@ -1032,34 +1158,54 @@ function DevScreen(p: {
 }
 
 // Token/holdings row (.token-row): flat row with hairline divider, house-framed
-// asset icon + chain corner badge, name/chain left, balance/fiat right.
-function AssetRowView(p: { row: AssetRow; fiat: string; onPress?: () => void }) {
+// asset icon + chain corner badge, SYMBOL over chain name left, balance/fiat
+// right — the extension's hierarchy. Long-press hides a token (the touch
+// equivalent of the popup's swipe-to-hide row); hidden rows get Unhide instead.
+function AssetRowView(p: {
+  row: AssetRow;
+  fiat: string;
+  onPress?: () => void;
+  onHide?: () => void;
+  onUnhide?: () => void;
+  /** Hidden-section rows: smaller disc and denser type, as in the popup. */
+  compact?: boolean;
+}) {
   const r = p.row;
+  const disc = p.compact ? 28 : 36;
   return (
     <Pressable
       onPress={p.onPress}
+      onLongPress={p.onHide}
+      delayLongPress={400}
       style={({ pressed }) => [st.tokenRow, pressed && { opacity: 0.7 }]}
     >
-      <View style={{ width: 32, height: 32 }}>
+      <View style={{ width: disc, height: disc }}>
         <AssetIcon
           symbol={r.symbol}
           logo={r.logo}
           chainId={r.chainId}
           address={r.isNative ? undefined : r.key.split(":")[1]}
-          size={32}
+          size={disc}
         />
-        {!r.isNative && <ChainBadge chainId={r.chainId} size={13} />}
+        {!r.isNative && <ChainBadge chainId={r.chainId} size={p.compact ? 11 : 13} />}
       </View>
       <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
-        <Text style={st.tokenName} numberOfLines={1}>{r.name}</Text>
-        <Text style={st.tokenSub}>{r.chainName}</Text>
+        <Text style={[st.tokenName, p.compact && { fontSize: 12 }]} numberOfLines={1}>{r.symbol}</Text>
+        <Text style={[st.tokenSub, p.compact && { fontSize: 10 }]} numberOfLines={1}>{r.chainName}</Text>
       </View>
       <View style={{ alignItems: "flex-end" }}>
-        <Text style={st.tokenBal}>
-          {r.balanceNum.toLocaleString(undefined, { maximumFractionDigits: 6 })} {r.symbol}
+        <Text style={[st.tokenBal, p.compact && { fontSize: 12 }]}>
+          {r.balanceNum > 0
+            ? r.balanceNum.toLocaleString(undefined, { maximumFractionDigits: p.compact ? 6 : 4 })
+            : "0"}
         </Text>
-        <Text style={st.tokenSub}>{p.fiat}</Text>
+        {r.usdValue > 0 && <Text style={st.tokenSub}>{p.fiat}</Text>}
       </View>
+      {p.onUnhide && (
+        <Pressable hitSlop={8} onPress={p.onUnhide} style={st.unhideBtn}>
+          <Text style={st.unhideText}>Unhide</Text>
+        </Pressable>
+      )}
     </Pressable>
   );
 }
@@ -1129,6 +1275,7 @@ const st = StyleSheet.create({
     paddingTop: 56,
     paddingHorizontal: spacing.screen,
   },
+  containerFlush: { paddingTop: 0, paddingHorizontal: 0 },
 
   authHeader: { alignItems: "center", marginTop: 72, marginBottom: 36 },
   authWordmark: { color: colors.textPrimary, fontSize: 22, fontWeight: "700", marginTop: 16 },
@@ -1140,6 +1287,16 @@ const st = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
 
+  // Home runs flush (see containerFlush), so the hero reaches the edges and
+  // the status bar on its own and pads its contents back in.
+  heroInner: {
+    paddingHorizontal: spacing.screen,
+    paddingTop: 56,
+    paddingBottom: 14,
+  },
+  // Everything below the hero re-applies the shell's horizontal padding.
+  assetsSection: { paddingHorizontal: spacing.screen, paddingTop: 16 },
+
   acctPill: {
     flexDirection: "row", alignItems: "center", gap: 7,
     paddingVertical: 5, paddingHorizontal: 10,
@@ -1148,12 +1305,29 @@ const st = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
   },
   acctName: { color: colors.textPrimary, fontSize: 13, fontWeight: "600", maxWidth: 140 },
-  acctChevron: { color: colors.muted, fontSize: 9, marginLeft: 1 },
   heroSub: { color: colors.textSecondary, fontSize: 12, marginTop: 4 },
 
   pillRow: {
     flexDirection: "row", justifyContent: "center", alignItems: "center",
     gap: 8, marginTop: 14, marginBottom: 14,
+  },
+  // "All" disc: the neutral stand-in the extension shows when no chain filter
+  // is set, in place of a chain logo.
+  allDisc: {
+    width: 15, height: 15, borderRadius: 8,
+    backgroundColor: colors.surface3,
+    alignItems: "center", justifyContent: "center",
+  },
+  allDiscLg: {
+    width: 18, height: 18, borderRadius: 9,
+    backgroundColor: colors.surface3,
+    alignItems: "center", justifyContent: "center",
+  },
+  allDiscText: { color: colors.muted, fontSize: 7, fontWeight: "700" },
+  dashedDisc: {
+    width: 18, height: 18, borderRadius: 9,
+    borderWidth: 1, borderStyle: "dashed", borderColor: "rgba(124, 109, 240, 0.5)",
+    alignItems: "center", justifyContent: "center",
   },
   filterPill: {
     flexDirection: "row", alignItems: "center", gap: 6,
@@ -1171,18 +1345,26 @@ const st = StyleSheet.create({
     backgroundColor: colors.brandTint,
     borderWidth: 1, borderColor: "rgba(124, 109, 240, 0.32)",
   },
-  bpanHash: { color: colors.brand2, fontSize: 12, fontWeight: "700" },
   bpanPillText: {
     color: colors.brand2, fontSize: 12.5, fontWeight: "600",
     fontVariant: ["tabular-nums"],
   },
+  // No BPAN yet: the extension marks the empty state with a dashed pill.
+  getBpanPill: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    paddingVertical: 7, paddingHorizontal: 13,
+    borderRadius: radius.pill,
+    backgroundColor: colors.card,
+    borderWidth: 1, borderStyle: "dashed", borderColor: colors.border,
+  },
+  getBpanText: { color: colors.textSecondary, fontSize: 12.5, fontWeight: "500" },
   netRow: {
     flexDirection: "row", alignItems: "center", gap: 10,
     paddingHorizontal: 14, paddingVertical: 11,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.divider,
   },
-  netName: { color: colors.textPrimary, fontSize: 13, fontWeight: "500" },
+  netName: { color: colors.textPrimary, fontSize: 13, fontWeight: "500", flex: 1 },
 
   sendCta: {
     flexDirection: "row", alignItems: "center", gap: 12,
@@ -1200,7 +1382,6 @@ const st = StyleSheet.create({
   },
   sendCtaTitle: { color: "#fff", fontSize: 15, fontWeight: "600", letterSpacing: -0.3 },
   sendCtaSub: { color: "rgba(255,255,255,0.75)", fontSize: 11, marginTop: 1 },
-  sendCtaChevron: { color: "rgba(255,255,255,0.7)", fontSize: 18, marginTop: -2 },
 
   actionCards: { flexDirection: "row", gap: 7, marginTop: 8 },
   actionCard: {
@@ -1212,15 +1393,30 @@ const st = StyleSheet.create({
   },
   actionCardLabel: { color: colors.textPrimary, fontSize: 11, fontWeight: "500" },
 
+  assetsHead: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    marginBottom: 4,
+  },
+  headBtn: { padding: 6, borderRadius: radius.iconBtn },
+
   tokenRow: {
     flexDirection: "row", alignItems: "center",
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.divider,
   },
-  tokenName: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "500" },
+  // Symbol leads the row, as in the popup; the chain name is the subtitle.
+  tokenName: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "600" },
   tokenSub: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
-  tokenBal: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "500", fontVariant: ["tabular-nums"] },
+  tokenBal: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "600", fontVariant: ["tabular-nums"] },
+  unhideBtn: {
+    marginLeft: 10, paddingHorizontal: 8, paddingVertical: 3,
+    borderRadius: 6, backgroundColor: colors.surface2,
+  },
+  unhideText: { color: colors.textSecondary, fontSize: 10, fontWeight: "600" },
+
+  dustToggle: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 },
+  dustToggleText: { color: colors.muted, fontSize: ts.small, fontWeight: "500" },
 
   lockOverlay: {
     position: "absolute",
@@ -1233,8 +1429,6 @@ const st = StyleSheet.create({
   h2: { color: colors.textPrimary, fontSize: ts.h2, fontWeight: "600", marginBottom: 12 },
   body: { color: colors.textPrimary, fontSize: 15 },
   dim: { color: colors.muted, fontSize: ts.row, marginTop: 8 },
-  emptyState: { alignItems: "center", paddingVertical: 48 },
-  emptyTitle: { color: colors.textSecondary, fontSize: ts.body, fontWeight: "600" },
   version: {
     color: colors.muted2, fontSize: ts.label, textAlign: "center",
     paddingVertical: 28, letterSpacing: 0.4,

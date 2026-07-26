@@ -2,7 +2,7 @@
 // (24 viewBox, strokeWidth 1.8, round caps/joins) so both surfaces draw the
 // same iconography. Only the icons mobile actually uses are ported; add more
 // from the extension file as screens need them — never invent new art.
-import Svg, { Path, Rect, Polyline, Circle } from "react-native-svg";
+import Svg, { Line, Path, Rect, Polyline, Circle } from "react-native-svg";
 
 interface IconProps {
   size?: number;
@@ -19,6 +19,12 @@ function frame(size: number) {
     strokeLinecap: "round" as const,
     strokeLinejoin: "round" as const,
   };
+}
+
+// The extension draws chevrons/arrows/checks at a heavier weight than the
+// 1.8 body stroke, so they stay legible at 9-14px. Same values as Icons.tsx.
+function frameW(size: number, strokeWidth: number) {
+  return { ...frame(size), strokeWidth };
 }
 
 export function SendIcon({ size = 20, color = "#fff" }: IconProps) {
@@ -114,14 +120,6 @@ export function ExternalLinkIcon({ size = 20, color = "#fff" }: IconProps) {
   );
 }
 
-export function ChevronLeftIcon({ size = 20, color = "#fff" }: IconProps) {
-  return (
-    <Svg {...frame(size)} stroke={color}>
-      <Path d="m15 18-6-6 6-6" />
-    </Svg>
-  );
-}
-
 // DELIBERATE EXCEPTION to the "port, never invent" rule at the top of this
 // file: the extension has no camera, so its Icons.tsx has no scan glyph to
 // port. This is Lucide's `scan-line` — the same library the extension's set is
@@ -138,12 +136,196 @@ export function ScanIcon({ size = 20, color = "#fff" }: IconProps) {
   );
 }
 
+export function SearchIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frame(size)} stroke={color}>
+      <Circle cx={11} cy={11} r={8} />
+      <Path d="m21 21-4.3-4.3" />
+    </Svg>
+  );
+}
+
 export function GlobeIcon({ size = 20, color = "#fff" }: IconProps) {
   return (
     <Svg {...frame(size)} stroke={color}>
       <Circle cx={12} cy={12} r={10} />
       <Path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
       <Path d="M2 12h20" />
+    </Svg>
+  );
+}
+
+export function WalletIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frame(size)} stroke={color}>
+      <Path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" />
+      <Path d="M3 5v14a2 2 0 0 0 2 2h16v-5" />
+      <Path d="M18 12a2 2 0 0 0 0 4h4v-4h-4z" />
+    </Svg>
+  );
+}
+
+export function HashIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frame(size)} stroke={color}>
+      <Line x1={4} x2={20} y1={9} y2={9} />
+      <Line x1={4} x2={20} y1={15} y2={15} />
+      <Line x1={10} x2={8} y1={3} y2={21} />
+      <Line x1={16} x2={14} y1={3} y2={21} />
+    </Svg>
+  );
+}
+
+export function CopyIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frame(size)} stroke={color}>
+      <Rect width={14} height={14} x={8} y={8} rx={2} ry={2} />
+      <Path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+    </Svg>
+  );
+}
+
+export function ChevronDownIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frameW(size, 2)} stroke={color}>
+      <Path d="m6 9 6 6 6-6" />
+    </Svg>
+  );
+}
+
+/** The dropdown chevron rotated: the extension flips ChevronDown with a CSS
+ *  `rotate-180`, which RN cannot apply to an SVG child, so the open state
+ *  draws the mirrored path instead. */
+export function ChevronUpIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frameW(size, 2)} stroke={color}>
+      <Path d="m18 15-6-6-6 6" />
+    </Svg>
+  );
+}
+
+export function ChevronRightIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frameW(size, 2)} stroke={color}>
+      <Path d="m9 18 6-6-6-6" />
+    </Svg>
+  );
+}
+
+export function ArrowUpRightIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frame(size)} stroke={color}>
+      <Path d="M7 17 17 7" />
+      <Path d="M7 7h10v10" />
+    </Svg>
+  );
+}
+
+export function ArrowLeftIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frameW(size, 2)} stroke={color}>
+      <Path d="m12 19-7-7 7-7" />
+      <Path d="M19 12H5" />
+    </Svg>
+  );
+}
+
+export function RefreshIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frame(size)} stroke={color}>
+      <Path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <Path d="M3 3v5h5" />
+      <Path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+      <Path d="M16 16h5v5" />
+    </Svg>
+  );
+}
+
+export function CheckIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frameW(size, 2.5)} stroke={color}>
+      <Path d="M20 6 9 17l-5-5" />
+    </Svg>
+  );
+}
+
+export function XIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frameW(size, 2.5)} stroke={color}>
+      <Line x1={18} y1={6} x2={6} y2={18} />
+      <Line x1={6} y1={6} x2={18} y2={18} />
+    </Svg>
+  );
+}
+
+export function PlusIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frameW(size, 2)} stroke={color}>
+      <Path d="M12 5v14" />
+      <Path d="M5 12h14" />
+    </Svg>
+  );
+}
+
+export function AlertIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frame(size)} stroke={color}>
+      <Path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+      <Path d="M12 9v4" />
+      <Path d="M12 17h.01" />
+    </Svg>
+  );
+}
+
+export function SunIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frame(size)} stroke={color}>
+      <Circle cx={12} cy={12} r={4} />
+      <Path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+    </Svg>
+  );
+}
+
+// ── Transaction-kind glyphs (TxRow corner badge) ─────────────────────────────
+// White strokes on the kind-coloured disc, ported from the extension TxRow's
+// inline <KindGlyph>: stroke 3 so a 9px glyph still reads.
+
+export type TxKindName = "send" | "receive" | "swap" | "bridge";
+
+export function TxKindGlyph({ kind, size = 9, color = "#fff" }: {
+  kind: TxKindName; size?: number; color?: string;
+}) {
+  const p = { ...frameW(size, 3), stroke: color };
+  if (kind === "send") {
+    return (
+      <Svg {...p}>
+        <Line x1={7} y1={17} x2={17} y2={7} />
+        <Polyline points="8 7 17 7 17 16" />
+      </Svg>
+    );
+  }
+  if (kind === "receive") {
+    return (
+      <Svg {...p}>
+        <Line x1={17} y1={7} x2={7} y2={17} />
+        <Polyline points="16 17 7 17 7 8" />
+      </Svg>
+    );
+  }
+  if (kind === "swap") {
+    return (
+      <Svg {...p}>
+        <Polyline points="17 2 21 6 17 10" />
+        <Path d="M3 6h18" />
+        <Polyline points="7 22 3 18 7 14" />
+        <Path d="M21 18H3" />
+      </Svg>
+    );
+  }
+  return (
+    <Svg {...p}>
+      <Polyline points="14 5 20 11 14 17" />
+      <Path d="M20 11H4" />
     </Svg>
   );
 }

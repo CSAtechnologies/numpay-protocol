@@ -140,7 +140,7 @@ export function DeFiScreen({ onBack }: { onBack: () => void }) {
             <Pressable
               key={p.name + p.type}
               onPress={() => { Linking.openURL(p.url).catch(() => {}); }}
-              style={({ pressed }) => [sx.row, pressed && { borderColor: colors.brand }]}
+              style={({ pressed }) => [sx.row, pressed && { opacity: 0.7 }]}
             >
               <LogoCoin uri={p.logo} label={p.name} size={36} />
               <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
@@ -190,15 +190,14 @@ const sx = StyleSheet.create({
   tabLabel: { color: colors.muted, fontSize: ts.small, fontWeight: "500" },
   tabLabelActive: { color: "#fff", fontWeight: "600" },
 
+  // .token-row: a flat row with a hairline divider, not a bordered card — the
+  // same list treatment the extension uses for protocols and holdings.
   row: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 12,
-    marginBottom: 6,
-    borderRadius: radius.button,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
+    paddingVertical: 11,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.divider,
   },
   nameLine: { flexDirection: "row", alignItems: "center", gap: 5 },
   name: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "600" },

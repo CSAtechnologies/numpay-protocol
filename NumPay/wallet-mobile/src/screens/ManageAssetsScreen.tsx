@@ -7,7 +7,6 @@
 // and in the Send picker on the next sweep (App triggers one on back).
 import { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { ethers } from "ethers";
 import { NETWORKS } from "@numpay/core/networks";
 import {
   getCustomTokens, addCustomToken, removeCustomToken, type CustomToken,
@@ -15,18 +14,15 @@ import {
 import {
   getCustomChains, saveCustomChain, removeCustomChain, type CustomChain,
 } from "@numpay/core/customChains";
-import { SOL_RPC } from "@numpay/core/chains/solana";
+import {
+  detectEvmToken, detectSolanaToken, detectErrorMessage, type TokenPreview,
+} from "../wallet/tokenDetect";
 import { colors, radius, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Card, Field, ScreenHeader } from "../ui/components";
+import { XIcon } from "../ui/icons";
 import { ChainIcon, TokenIcon } from "../ui/coins";
 
 type Tab = "tokens" | "networks";
-
-const ERC20_ABI = [
-  "function symbol() view returns (string)",
-  "function name() view returns (string)",
-  "function decimals() view returns (uint8)",
-];
 
 // ── Chain helpers ─────────────────────────────────────────────────────────────
 
@@ -52,35 +48,8 @@ function chainDisplayName(id: string, custom: CustomChain[]): string {
 }
 
 // ── Detection helpers (same lookups the extension page makes) ────────────────
-
-interface TokenPreview { symbol: string; name: string; decimals: number; logo?: string }
-
-async function detectEvmToken(rpcUrl: string, address: string): Promise<TokenPreview> {
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
-  const contract = new ethers.Contract(address, ERC20_ABI, provider);
-  const [symbol, name, decimals] = await Promise.all([
-    contract.symbol(), contract.name(), contract.decimals(),
-  ]);
-  return { symbol: String(symbol).trim(), name: String(name).trim(), decimals: Number(decimals) };
-}
-
-async function detectSolanaToken(mint: string): Promise<TokenPreview> {
-  const [dasRes, mintRes] = await Promise.all([
-    fetch(SOL_RPC, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: mint } }),
-    }).then((r) => r.json()).catch(() => null),
-    fetch(SOL_RPC, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [mint, { encoding: "jsonParsed" }] }),
-    }).then((r) => r.json()).catch(() => null),
-  ]);
-  const meta = dasRes?.result?.content?.metadata;
-  if (!meta?.symbol) throw new Error("Token not found");
-  const decimals = mintRes?.result?.value?.data?.parsed?.info?.decimals ?? 9;
-  const logo = dasRes?.result?.content?.links?.image ?? dasRes?.result?.content?.files?.[0]?.cdn_uri;
-  return { symbol: String(meta.symbol).trim(), name: String(meta.name || meta.symbol).trim(), decimals: Number(decimals), logo };
-}
+// Token detection itself lives in ../wallet/tokenDetect, shared with the Swap
+// and Send pickers; only the chain-RPC probe below is specific to this screen.
 
 async function detectChainId(rpcUrl: string): Promise<number> {
   const res = await fetch(rpcUrl, {
@@ -148,9 +117,7 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
       }
       setPreview(result);
     } catch (e: any) {
-      setDetectErr(e?.message?.includes("could not decode") || e?.message?.includes("call revert")
-        ? "Not a valid token contract on this chain."
-        : e?.message || "Detection failed.");
+      setDetectErr(detectErrorMessage(e));
     } finally {
       setDetecting(false);
     }
@@ -255,10 +222,13 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
     <View style={{ flex: 1 }}>
       <ScreenHeader title="Manage assets" onBack={onBack} />
 
+      {/* Underline tab bar (extension ManageAssets), not a filled segment:
+          the active tab is brand-coloured text over a 2px brand rule. */}
       <View style={st.tabs}>
         {TABS.map((t) => (
-          <Pressable key={t.id} onPress={() => setTab(t.id)} style={[st.tab, tab === t.id && st.tabOn]}>
+          <Pressable key={t.id} onPress={() => setTab(t.id)} style={st.tab}>
             <Text style={[st.tabText, tab === t.id && st.tabTextOn]}>{t.label}</Text>
+            {tab === t.id && <View style={st.tabUnderline} />}
           </Pressable>
         ))}
       </View>
@@ -270,42 +240,53 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
               Tokens with a balance are auto-detected. Use this to manually add any token that isn't showing up.
             </Text>
 
-            {/* Chain selector */}
-            <Text style={st.fieldLabel}>Chain</Text>
-            <View style={st.chainWrap}>
-              {chainOptions.map((c) => (
-                <Pressable
-                  key={c.id}
-                  onPress={() => { setChain(c.id); setPreview(null); setDetectErr(""); }}
-                  style={[st.chainChip, chain === c.id && st.chainChipOn]}
-                >
-                  <ChainIcon chainId={c.id} size={14} />
-                  <Text
-                    style={[st.chainChipText, chain === c.id && st.chainChipTextOn]}
-                    numberOfLines={1}
-                  >
-                    {c.name}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
+            {/* Chain selector — a scrolling card of chips, as in the popup */}
+            <Card style={st.chainCard}>
+              <Text style={[st.fieldLabel, { marginTop: 0 }]}>Chain</Text>
+              <ScrollView style={{ maxHeight: 118 }} nestedScrollEnabled>
+                <View style={st.chainWrap}>
+                  {chainOptions.map((c) => (
+                    <Pressable
+                      key={c.id}
+                      onPress={() => { setChain(c.id); setPreview(null); setDetectErr(""); }}
+                      style={[st.chainChip, chain === c.id && st.chainChipOn]}
+                    >
+                      <ChainIcon chainId={c.id} size={14} />
+                      <Text
+                        style={[st.chainChipText, chain === c.id && st.chainChipTextOn]}
+                        numberOfLines={1}
+                      >
+                        {c.name}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </ScrollView>
+            </Card>
 
-            {/* Address input + detect */}
+            {/* Address input + inline Detect (the extension puts them on one
+                row, so the action sits next to the field it acts on) */}
             <Text style={st.fieldLabel}>{chain === "solana" ? "Mint address" : "Contract address"}</Text>
-            <Field
-              value={tokenAddr}
-              onChangeText={(v: string) => { setTokenAddr(v); setPreview(null); setDetectErr(""); }}
-              placeholder={chain === "solana" ? "Paste mint address…" : "0x…"}
-              autoCapitalize="none"
-              autoCorrect={false}
-              onSubmitEditing={() => { void handleDetect(); }}
-            />
-            <Btn
-              label={detecting ? "Detecting…" : "Detect"}
-              variant="secondary"
-              disabled={detecting || !tokenAddr.trim()}
-              onPress={() => { void handleDetect(); }}
-            />
+            <View style={st.inlineRow}>
+              <View style={{ flex: 1 }}>
+                <Field
+                  value={tokenAddr}
+                  onChangeText={(v: string) => { setTokenAddr(v); setPreview(null); setDetectErr(""); }}
+                  placeholder={chain === "solana" ? "Paste mint address…" : "0x…"}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  onSubmitEditing={() => { void handleDetect(); }}
+                  style={{ fontFamily: "monospace", fontSize: 12 }}
+                />
+              </View>
+              <Pressable
+                disabled={detecting || !tokenAddr.trim()}
+                onPress={() => { void handleDetect(); }}
+                style={[st.detectBtn, (detecting || !tokenAddr.trim()) && { opacity: 0.4 }]}
+              >
+                <Text style={st.detectText}>{detecting ? "Detecting" : "Detect"}</Text>
+              </Pressable>
+            </View>
             {!!detectErr && <Text style={st.errText}>{detectErr}</Text>}
 
             {/* Token preview */}
@@ -342,8 +323,13 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
                           {chainDisplayName(t.chainId, customNetworks)} · {t.address.slice(0, 6)}…{t.address.slice(-4)}
                         </Text>
                       </View>
-                      <Pressable hitSlop={8} onPress={() => { void handleRemoveToken(t.id); }}>
-                        <Text style={st.removeText}>Remove</Text>
+                      <Pressable
+                        hitSlop={8}
+                        onPress={() => { void handleRemoveToken(t.id); }}
+                        accessibilityLabel={`Remove ${t.symbol}`}
+                        style={({ pressed }) => [st.removeBtn, pressed && { backgroundColor: colors.dangerTint }]}
+                      >
+                        <XIcon size={12} color={colors.muted} />
                       </Pressable>
                     </View>
                   ))}
@@ -370,20 +356,25 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
             />
 
             <Text style={st.fieldLabel}>RPC URL</Text>
-            <Field
-              value={netRpc}
-              onChangeText={(v: string) => { setNetRpc(v); setNetChainId(null); setNetDetectErr(""); }}
-              placeholder="https://rpc.example.com"
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-            />
-            <Btn
-              label={netDetecting ? "Detecting…" : "Detect Chain ID"}
-              variant="secondary"
-              disabled={netDetecting || !netRpc.trim()}
-              onPress={() => { void handleDetectChain(); }}
-            />
+            <View style={st.inlineRow}>
+              <View style={{ flex: 1 }}>
+                <Field
+                  value={netRpc}
+                  onChangeText={(v: string) => { setNetRpc(v); setNetChainId(null); setNetDetectErr(""); }}
+                  placeholder="https://rpc.example.com"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                />
+              </View>
+              <Pressable
+                disabled={netDetecting || !netRpc.trim()}
+                onPress={() => { void handleDetectChain(); }}
+                style={[st.detectBtn, (netDetecting || !netRpc.trim()) && { opacity: 0.4 }]}
+              >
+                <Text style={st.detectText}>{netDetecting ? "Detecting" : "Detect"}</Text>
+              </Pressable>
+            </View>
             {!!netDetectErr && <Text style={st.errText}>{netDetectErr}</Text>}
             {netChainId != null && (
               <View style={st.chainIdBadge}>
@@ -435,8 +426,13 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
                         <Text style={st.listSymbol}>{c.name}</Text>
                         <Text style={st.listMeta}>{c.symbol} · Chain ID {c.chainId}</Text>
                       </View>
-                      <Pressable hitSlop={8} onPress={() => { void handleRemoveNetwork(c.id); }}>
-                        <Text style={st.removeText}>Remove</Text>
+                      <Pressable
+                        hitSlop={8}
+                        onPress={() => { void handleRemoveNetwork(c.id); }}
+                        accessibilityLabel={`Remove ${c.name}`}
+                        style={({ pressed }) => [st.removeBtn, pressed && { backgroundColor: colors.dangerTint }]}
+                      >
+                        <XIcon size={12} color={colors.muted} />
                       </Pressable>
                     </View>
                   ))}
@@ -455,11 +451,25 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
 }
 
 const st = StyleSheet.create({
-  tabs: { flexDirection: "row", gap: 4, marginBottom: 14, padding: 4, backgroundColor: colors.surface2, borderRadius: radius.button },
-  tab: { flex: 1, paddingVertical: 8, borderRadius: radius.tile, alignItems: "center" },
-  tabOn: { backgroundColor: colors.brand },
-  tabText: { color: colors.muted, fontSize: ts.small, fontWeight: "600" },
-  tabTextOn: { color: colors.onBrand },
+  tabs: {
+    flexDirection: "row", marginBottom: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.divider,
+  },
+  tab: { paddingHorizontal: 16, paddingVertical: 10, position: "relative" },
+  tabText: { color: colors.muted, fontSize: ts.row, fontWeight: "600" },
+  tabTextOn: { color: colors.brand2 },
+  tabUnderline: {
+    position: "absolute", left: 0, right: 0, bottom: 0,
+    height: 2, borderRadius: 1, backgroundColor: colors.brand2,
+  },
+
+  inlineRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+  // Brand-tinted compact action beside its input, not a full-width button.
+  detectBtn: {
+    marginTop: 10, paddingHorizontal: 14, paddingVertical: 13,
+    borderRadius: radius.input, backgroundColor: colors.brandTint,
+  },
+  detectText: { color: colors.brand2, fontSize: 12, fontWeight: "600" },
 
   blurb: { color: colors.muted, fontSize: ts.small, lineHeight: 17, marginBottom: 12 },
   fieldLabel: {
@@ -469,6 +479,7 @@ const st = StyleSheet.create({
   errText: { color: colors.danger, fontSize: ts.small, marginTop: 8 },
   emptyText: { color: colors.muted, fontSize: ts.small, textAlign: "center", paddingVertical: 20 },
 
+  chainCard: { padding: 12, marginTop: 4 },
   chainWrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
   chainChip: {
     flexDirection: "row", alignItems: "center", gap: 5,
@@ -492,7 +503,10 @@ const st = StyleSheet.create({
   listDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.divider },
   listSymbol: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "600" },
   listMeta: { color: colors.muted, fontSize: ts.small, marginTop: 2 },
-  removeText: { color: colors.danger, fontSize: ts.small, fontWeight: "600" },
+  removeBtn: {
+    width: 28, height: 28, borderRadius: 8,
+    alignItems: "center", justifyContent: "center",
+  },
 
   chainIdBadge: {
     flexDirection: "row", alignItems: "center", gap: 8,

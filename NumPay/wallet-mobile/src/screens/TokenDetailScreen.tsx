@@ -7,10 +7,10 @@
 // DexScreener, covers unlisted memecoins by address) with the extension's
 // 3-minute stale-while-revalidate cache semantics.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from "react-native-svg";
 import { NETWORKS } from "@numpay/core/networks";
-import { loadTxLog, loggedToRecords } from "@numpay/core/txLog";
+import { explorerTxUrl, loadTxLog, loggedToRecords } from "@numpay/core/txLog";
 import {
   type TxRecord, fetchChainHistory, tokenMetaFromList, mergeLoggedTxs, txInvolvesAsset,
 } from "@numpay/core/txHistory";
@@ -23,8 +23,15 @@ import {
 } from "@numpay/core/tokenMarket";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import type { AssetRow, MobileWalletState } from "../wallet/useMobileWallet";
-import { colors, type as ts } from "../ui/theme";
-import { AlertCard, Btn, Card, ScreenHeader, SectionLabel } from "../ui/components";
+import { colors, radius, type as ts } from "../ui/theme";
+import { LinearGradient } from "expo-linear-gradient";
+import {
+  AlertCard, Card, EmptyState, GradientNumber, SectionLabel, SkeletonRow,
+} from "../ui/components";
+import {
+  ActivityIcon, AlertIcon, ArrowLeftIcon, ExternalLinkIcon, ReceiveIcon,
+  RefreshIcon, SendIcon, SwapIcon, TrendingUpIcon,
+} from "../ui/icons";
 import { useCurrencyPref, formatFiat } from "../ui/currency";
 import { AssetIcon, ChainBadge } from "../ui/coins";
 import { TxRow } from "./ActivityScreen";
@@ -126,8 +133,25 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
   const [txs, setTxs] = useState<TxRecord[]>([]);
   const [txLoading, setTxLoading] = useState(false);
   const [unwrapping, setUnwrapping] = useState(false);
-  const [unwrapMsg, setUnwrapMsg] = useState("");
+  // Mirrors the extension's result box: outcome, copy, and the signature to
+  // link, rather than a bare green line.
+  const [unwrapMsg, setUnwrapMsg] = useState<{ ok: boolean; text: string; sig?: string } | null>(null);
   const [error, setError] = useState("");
+
+  const explorerBase = NETWORKS[row.chainId]?.explorer
+    ? `${NETWORKS[row.chainId].explorer}/address/${w.evmAddress}`
+    : null;
+
+  // Risk signals the indexer reported. Only EXPLICIT flags warn: a missing
+  // score means "unknown", not "unsafe".
+  const risks: string[] = [];
+  if (!row.isNative) {
+    if (row.possibleSpam) risks.push("Flagged as possible spam or scam");
+    if (row.verifiedContract === false) risks.push("Unverified contract");
+    if (typeof row.securityScore === "number" && row.securityScore < 50) {
+      risks.push(`Low security score (${row.securityScore}/100)`);
+    }
+  }
 
   // CoinGecko → GeckoTerminal → DexScreener resolution, address-keyed for
   // unlisted memecoins — identical core call to the extension.
@@ -202,17 +226,22 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
 
   // wSOL → SOL (extension TokenDetail parity; core does the account close).
   async function handleUnwrap() {
-    setError(""); setUnwrapMsg("");
+    setError(""); setUnwrapMsg(null);
     const mnemonic = await getUnlockedMnemonic();
     if (!mnemonic) { onSessionExpired?.(); return; }
     setUnwrapping(true);
     try {
       const derived = await deriveNonEvmAddresses(mnemonic);
       const res = await unwrapWsol(derived.solana.secretKey);
-      setUnwrapMsg(`Unwrapped to SOL. Tx ${res.signature.slice(0, 8)}…`);
+      const sol = Number(res.lamports) / 1e9;
+      setUnwrapMsg({
+        ok: true,
+        text: `Unwrapped ${sol.toLocaleString(undefined, { maximumFractionDigits: 6 })} SOL to your native balance.`,
+        sig: res.signature,
+      });
       w.refresh();
     } catch (e: any) {
-      setError(e?.message || "Unwrap failed");
+      setUnwrapMsg({ ok: false, text: e?.message || "Unwrap failed. Try again." });
     } finally {
       setUnwrapping(false);
     }
@@ -224,13 +253,65 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
 
   return (
     <View style={{ flex: 1 }}>
-      <ScreenHeader title={row.symbol} onBack={onBack} />
+      {/* Header: back, the asset itself (icon + name + chain), explorer link.
+          The extension identifies the page with the token, not a text title. */}
+      <View style={st.header}>
+        <Pressable
+          onPress={onBack}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          style={({ pressed }) => [st.headerBtn, pressed && { borderColor: colors.borderLight }]}
+        >
+          <ArrowLeftIcon size={15} color={colors.muted} />
+        </Pressable>
+        <View style={st.headerAsset}>
+          <AssetIcon
+            symbol={row.symbol} logo={row.logo} chainId={row.chainId}
+            address={tokenAddr} size={32}
+          />
+          <View style={{ flex: 1, minWidth: 0, marginLeft: 10 }}>
+            <Text style={st.headerName} numberOfLines={1}>{row.name}</Text>
+            <Text style={st.headerChain}>{row.chainName}</Text>
+          </View>
+        </View>
+        {explorerBase && (
+          <Pressable
+            hitSlop={10}
+            onPress={() => { Linking.openURL(explorerBase).catch(() => {}); }}
+            accessibilityRole="link"
+            accessibilityLabel="View on block explorer"
+            style={({ pressed }) => [st.headerBtn, pressed && { borderColor: colors.borderLight }]}
+          >
+            <ExternalLinkIcon size={14} color={colors.muted} />
+          </Pressable>
+        )}
+      </View>
+
       <ScrollView showsVerticalScrollIndicator={false}>
 
-        {/* Price + 24h change */}
+        {/* Risk / spam warning */}
+        {risks.length > 0 && (
+          <View style={st.riskBox}>
+            <AlertIcon size={16} color={colors.amber} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={st.riskTitle}>Caution: this token has risk signals</Text>
+              {risks.map((r) => (
+                <Text key={r} style={st.riskItem}>{"•"}  {r}</Text>
+              ))}
+              <Text style={st.riskNote}>
+                Scam tokens can mimic real ones. Verify the contract before sending or swapping.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Price + 24h change — gradient numerals, as in the popup */}
         <View style={{ marginBottom: 10 }}>
           <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8 }}>
-            <Text style={st.price}>{currentPrice > 0 ? fmtPrice(currentPrice) : "—"}</Text>
+            {currentPrice > 0
+              ? <GradientNumber text={fmtPrice(currentPrice)} size={32} />
+              : <Text style={st.price}>—</Text>}
             {market && (
               <Text style={[st.change, { color: isUp ? colors.success : colors.danger }]}>
                 {isUp ? "+" : ""}{priceChange.toFixed(2)}%
@@ -265,44 +346,109 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
           </View>
         </Card>
 
-        {/* Balance hero */}
-        <Card style={st.hero}>
-          <View style={{ width: 48, height: 48 }}>
-            <AssetIcon
-              symbol={row.symbol} logo={row.logo} chainId={row.chainId}
-              address={tokenAddr} size={48}
-            />
-            {!row.isNative && <ChainBadge chainId={row.chainId} size={16} />}
-          </View>
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={st.balance}>
-              {row.balanceNum.toLocaleString(undefined, { maximumFractionDigits: 6 })} {row.symbol}
-            </Text>
-            <Text style={st.fiat}>
-              {row.usdValue > 0 || currentPrice > 0
-                ? formatFiat(row.balanceNum * currentPrice, cur.code, cur.currency, w.rates)
-                : " "}
-            </Text>
-            <Text style={st.chain}>{row.name} · {row.chainName}</Text>
+        {/* Your balance — labelled card, big number with a muted ticker, fiat
+            underneath, asset disc on the right (extension layout). */}
+        <Card style={st.balanceCard}>
+          <Text style={st.balanceLabel}>YOUR BALANCE</Text>
+          <View style={{ flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between" }}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={st.balance}>
+                {row.balanceNum >= 0.0001
+                  ? row.balanceNum.toLocaleString(undefined, { maximumFractionDigits: 6 })
+                  : row.balanceNum.toPrecision(2)}
+                <Text style={st.balanceSym}> {row.symbol}</Text>
+              </Text>
+              <Text style={st.fiat}>
+                {row.usdValue > 0 || currentPrice > 0
+                  ? formatFiat(row.balanceNum * currentPrice, cur.code, cur.currency, w.rates)
+                  : " "}
+              </Text>
+            </View>
+            <View style={{ width: 28, height: 28 }}>
+              <AssetIcon
+                symbol={row.symbol} logo={row.logo} chainId={row.chainId}
+                address={tokenAddr} size={28}
+              />
+              {!row.isNative && <ChainBadge chainId={row.chainId} size={11} />}
+            </View>
           </View>
         </Card>
 
-        {/* Actions: Send / Swap / Receive (Swap where core can route it) */}
-        <View style={{ flexDirection: "row", gap: 8 }}>
-          <Btn label="Send" onPress={onSend} style={{ flex: 1 }} />
-          {canSwap && <Btn label="Swap" variant="secondary" onPress={onSwap} style={{ flex: 1 }} />}
-          <Btn label="Receive" variant="secondary" onPress={onReceive} style={{ flex: 1 }} />
+        {/* Actions: Send / Swap / Receive (Swap where core can route it).
+            Icon + label, Send carrying the brand gradient. */}
+        <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+          <Pressable
+            onPress={onSend}
+            style={({ pressed }) => [{ flex: 1 }, pressed && { transform: [{ scale: 0.98 }] }]}
+          >
+            <LinearGradient
+              colors={["#b5a8ff", "#7c6df0", "#5b4cdb"]}
+              locations={[0, 0.5, 1]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={st.actionBtn}
+            >
+              <SendIcon size={14} color="#fff" />
+              <Text style={st.actionLabelOn}>Send</Text>
+            </LinearGradient>
+          </Pressable>
+          {canSwap && (
+            <Pressable
+              onPress={onSwap}
+              style={({ pressed }) => [st.actionBtn, st.actionBtnSecondary, { flex: 1 }, pressed && { borderColor: colors.brand }]}
+            >
+              <SwapIcon size={14} color={colors.textPrimary} />
+              <Text style={st.actionLabel}>Swap</Text>
+            </Pressable>
+          )}
+          <Pressable
+            onPress={onReceive}
+            style={({ pressed }) => [st.actionBtn, st.actionBtnSecondary, { flex: 1 }, pressed && { borderColor: colors.brand }]}
+          >
+            <ReceiveIcon size={14} color={colors.textPrimary} />
+            <Text style={st.actionLabel}>Receive</Text>
+          </Pressable>
         </View>
 
         {isWsol && (
-          <Btn
-            label={unwrapping ? "Unwrapping…" : "Unwrap to SOL"}
-            variant="secondary"
-            onPress={() => { void handleUnwrap(); }}
-            disabled={unwrapping || row.balanceNum <= 0}
-          />
+          <View style={{ marginTop: 12 }}>
+            <Pressable
+              onPress={() => { void handleUnwrap(); }}
+              disabled={unwrapping || row.balanceNum <= 0}
+              style={({ pressed }) => [
+                st.actionBtn, st.actionBtnSecondary,
+                (unwrapping || row.balanceNum <= 0) && { opacity: 0.5 },
+                pressed && { borderColor: colors.brand },
+              ]}
+            >
+              <Text style={st.actionLabel}>{unwrapping ? "Unwrapping…" : "Unwrap to SOL"}</Text>
+            </Pressable>
+            {unwrapMsg && (
+              <View style={[st.resultBox, {
+                borderColor: unwrapMsg.ok ? "rgba(34,197,94,0.35)" : "rgba(239,68,68,0.35)",
+                backgroundColor: unwrapMsg.ok ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+              }]}>
+                <Text style={{ color: unwrapMsg.ok ? colors.success : colors.danger, fontSize: ts.small, lineHeight: 16 }}>
+                  {unwrapMsg.text}
+                </Text>
+                {unwrapMsg.ok && unwrapMsg.sig && (
+                  <Pressable
+                    hitSlop={6}
+                    onPress={() => { Linking.openURL(explorerTxUrl("solana", unwrapMsg.sig!)).catch(() => {}); }}
+                    style={st.resultLink}
+                  >
+                    <Text style={st.resultLinkText}>View transaction</Text>
+                    <ExternalLinkIcon size={10} color={colors.brand2} />
+                  </Pressable>
+                )}
+              </View>
+            )}
+            <Text style={st.unwrapNote}>
+              Wrapped SOL is the token form of SOL. Unwrapping returns it, plus the account rent,
+              to your spendable SOL.
+            </Text>
+          </View>
         )}
-        {!!unwrapMsg && <Text style={st.ok}>{unwrapMsg}</Text>}
         {!!error && (
           <AlertCard tone="danger" title="Action failed" body={error} style={{ marginTop: 10 }} />
         )}
@@ -310,7 +456,10 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
         {/* Market stats */}
         {market && (
           <>
-            <SectionLabel text="Market stats" style={{ marginTop: 20, marginBottom: 6 } as object} />
+            <View style={st.statsHead}>
+              <TrendingUpIcon size={13} color={colors.muted} />
+              <SectionLabel text="Market stats" />
+            </View>
             <Card>
               <View style={st.statsGrid}>
                 {[
@@ -332,13 +481,30 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
         {/* Transactions (on-chain merged with the wallet's own log) */}
         <View style={st.txHead}>
           <SectionLabel text="Transactions" />
-          <Pressable hitSlop={8} onPress={() => { void loadTxs(); }}>
-            <Text style={st.txRefresh}>{txLoading ? "Loading…" : "Refresh"}</Text>
+          <Pressable
+            hitSlop={8}
+            disabled={txLoading}
+            onPress={() => { void loadTxs(); }}
+            style={[st.txRefreshBtn, txLoading && { opacity: 0.4 }]}
+            accessibilityLabel="Refresh transactions"
+          >
+            <RefreshIcon size={12} color={colors.muted} />
           </Pressable>
         </View>
-        {txs.map((t) => <TxRow key={`${t.chainId}:${t.hash}:${t.assetAddr ?? "native"}`} tx={t} showChain={false} />)}
+        {txLoading && txs.length === 0 && (
+          <>
+            <SkeletonRow discSize={34} /><SkeletonRow discSize={34} /><SkeletonRow discSize={34} />
+          </>
+        )}
+        {txs.map((t) => (
+          <TxRow key={`${t.chainId}:${t.hash}:${t.assetAddr ?? "native"}`} tx={t} showChain={false} size={34} />
+        ))}
         {txs.length === 0 && !txLoading && (
-          <Text style={st.dim}>No transactions found for this asset yet.</Text>
+          <EmptyState
+            icon={<ActivityIcon size={18} color={colors.muted} />}
+            title="No transactions found"
+            style={{ paddingVertical: 28 }}
+          />
         )}
         <View style={{ height: 24 }} />
       </ScrollView>
@@ -347,6 +513,28 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
 }
 
 const st = StyleSheet.create({
+  header: { flexDirection: "row", alignItems: "center", gap: 10, height: 50, marginBottom: 6 },
+  headerBtn: {
+    width: 32, height: 32, borderRadius: radius.button,
+    backgroundColor: colors.surface2,
+    borderWidth: 1, borderColor: colors.border,
+    alignItems: "center", justifyContent: "center",
+  },
+  headerAsset: { flexDirection: "row", alignItems: "center", flex: 1, minWidth: 0 },
+  headerName: { color: colors.textPrimary, fontSize: ts.body, fontWeight: "600" },
+  headerChain: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
+
+  riskBox: {
+    flexDirection: "row", gap: 10,
+    paddingHorizontal: 12, paddingVertical: 10,
+    borderRadius: radius.tile, marginBottom: 12,
+    borderWidth: 1, borderColor: "rgba(245,158,11,0.4)",
+    backgroundColor: colors.amberTint,
+  },
+  riskTitle: { color: colors.amber, fontSize: 12, fontWeight: "600" },
+  riskItem: { color: colors.muted, fontSize: ts.small, marginTop: 2, lineHeight: 15 },
+  riskNote: { color: colors.muted2, fontSize: ts.label, marginTop: 5, lineHeight: 14 },
+
   price: { color: colors.textPrimary, fontSize: 28, fontWeight: "700", letterSpacing: -0.5 },
   change: { fontSize: ts.row, fontWeight: "700", paddingBottom: 3 },
   changeLabel: { color: colors.muted, fontSize: ts.small, marginTop: 2 },
@@ -362,15 +550,41 @@ const st = StyleSheet.create({
   rangeText: { color: colors.muted, fontSize: ts.small, fontWeight: "600" },
   rangeTextOn: { color: colors.brand2 },
 
-  hero: { flexDirection: "row", alignItems: "center", padding: 16, marginTop: 12 },
+  balanceCard: { paddingHorizontal: 16, paddingVertical: 12, marginTop: 12 },
+  balanceLabel: {
+    color: colors.muted, fontSize: ts.label, fontWeight: "600",
+    letterSpacing: 1.2, marginBottom: 8,
+  },
   balance: {
-    color: colors.textPrimary, fontSize: 20, fontWeight: "700",
+    color: colors.textPrimary, fontSize: 22, fontWeight: "700",
     fontVariant: ["tabular-nums"],
   },
-  fiat: { color: colors.textSecondary, fontSize: ts.row, marginTop: 2 },
-  chain: { color: colors.muted, fontSize: ts.small, marginTop: 4 },
-  ok: { color: colors.success, fontSize: ts.small, marginTop: 8 },
+  balanceSym: { color: colors.muted, fontSize: ts.body, fontWeight: "500" },
+  fiat: { color: colors.muted, fontSize: 12, marginTop: 3 },
 
+  actionBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7,
+    paddingVertical: 10, borderRadius: radius.button,
+  },
+  actionBtnSecondary: {
+    backgroundColor: colors.surface2,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  actionLabel: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "600" },
+  actionLabelOn: { color: colors.onBrand, fontSize: ts.row, fontWeight: "600" },
+
+  resultBox: {
+    marginTop: 8, paddingHorizontal: 12, paddingVertical: 10,
+    borderRadius: radius.tile, borderWidth: 1,
+  },
+  resultLink: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 5 },
+  resultLinkText: { color: colors.brand2, fontSize: ts.small, fontWeight: "600" },
+  unwrapNote: { color: colors.muted, fontSize: ts.label, marginTop: 6, lineHeight: 14 },
+
+  statsHead: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    marginTop: 20, marginBottom: 6,
+  },
   statsGrid: { flexDirection: "row", flexWrap: "wrap" },
   statCell: { width: "50%", paddingHorizontal: 14, paddingVertical: 10 },
   statCellRight: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: colors.divider },
@@ -382,6 +596,5 @@ const st = StyleSheet.create({
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     marginTop: 20, marginBottom: 2,
   },
-  txRefresh: { color: colors.brand2, fontSize: ts.small, fontWeight: "600" },
-  dim: { color: colors.muted, fontSize: ts.row, marginTop: 8 },
+  txRefreshBtn: { padding: 6, borderRadius: radius.iconBtn },
 });

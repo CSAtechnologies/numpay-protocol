@@ -3,7 +3,7 @@
 // remove, add), Security (lock, reveal recovery phrase), Connections (dApps),
 // and the danger zone. The version row is the hidden developer-tools entry.
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, BackHandler, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import {
   listWallets, renameWallet, removeWallet, getActiveMnemonic, setWalletAvatar,
   type WalletMeta,
@@ -11,19 +11,59 @@ import {
 import { CURRENCIES } from "@numpay/core/currency";
 import { colors, radius, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
+import {
+  CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, GlobeIcon,
+  LayersIcon, LinkIcon, LockIcon, ShieldIcon, SunIcon,
+} from "../ui/icons";
 import { WalletAvatar, EmojiPicker } from "../ui/WalletAvatar";
+import { RevealGate } from "../ui/RevealGate";
 import { useCurrencyPref } from "../ui/currency";
+
+/** How long a revealed recovery phrase stays on screen (extension: 30 s). */
+const REVEAL_AUTO_HIDE_MS = 30_000;
 
 function shortAddr(a?: string): string {
   return a && a.length >= 10 ? `${a.slice(0, 6)}…${a.slice(-4)}` : (a ?? "");
 }
 
-function Row({ label, hint, onPress, danger, right }: {
+/**
+ * Turn a flag emoji (🇺🇸) into a flagcdn image URL via its ISO 3166-1 code.
+ * Android's system font has no country-flag glyphs at all — the emoji renders
+ * as bare regional-indicator letters or tofu — so the extension's flag images
+ * are the only way to show the same thing here.
+ */
+function flagUrl(emoji: string): string | null {
+  const code = [...emoji]
+    .map((ch) => String.fromCharCode((ch.codePointAt(0) ?? 0) - 0x1F1A5))
+    .join("")
+    .toLowerCase();
+  return /^[a-z]{2}$/.test(code) ? `https://flagcdn.com/40x30/${code}.png` : null;
+}
+
+/** Currency mark: real flag image where we can build one, symbol otherwise. */
+function CurrencyMark({ flag, symbol, size = 20 }: {
+  flag?: string; symbol?: string; size?: number;
+}) {
+  const url = flag ? flagUrl(flag) : null;
+  if (url) {
+    return (
+      <Image
+        source={{ uri: url }}
+        style={{ width: size, height: size * 0.75, borderRadius: 2 }}
+        resizeMode="cover"
+      />
+    );
+  }
+  return <Text style={[st.curSymMark, { width: size + 6 }]}>{symbol ?? "¤"}</Text>;
+}
+
+function Row({ label, hint, onPress, danger, right, icon }: {
   label: string;
   hint?: string;
   onPress?: () => void;
   danger?: boolean;
   right?: string;
+  icon?: React.ReactNode;
 }) {
   return (
     <Pressable
@@ -31,12 +71,13 @@ function Row({ label, hint, onPress, danger, right }: {
       disabled={!onPress}
       style={({ pressed }) => [st.row, pressed && onPress && { opacity: 0.7 }]}
     >
+      {icon && <View style={st.rowIcon}>{icon}</View>}
       <View style={{ flex: 1 }}>
         <Text style={[st.rowLabel, danger && { color: colors.danger }]}>{label}</Text>
         {!!hint && <Text style={st.rowHint}>{hint}</Text>}
       </View>
       {!!right && <Text style={st.rowRight}>{right}</Text>}
-      {onPress && <Text style={st.rowChevron}>{"›"}</Text>}
+      {onPress && <ChevronRightIcon size={14} color={colors.muted2} />}
     </Pressable>
   );
 }
@@ -58,6 +99,8 @@ export function SettingsScreen({
   const [renameVal, setRenameVal] = useState("");
   const [emojiTargetId, setEmojiTargetId] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<string | null>(null);
+  // Re-auth gate in front of the reveal (extension parity — see RevealGate).
+  const [revealGate, setRevealGate] = useState(false);
   const [confirmWipe, setConfirmWipe] = useState(false);
   const cur = useCurrencyPref();
   const [showCurrency, setShowCurrency] = useState(false);
@@ -69,6 +112,33 @@ export function SettingsScreen({
 
   const reload = useCallback(() => { listWallets().then(setWallets).catch(() => {}); }, []);
   useEffect(() => { reload(); }, [reload, activeWalletId]);
+
+  // A revealed phrase auto-hides after 30 s, like the extension's. The words
+  // stay in component state only for that window; nothing persists them.
+  useEffect(() => {
+    if (!revealed) return;
+    const t = setTimeout(() => setRevealed(null), REVEAL_AUTO_HIDE_MS);
+    return () => clearTimeout(t);
+  }, [revealed]);
+
+  // Switching the active wallet while a phrase is on screen would re-render the
+  // panel with a DIFFERENT wallet's words behind the gate that authorised the
+  // first one. Force-hide on any switch (the extension does the same on
+  // wallet?.address change).
+  useEffect(() => { setRevealed(null); setRevealGate(false); }, [activeWalletId]);
+
+  // Hardware back closes the GATE, not the whole Settings screen. App.tsx's
+  // handler only knows routes, and RN fires the newest listener first, so
+  // returning true here consumes the press before the global one runs. Same
+  // pattern the Swap/Send token pickers use.
+  useEffect(() => {
+    if (!revealGate) return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      setRevealGate(false);
+      return true;
+    });
+    return () => sub.remove();
+  }, [revealGate]);
 
   const emojiTarget = wallets.find((w) => w.id === emojiTargetId) ?? null;
 
@@ -160,14 +230,24 @@ export function SettingsScreen({
         {/* ── Security ── */}
         <SectionLabel text="Security" style={{ marginTop: 18, marginBottom: 6 } as object} />
         <Card>
-          <Row label="Lock wallet" hint="Requires your PIN or biometrics to reopen" onPress={onLock} />
+          <Row
+            label="Lock wallet"
+            hint="Requires your PIN or biometrics to reopen"
+            icon={<LockIcon size={15} color={colors.muted} />}
+            onPress={onLock}
+          />
           <View style={st.hairline} />
           <Row
             label="Reveal recovery phrase"
             hint="Show the active wallet's 12/24 words. Never share them."
-            onPress={async () => {
-              const mn = await getActiveMnemonic();
-              if (mn) setRevealed(mn);
+            icon={<ShieldIcon size={15} color={colors.amber} />}
+            right={revealed ? "Hide" : undefined}
+            onPress={() => {
+              // Already showing: hide without re-asking. Otherwise gate first —
+              // the mnemonic is only fetched AFTER the gate passes, so a
+              // dismissed prompt never puts it in state at all.
+              if (revealed) { setRevealed(null); return; }
+              setRevealGate(true);
             }}
           />
         </Card>
@@ -176,7 +256,7 @@ export function SettingsScreen({
             <AlertCard
               tone="amber"
               title="Active wallet recovery phrase"
-              body="Anyone with these words controls this wallet. Keep them offline."
+              body="Anyone with these words controls this wallet. Keep them offline. This hides itself in 30 seconds."
               style={{ marginBottom: 8 }}
             />
             <Card style={{ padding: 14 }}>
@@ -189,7 +269,12 @@ export function SettingsScreen({
         {/* ── Connections ── */}
         <SectionLabel text="Connections" style={{ marginTop: 18, marginBottom: 6 } as object} />
         <Card>
-          <Row label="Connected dApps" hint="WalletConnect sessions and pairing" onPress={onDapps} />
+          <Row
+            label="Connected dApps"
+            hint="WalletConnect sessions and pairing"
+            icon={<LinkIcon size={15} color={colors.muted} />}
+            onPress={onDapps}
+          />
         </Card>
 
         {/* ── Preferences ── */}
@@ -198,17 +283,37 @@ export function SettingsScreen({
           <Row
             label="Manage assets"
             hint="Add custom tokens and EVM networks"
+            icon={<LayersIcon size={15} color={colors.muted} />}
             onPress={onManageAssets}
           />
           <View style={st.hairline} />
-          <Row
-            label="Display currency"
-            hint="Prices and balances show in this currency"
-            right={`${cur.currency?.flag ? cur.currency.flag + " " : ""}${cur.currency?.symbol ?? cur.code.toUpperCase()}`}
+          {/* Display currency: the flag is an IMAGE, not an emoji (see flagUrl). */}
+          <Pressable
             onPress={() => { setShowCurrency((v) => !v); setCurrencySearch(""); }}
-          />
+            style={({ pressed }) => [st.row, pressed && { opacity: 0.7 }]}
+          >
+            <View style={st.rowIcon}>
+              <GlobeIcon size={15} color={colors.muted} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={st.rowLabel}>Display currency</Text>
+              <Text style={st.rowHint}>Prices and balances show in this currency</Text>
+            </View>
+            <View style={st.curCurrent}>
+              <CurrencyMark flag={cur.currency?.flag} symbol={cur.currency?.symbol} />
+              <Text style={st.rowRight}>{cur.currency?.symbol ?? cur.code.toUpperCase()}</Text>
+            </View>
+            {showCurrency
+              ? <ChevronUpIcon size={14} color={colors.muted2} />
+              : <ChevronDownIcon size={14} color={colors.muted2} />}
+          </Pressable>
           <View style={st.hairline} />
-          <Row label="Theme" hint="Dark theme coming soon" right="Light" />
+          <Row
+            label="Theme"
+            hint="Dark theme coming soon"
+            icon={<SunIcon size={15} color={colors.amber} />}
+            right="Light"
+          />
         </Card>
         {showCurrency && (
           <Card style={{ marginTop: 8, maxHeight: 320 }}>
@@ -216,20 +321,23 @@ export function SettingsScreen({
               <Field placeholder="Search currencies…" value={currencySearch} onChangeText={setCurrencySearch} />
             </View>
             <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled">
-              {filteredCurrencies.map((c) => (
-                <Pressable
-                  key={c.code}
-                  style={st.curRow}
-                  onPress={() => { cur.setCode(c.code); setShowCurrency(false); }}
-                >
-                  <Text style={st.curFlag}>{c.flag ?? "🪙"}</Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={st.rowLabel}>{c.name}</Text>
-                    <Text style={st.rowHint}>{c.code.toUpperCase()}</Text>
-                  </View>
-                  <Text style={[st.curSym, cur.code === c.code && { color: colors.brand2 }]}>{c.symbol}</Text>
-                </Pressable>
-              ))}
+              {filteredCurrencies.map((c) => {
+                const active = cur.code === c.code;
+                return (
+                  <Pressable
+                    key={c.code}
+                    style={st.curRow}
+                    onPress={() => { cur.setCode(c.code); setShowCurrency(false); }}
+                  >
+                    <CurrencyMark flag={c.flag} symbol={c.symbol} />
+                    <Text style={[st.curName, active && { color: colors.brand2 }]} numberOfLines={1}>
+                      {c.name}
+                    </Text>
+                    <Text style={st.curCode}>{c.code.toUpperCase()}</Text>
+                    {active && <CheckIcon size={14} color={colors.brand2} />}
+                  </Pressable>
+                );
+              })}
               {filteredCurrencies.length === 0 && (
                 <Text style={[st.rowHint, { textAlign: "center", padding: 16 }]}>No currencies found</Text>
               )}
@@ -266,6 +374,21 @@ export function SettingsScreen({
         </Pressable>
         <View style={{ height: 20 }} />
       </ScrollView>
+
+      {/* Re-auth gate. Rendered OVER the screen so the phrase cannot appear
+          behind it, and the mnemonic is read only once it passes. */}
+      {revealGate && (
+        <RevealGate
+          title="Reveal recovery phrase"
+          body="These words control this wallet on any device. Confirm your PIN before they are shown."
+          onCancel={() => setRevealGate(false)}
+          onPass={async () => {
+            setRevealGate(false);
+            const mn = await getActiveMnemonic();
+            if (mn) setRevealed(mn);
+          }}
+        />
+      )}
     </View>
   );
 }
@@ -277,10 +400,10 @@ const st = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 13,
   },
+  rowIcon: { width: 22, alignItems: "center", marginRight: 10 },
   rowLabel: { color: colors.textPrimary, fontSize: ts.body, fontWeight: "500" },
   rowHint: { color: colors.muted, fontSize: ts.small, marginTop: 2, lineHeight: 15 },
   rowRight: { color: colors.brand2, fontSize: ts.body, fontWeight: "600", marginRight: 8 },
-  rowChevron: { color: colors.muted2, fontSize: 18, marginLeft: 2 },
   hairline: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: colors.divider,
@@ -305,12 +428,14 @@ const st = StyleSheet.create({
   walletSubAction: { color: colors.muted, fontSize: ts.small, fontWeight: "500" },
 
   curRow: {
-    flexDirection: "row", alignItems: "center", gap: 12,
-    paddingHorizontal: 14, paddingVertical: 11,
+    flexDirection: "row", alignItems: "center", gap: 10,
+    paddingHorizontal: 14, paddingVertical: 10,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.divider,
   },
-  curFlag: { fontSize: 22 },
-  curSym: { color: colors.textPrimary, fontSize: ts.body, fontWeight: "600" },
+  curName: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "500", flex: 1 },
+  curCode: { color: colors.muted, fontSize: ts.small },
+  curCurrent: { flexDirection: "row", alignItems: "center", gap: 7 },
+  curSymMark: { color: colors.brand2, fontSize: 12, fontWeight: "700", textAlign: "center" },
   mnemonic: { color: colors.textPrimary, fontSize: 15, lineHeight: 24, fontFamily: "monospace" },
   version: {
     color: colors.muted2, fontSize: ts.label, textAlign: "center",

@@ -35,8 +35,8 @@ import {
 } from "@numpay/core/chains";
 import { sweepEvmNativeBalances, type ChainBalance } from "@numpay/core/balanceSweep";
 import { sweepAllChainTokens, type AutoToken } from "@numpay/core/autoTokens";
-import { fetchRates, getUsdPrice, type Rates } from "@numpay/core/currency";
-import { loadHiddenTokens, tokenHideKey } from "@numpay/core/hiddenTokens";
+import { fetchRates, getAnyUsdPrice, getUsdPrice, type Rates } from "@numpay/core/currency";
+import { loadHiddenTokens, setTokenHidden, tokenHideKey } from "@numpay/core/hiddenTokens";
 import { classifyToken } from "@numpay/core/tokenSpam";
 import { chainNameOf } from "@numpay/core/txLog";
 import { getOwnedBPANCount, findOwnedBPANs } from "@numpay/core/bpan";
@@ -78,6 +78,15 @@ export interface AssetRow {
   balanceNum: number;
   usdValue: number;
   logo?: string; // remote URL when the indexer provides one
+  /** Set on dust rows the USER hid by hand, as opposed to ones the dust/spam
+   *  rules filtered out. Only these get an "Unhide" control (ext parity). */
+  manualHidden?: boolean;
+  // Risk signals carried through from discovery so TokenDetail can raise the
+  // extension's caution banner. Undefined means "the indexer told us nothing",
+  // which is NOT the same as a clean result — only explicit flags warn.
+  possibleSpam?: boolean;
+  securityScore?: number;
+  verifiedContract?: boolean;
 }
 
 export interface MobileWalletState {
@@ -86,6 +95,11 @@ export interface MobileWalletState {
   /** First owned BPAN (raw 11 digits), "" when none / not yet known. */
   bpan: string;
   rows: AssetRow[];
+  /** Dust + user-hidden token rows, for the dashboard's collapsible "Hidden"
+   *  section (extension parity). Never contains natives: majors always show. */
+  dustRows: AssetRow[];
+  /** Hide/unhide a token row by hand. No-op for natives. */
+  setRowHidden: (row: AssetRow, hidden: boolean) => Promise<void>;
   chainIds: string[]; // chains with anything to show, dashboard filter chips
   /** Raw discovered tokens per chain (address/decimals intact) for pickers.
    *  Custom (user-added) tokens are merged in, so Send can pick them. */
@@ -109,24 +123,20 @@ function tokenRows(
   byChain: Record<string, AutoToken[]>,
   hidden: Set<string>,
   rates: Rates | null
-): AssetRow[] {
+): { rows: AssetRow[]; dust: AssetRow[] } {
   const rows: AssetRow[] = [];
+  // Dust + manually hidden tokens. The extension keeps these reachable behind
+  // a "Hidden (n)" disclosure rather than dropping them, so a token hidden by
+  // mistake (or auto-classified as spam) can always be brought back.
+  const dust: AssetRow[] = [];
   for (const [chainId, tokens] of Object.entries(byChain)) {
     for (const t of tokens) {
-      if (hidden.has(tokenHideKey(chainId, t.address))) continue;
-      if (classifyToken(t).hidden) continue;
       const bal = parseFloat(t.balance) || 0;
-      if (bal <= 0) continue;
-      const price = t.priceUsd ?? (rates ? getUsdPrice(t.symbol, rates) : 0);
-      const usd = price * bal;
-      // Extension-parity dust rule: only a PRICED-but-negligible balance is
-      // dust. An unpriced balance is money we can't value yet, not dust —
-      // treating price-unknown as $0 made every received token the indexer
-      // couldn't price (fresh memecoins, RWA, long-tail stables) invisible,
-      // while the extension deliberately keeps them ("unknown price — never
-      // treat as dust", Dashboard.tsx). Spam still filters via classifyToken.
-      if (usd > 0 && usd < DUST_USD) continue;
-      rows.push({
+      // Indexer price first; otherwise the shared symbol tables. getAnyUsdPrice
+      // covers ERC-20s (USDC/USDT/WETH/…) that getUsdPrice alone cannot —
+      // without it a held stablecoin valued at $0 and vanished from the total.
+      const price = t.priceUsd ?? (rates ? getAnyUsdPrice(t.symbol, rates) : 0);
+      const mkRow = (manualHidden?: boolean): AssetRow => ({
         key: `${chainId}:${t.address.toLowerCase()}`,
         chainId,
         chainName: chainNameOf(chainId) ?? chainId,
@@ -134,12 +144,34 @@ function tokenRows(
         name: t.name,
         isNative: false,
         balanceNum: bal,
-        usdValue: usd,
+        usdValue: price * bal,
         logo: t.logo,
+        manualHidden,
+        possibleSpam: t.possibleSpam,
+        securityScore: t.securityScore,
+        verifiedContract: t.verifiedContract,
       });
+      if (hidden.has(tokenHideKey(chainId, t.address))) {
+        if (bal > 0) dust.push(mkRow(true));
+        continue;
+      }
+      if (classifyToken(t).hidden) {
+        if (bal > 0) dust.push(mkRow(false));
+        continue;
+      }
+      if (bal <= 0) continue;
+      const usd = price * bal;
+      // Extension-parity dust rule: only a PRICED-but-negligible balance is
+      // dust. An unpriced balance is money we can't value yet, not dust —
+      // treating price-unknown as $0 made every received token the indexer
+      // couldn't price (fresh memecoins, RWA, long-tail stables) invisible,
+      // while the extension deliberately keeps them ("unknown price — never
+      // treat as dust", Dashboard.tsx). Spam still filters via classifyToken.
+      if (usd > 0 && usd < DUST_USD) { dust.push(mkRow(false)); continue; }
+      rows.push(mkRow());
     }
   }
-  return rows;
+  return { rows, dust };
 }
 
 // User-added networks, in core Network shape (same mapping the extension's
@@ -428,20 +460,47 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
     refresh();
   }, [activeWalletId, unlocked, refresh]);
 
-  const tokens = tokenRows(tokensByChain, hidden, rates);
+  // Hide / unhide a token by hand — the manual backstop for spam the classifier
+  // misses, and the way back for anything hidden by mistake. Natives are exempt
+  // (majors must never disappear). Optimistic: the set updates in state right
+  // away so the row moves between sections on the next render, not the next
+  // sweep.
+  const setRowHidden = useCallback(async (row: AssetRow, hide: boolean) => {
+    if (row.isNative || !evmAddress) return;
+    const addr = row.key.split(":")[1];
+    const key = tokenHideKey(row.chainId, addr);
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (hide) next.add(key); else next.delete(key);
+      return next;
+    });
+    try {
+      await setTokenHidden(evmAddress.toLowerCase(), key, hide);
+    } catch {
+      // Persist failed: put the in-memory set back so the UI keeps telling the
+      // truth about what will survive a reload.
+      setHidden((prev) => {
+        const next = new Set(prev);
+        if (hide) next.delete(key); else next.add(key);
+        return next;
+      });
+    }
+  }, [evmAddress]);
+
+  const { rows: tokens, dust: tokenDust } = tokenRows(tokensByChain, hidden, rates);
   // Custom (user-added) token rows. Deliberately EXEMPT from the dust rule and
   // spam classification: the user explicitly asked for this token, so an
   // unpriced balance must not vanish (that reads as "add token is broken").
   // A token discovery also found is skipped — the discovered row carries the
   // indexer's price/logo metadata and would otherwise duplicate.
   const customRows: AssetRow[] = [];
+  const customDust: AssetRow[] = [];
   for (const ct of customTokens) {
     const addrLc = ct.address.toLowerCase();
-    if (hidden.has(tokenHideKey(ct.chainId, ct.address))) continue;
     if ((tokensByChain[ct.chainId] ?? []).some((t) => t.address.toLowerCase() === addrLc)) continue;
     const bal = parseFloat(customBal[`${ct.chainId}:${addrLc}`] ?? "0") || 0;
-    const price = rates ? getUsdPrice(ct.symbol, rates) : 0;
-    customRows.push({
+    const price = rates ? getAnyUsdPrice(ct.symbol, rates) : 0;
+    const row: AssetRow = {
       key: `${ct.chainId}:${addrLc}`,
       chainId: ct.chainId,
       chainName: NETWORKS[ct.chainId]?.name ?? customNets[ct.chainId]?.name ?? (chainNameOf(ct.chainId) ?? ct.chainId),
@@ -451,7 +510,11 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
       balanceNum: bal,
       usdValue: price * bal,
       logo: ct.logo,
-    });
+    };
+    // A hidden custom token still belongs in the Hidden section, not gone: the
+    // user added it deliberately, so unhiding must stay one tap away.
+    if (hidden.has(tokenHideKey(ct.chainId, ct.address))) customDust.push({ ...row, manualHidden: true });
+    else customRows.push(row);
   }
   // Every native the sweeps return stays VISIBLE, zero balance included —
   // matching the extension dashboard (user directive 2026-07-15: majors must
@@ -468,6 +531,8 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
   });
   const portfolioUsd = rows.reduce((s, r) => s + r.usdValue, 0);
   const chainIds = [...new Set(rows.map((r) => r.chainId))];
+  // Hidden section: biggest first, so anything worth recovering is at the top.
+  const dustRows = [...tokenDust, ...customDust].sort((a, b) => b.usdValue - a.usdValue);
 
   // Merge customs into the picker lists so Send/TokenDetail can select them.
   // Derived here (not in setTokensByChain) so the discovery sweep's per-chain
@@ -487,6 +552,8 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
     bpan,
     nonEvmAddresses,
     rows,
+    dustRows,
+    setRowHidden,
     chainIds,
     tokensByChain: mergedTokensByChain,
     customNets,

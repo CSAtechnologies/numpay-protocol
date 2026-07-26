@@ -8,10 +8,12 @@ import { useMemo, useState } from "react";
 import { Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import qrcode from "qrcode-generator";
 import * as Clipboard from "expo-clipboard";
+import { LinearGradient } from "expo-linear-gradient";
 import { NETWORKS } from "@numpay/core/networks";
 import type { NonEvmAddressMap } from "@numpay/core/chains";
-import { colors, radius, type as ts } from "../ui/theme";
+import { colors, gradients, radius, type as ts } from "../ui/theme";
 import { Btn, Card, Field, ScreenHeader } from "../ui/components";
+import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon } from "../ui/icons";
 import { NumPayMark } from "../ui/NumPayLogo";
 import { ChainIcon } from "../ui/coins";
 
@@ -128,7 +130,9 @@ export function ReceiveScreen({ addrs, onBack }: { addrs: ReceiveAddrs; onBack: 
           <Card style={st.selector}>
             <ChainIcon chainId={sel.id} size={22} />
             <Text style={st.selectorText}>{sel.name}</Text>
-            <Text style={[st.chev, open && { transform: [{ rotate: "180deg" }] }]}>▾</Text>
+            {open
+              ? <ChevronUpIcon size={14} color={colors.muted} />
+              : <ChevronDownIcon size={14} color={colors.muted} />}
           </Card>
         </Pressable>
         {open && (
@@ -152,7 +156,8 @@ export function ReceiveScreen({ addrs, onBack }: { addrs: ReceiveAddrs; onBack: 
                     <Text style={[st.chainRowText, active && { color: colors.brand2 }, disabled && { color: colors.muted2 }]}>
                       {c.name} ({c.symbol})
                     </Text>
-                    {active && <Text style={{ color: colors.brand2, fontWeight: "700" }}>✓</Text>}
+                    {active && <CheckIcon size={14} color={colors.brand2} />}
+                    {disabled && <Text style={st.chainRowNote}>No mnemonic</Text>}
                   </Pressable>
                 );
               })}
@@ -171,11 +176,31 @@ export function ReceiveScreen({ addrs, onBack }: { addrs: ReceiveAddrs; onBack: 
           <Text style={st.addr} selectable>{address || "—"}</Text>
         </Card>
 
-        <Btn
-          label={copied ? "✓ Copied!" : "Copy Address"}
+        {/* Copy: brand-gradient by default, flipping to a green-tinted
+            outline with a check on success — the extension's two states. */}
+        <Pressable
           onPress={() => { void handleCopy(); }}
-          style={copied ? { opacity: 0.85 } : undefined}
-        />
+          style={({ pressed }) => [st.copyShell, pressed && { transform: [{ scale: 0.98 }] }]}
+        >
+          {copied ? (
+            <View style={[st.copyFill, st.copyFillDone]}>
+              <CheckIcon size={16} color={colors.success} />
+              <Text style={[st.copyText, { color: colors.success }]}>Copied!</Text>
+            </View>
+          ) : (
+            <LinearGradient
+              colors={gradients.brand}
+              locations={gradients.brandLocations}
+              start={{ x: 0.5, y: 0 }}
+              end={{ x: 0.5, y: 1 }}
+              style={st.copyFill}
+            >
+              <CopyIcon size={16} color={colors.onBrand} />
+              <Text style={[st.copyText, { color: colors.onBrand }]}>Copy Address</Text>
+            </LinearGradient>
+          )}
+        </Pressable>
+        {/* Android-only: hands the address to the system share sheet. */}
         <Btn
           label="Share address"
           variant="secondary"
@@ -192,7 +217,20 @@ const st = StyleSheet.create({
 
   selector: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
   selectorText: { color: colors.textPrimary, fontSize: ts.body, fontWeight: "600", flex: 1 },
-  chev: { color: colors.muted, fontSize: 12 },
+
+  copyShell: {
+    width: "100%", marginTop: 12,
+    borderRadius: radius.button, overflow: "hidden",
+    borderWidth: 1, borderColor: colors.overlayBorder,
+  },
+  copyFill: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    paddingVertical: 13,
+  },
+  copyFillDone: {
+    backgroundColor: colors.successTint,
+  },
+  copyText: { fontSize: ts.body, fontWeight: "600" },
 
   chainRow: {
     flexDirection: "row", alignItems: "center", gap: 10,
@@ -200,6 +238,7 @@ const st = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.divider,
   },
   chainRowText: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "500", flex: 1 },
+  chainRowNote: { color: colors.muted, fontSize: ts.label },
   noResults: { color: colors.muted, fontSize: ts.small, textAlign: "center", paddingVertical: 14 },
 
   qrBox: {

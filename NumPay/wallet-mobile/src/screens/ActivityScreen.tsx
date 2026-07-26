@@ -3,12 +3,13 @@
 // logo circle + kind corner badge, pending/failed states, explorer link. The
 // on-chain history merge (core txHistory fetchers) and pending speed-up/cancel
 // follow in a later slice; this one makes every mobile send show up instantly.
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { loadTxLog, loggedToRecords } from "@numpay/core/txLog";
 import { kindOf, type TxKind, type TxRecord } from "@numpay/core/txHistory";
-import { colors, type as ts } from "../ui/theme";
-import { ScreenHeader } from "../ui/components";
+import { colors, radius, type as ts } from "../ui/theme";
+import { EmptyState, ScreenHeader, SkeletonRow } from "../ui/components";
+import { ActivityIcon, ExternalLinkIcon, RefreshIcon, TxKindGlyph } from "../ui/icons";
 import { AssetIcon } from "../ui/coins";
 
 function shortAddr(addr: string): string {
@@ -30,17 +31,21 @@ function timeAgo(ms: number): string {
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-const KIND_META: Record<TxKind, { label: string; color: string; glyph: string }> = {
-  send:    { label: "Send",    color: "#ef4444", glyph: "↗" },
-  receive: { label: "Receive", color: "#22c55e", glyph: "↙" },
-  swap:    { label: "Swap",    color: colors.brand, glyph: "⇄" },
-  bridge:  { label: "Bridge",  color: "#3b82f6", glyph: "→" },
+const KIND_META: Record<TxKind, { label: string; color: string }> = {
+  send:    { label: "Send",    color: "#ef4444" },
+  receive: { label: "Receive", color: "#22c55e" },
+  swap:    { label: "Swap",    color: "#7c6df0" },
+  bridge:  { label: "Bridge",  color: "#3b82f6" },
 };
 
 // RN port of components/TxRow.tsx (extension). Same information hierarchy:
 // kind-coloured label + pending/failed chip, counterparty or from→to subtitle,
 // chain + age + View line, signed amount on the right.
-export function TxRow({ tx, showChain = true }: { tx: TxRecord; showChain?: boolean }) {
+export function TxRow({ tx, showChain = true, size = 36 }: {
+  tx: TxRecord;
+  showChain?: boolean;
+  size?: number;
+}) {
   const kind = kindOf(tx);
   const meta = KIND_META[kind];
   const pending = tx.status === "pending";
@@ -62,34 +67,50 @@ export function TxRow({ tx, showChain = true }: { tx: TxRecord; showChain?: bool
     : tx.counterparty   ? `${kind === "send" ? "To" : "From"} ${shortAddr(tx.counterparty)}`
     : "";
 
+  // Corner badge scales with the disc, same ratio as the extension's TxRow.
+  const badge = Math.max(14, Math.round(size * 0.44));
+
   return (
     <Pressable
       style={st.row}
       onPress={() => { if (tx.explorerUrl) Linking.openURL(tx.explorerUrl).catch(() => {}); }}
     >
-      <View style={{ width: 36, height: 36 }}>
+      <View style={{ width: size, height: size }}>
         <AssetIcon
           symbol={face.symbol} logo={face.logo}
-          chainId={face.chainId} address={face.address} size={36}
+          chainId={face.chainId} address={face.address} size={size}
         />
-        <View style={[st.kindBadge, { backgroundColor: meta.color }]}>
-          <Text style={st.kindGlyph}>{meta.glyph}</Text>
+        <View style={[st.kindBadge, {
+          backgroundColor: meta.color,
+          width: badge, height: badge, borderRadius: badge / 2,
+        }]}>
+          <TxKindGlyph kind={kind} size={Math.round(badge * 0.56)} />
         </View>
       </View>
 
       <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           <Text style={{ color: meta.color, fontSize: ts.row, fontWeight: "600" }}>{meta.label}</Text>
-          {pending && <Text style={st.pendingChip}>● Pending</Text>}
+          {pending && (
+            <View style={st.chipRow}>
+              <View style={st.pendingDot} />
+              <Text style={st.pendingChip}>Pending</Text>
+            </View>
+          )}
           {failed && <Text style={st.failedChip}>Failed</Text>}
         </View>
-        <Text style={st.sub} numberOfLines={1}>
+        <Text style={[st.sub, !subtitle && st.subMissing]} numberOfLines={1}>
           {subtitle || "address unavailable"}
         </Text>
-        <View style={{ flexDirection: "row", gap: 8, marginTop: 2 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 2 }}>
           {showChain && !!tx.chainName && <Text style={st.metaChain}>{tx.chainName}</Text>}
           {tx.timestamp > 0 && <Text style={st.metaDim}>{timeAgo(tx.timestamp)}</Text>}
-          {!!tx.explorerUrl && <Text style={st.metaDim}>View ↗</Text>}
+          {!!tx.explorerUrl && (
+            <View style={st.chipRow}>
+              <ExternalLinkIcon size={9} color={colors.muted2} />
+              <Text style={st.metaDim}>View</Text>
+            </View>
+          )}
         </View>
       </View>
 
@@ -102,26 +123,56 @@ export function TxRow({ tx, showChain = true }: { tx: TxRecord; showChain?: bool
 
 export function ActivityScreen({ owner, onBack }: { owner: string; onBack: () => void }) {
   const [records, setRecords] = useState<TxRecord[] | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!owner) { setRecords([]); return; }
-    let live = true;
-    loadTxLog(owner)
-      .then((logged) => { if (live) setRecords(loggedToRecords(logged)); })
-      .catch(() => { if (live) setRecords([]); });
-    return () => { live = false; };
+    setRefreshing(true);
+    try {
+      setRecords(loggedToRecords(await loadTxLog(owner)));
+    } catch {
+      setRecords([]);
+    } finally {
+      setRefreshing(false);
+    }
   }, [owner]);
+
+  useEffect(() => { void load(); }, [load]);
 
   return (
     <View style={{ flex: 1 }}>
       <ScreenHeader title="Activity" onBack={onBack} />
+
+      {/* Scope + refresh bar (ext parity). Mobile's log is not chain-scoped, so
+          the label is always "All Assets" rather than an active-chain name. */}
+      <View style={st.scopeBar}>
+        <View style={st.chipRow}>
+          <View style={st.scopeDot} />
+          <Text style={st.scopeText}>All Assets</Text>
+        </View>
+        <Pressable
+          hitSlop={8}
+          disabled={refreshing}
+          onPress={() => { void load(); }}
+          style={[st.scopeBtn, refreshing && { opacity: 0.4 }]}
+          accessibilityLabel="Refresh activity"
+        >
+          <RefreshIcon size={13} color={colors.muted} />
+        </Pressable>
+      </View>
+
       <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
-        {records === null && <Text style={st.empty}>Loading…</Text>}
+        {records === null && (
+          <>
+            <SkeletonRow /><SkeletonRow /><SkeletonRow /><SkeletonRow /><SkeletonRow />
+          </>
+        )}
         {records !== null && records.length === 0 && (
-          <Text style={st.empty}>
-            No activity yet. Transactions you send from NumPay on this phone show
-            up here instantly.
-          </Text>
+          <EmptyState
+            icon={<ActivityIcon size={20} color={colors.muted} />}
+            title="No transactions found"
+            hint="Transactions you send from NumPay on this phone show up here instantly."
+          />
         )}
         {records?.map((tx) => (
           <TxRow key={`${tx.chainId}-${tx.hash}`} tx={tx} />
@@ -142,19 +193,30 @@ const st = StyleSheet.create({
   },
   kindBadge: {
     position: "absolute", right: -2, bottom: -2,
-    width: 16, height: 16, borderRadius: 8,
     alignItems: "center", justifyContent: "center",
     borderWidth: 2, borderColor: colors.bg,
   },
-  kindGlyph: { color: "#fff", fontSize: 8, fontWeight: "700" },
+  chipRow: { flexDirection: "row", alignItems: "center", gap: 4 },
+  pendingDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.amber },
   pendingChip: { color: colors.amber, fontSize: 10, fontWeight: "500" },
   failedChip: { color: colors.danger, fontSize: 10, fontWeight: "500" },
   sub: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
-  metaChain: { color: colors.muted, fontSize: 10, fontWeight: "500" },
+  subMissing: { fontStyle: "italic", opacity: 0.6 },
+  // The extension tints the chain name with the brand so it reads as a scope
+  // marker rather than another muted metadata field.
+  metaChain: { color: colors.brand2, fontSize: 10, fontWeight: "500", opacity: 0.7 },
   metaDim: { color: colors.muted2, fontSize: 10 },
   amount: {
     fontSize: ts.row, fontWeight: "600", marginLeft: 8,
     fontVariant: ["tabular-nums"], maxWidth: 140, textAlign: "right",
   },
-  empty: { color: colors.muted, fontSize: ts.row, marginTop: 16, lineHeight: 19 },
+
+  scopeBar: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingTop: 4, paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.divider,
+  },
+  scopeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.brand2 },
+  scopeText: { color: colors.muted, fontSize: 11, fontWeight: "500" },
+  scopeBtn: { padding: 6, borderRadius: radius.iconBtn },
 });

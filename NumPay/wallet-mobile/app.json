@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "wallet-mobile",
+    "name": "NumPay",
     "slug": "wallet-mobile",
     "version": "1.0.0",
     "scheme": "numpay",
@@ -39,7 +39,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "NumPay uses the camera only to scan WalletConnect QR codes.",
+          "cameraPermission": "NumPay uses the camera only to scan QR codes: payment addresses and WalletConnect pairing codes.",
           "recordAudioAndroid": false
         }
       ],

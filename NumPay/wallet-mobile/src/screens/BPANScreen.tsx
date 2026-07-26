@@ -26,6 +26,7 @@ import { getUnlockedMnemonic } from "../vault/mobileVault";
 import type { MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, radius, type as ts } from "../ui/theme";
 import { AlertCard, Btn, Card, Field, ScreenHeader } from "../ui/components";
+import { CheckIcon } from "../ui/icons";
 import { ChainIcon } from "../ui/coins";
 
 type Tab = "my-bpan" | "register" | "mapping" | "lookup";
@@ -374,7 +375,12 @@ function RegisterSection({ owned, requireMnemonic, onRegistered, onGoMapping }: 
         </Pressable>
       </View>
 
-      {available === true && <Text style={st.available}>✓ Available</Text>}
+      {available === true && (
+        <View style={st.availableRow}>
+          <CheckIcon size={12} color={colors.success} />
+          <Text style={st.available}>Available</Text>
+        </View>
+      )}
       {available === false && <Text style={st.error}>Already taken. Try a different number.</Text>}
       {!!error && <Text style={st.error}>{error}</Text>}
       {!!txHash && <TxSuccessRow chain="Register" hash={txHash} />}
@@ -654,7 +660,7 @@ function ChainToggle({ label, sublabel, chainId, on, badge, onPress }: {
 }) {
   return (
     <Pressable onPress={onPress} style={[st.toggleRow, on && st.toggleRowOn]}>
-      <View style={[st.checkbox, on && st.checkboxOn]}>{on && <Text style={st.checkMark}>✓</Text>}</View>
+      <View style={[st.checkbox, on && st.checkboxOn]}>{on && <CheckIcon size={11} color="#fff" />}</View>
       <ChainIcon chainId={chainId} size={18} />
       <View style={{ flex: 1 }}>
         <Text style={[st.toggleLabel, on && { color: colors.brand2 }]}>{label}</Text>
@@ -698,7 +704,7 @@ function TxSuccessRow({ chain, hash }: { chain: string; hash: string }) {
   return (
     <Pressable onPress={() => { Share.share({ message: explorerTxUrl("ethereum", hash) }).catch(() => {}); }}>
       <Card style={st.txRow}>
-        <View style={st.txCheck}><Text style={{ color: colors.success, fontSize: 9 }}>✓</Text></View>
+        <View style={st.txCheck}><CheckIcon size={9} color={colors.success} /></View>
         <Text style={st.txChain} numberOfLines={1}>{chain}</Text>
         <Text style={st.txHash} numberOfLines={1}>{hash.slice(0, 12)}…{hash.slice(-6)}</Text>
       </Card>
@@ -795,6 +801,7 @@ const st = StyleSheet.create({
   mapAddr: { color: colors.textSecondary, fontSize: ts.small, flex: 1, fontVariant: ["tabular-nums"] },
   link: { color: colors.brand2, fontSize: ts.small, fontWeight: "600" },
   error: { color: colors.danger, fontSize: ts.small },
+  availableRow: { flexDirection: "row", alignItems: "center", gap: 5 },
   available: { color: colors.success, fontSize: ts.small, fontWeight: "600" },
   feeLine: { color: colors.brand2, fontSize: ts.small, fontWeight: "600", marginTop: 8 },
   ownerAddr: { color: colors.textPrimary, fontSize: ts.small, marginTop: 4 },
@@ -815,7 +822,6 @@ const st = StyleSheet.create({
   toggleRowOn: { borderColor: colors.brand },
   checkbox: { width: 18, height: 18, borderRadius: 5, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center" },
   checkboxOn: { backgroundColor: colors.brand, borderColor: colors.brand },
-  checkMark: { color: "#fff", fontSize: 11, fontWeight: "700" },
   toggleLabel: { color: colors.textPrimary, fontSize: ts.small, fontWeight: "600" },
   toggleSub: { color: colors.muted, fontSize: ts.label, marginTop: 1 },
   badge: { fontSize: 9, fontWeight: "600", paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.pill, overflow: "hidden" },
