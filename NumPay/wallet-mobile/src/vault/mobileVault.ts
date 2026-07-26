@@ -479,6 +479,74 @@ export async function getActiveMnemonic(): Promise<string | null> {
   return getUnlockedMnemonic();
 }
 
+// ── Re-authentication gates ───────────────────────────────────────────────────
+// Revealing a secret from an ALREADY-UNLOCKED vault must still cost a PIN or a
+// biometric, so an unlocked phone left on a desk cannot hand over the recovery
+// phrase. The extension gates the same reveal behind a password re-entry
+// (Settings.tsx RevealPrompt → decryptVault). These are the mobile equivalent.
+//
+// Deliberately NOT reusing unlockWithPin: that opens a session as a side effect
+// and returns the mnemonic. A gate should answer one question — "is this the
+// person who set the PIN?" — and touch nothing else.
+
+/**
+ * Verifies a PIN against the stored wrap WITHOUT opening or refreshing the
+ * session. Wrong attempts feed the SAME backoff counter as the lock screen, so
+ * a reveal prompt cannot be used as an unthrottled oracle to brute-force the
+ * PIN; a correct one clears it, exactly as unlockWithPin does.
+ *
+ * @throws VaultError "locked" while a backoff window is open, "no-vault" if
+ *         there is nothing to check against.
+ */
+export async function verifyPin(pin: string): Promise<boolean> {
+  const attempts = await readAttempts();
+  const now = Date.now();
+  if (attempts.lockUntil > now) {
+    throw new VaultError(
+      "locked",
+      "Too many attempts. Try again later.",
+      attempts.lockUntil,
+      attempts.fails
+    );
+  }
+
+  const rawWrap = await SecureStore.getItemAsync(SS_PIN_WRAP);
+  if (!rawWrap) throw new VaultError("no-vault", "No vault on this device.");
+  const wrap = JSON.parse(rawWrap) as PinWrap;
+
+  const pinKey = await stretchPin(pin, unb64(wrap.salt));
+  try {
+    gcm(pinKey, unb64(wrap.iv)).decrypt(unb64(wrap.wrapped));
+  } catch {
+    const fails = attempts.fails + 1;
+    const over = fails - FREE_ATTEMPTS;
+    const lockUntil =
+      over >= 0 ? now + BACKOFF_MS[Math.min(over, BACKOFF_MS.length - 1)] : 0;
+    await writeAttempts({ fails, lockUntil });
+    return false;
+  }
+
+  await writeAttempts({ fails: 0, lockUntil: 0 });
+  return true;
+}
+
+/**
+ * Triggers BiometricPrompt and resolves true only if the Keystore released the
+ * auth-gated key. Same gate as unlockWithBiometrics, without opening a session.
+ */
+export async function verifyBiometrics(prompt = "Confirm it's you"): Promise<boolean> {
+  try {
+    const key = await SecureStore.getItemAsync(SS_BIO_KEY, {
+      requireAuthentication: true,
+      authenticationPrompt: prompt,
+    });
+    return !!key;
+  } catch {
+    // Cancelled, failed, or no enrolled biometric — all "not authenticated".
+    return false;
+  }
+}
+
 /**
  * Removes the vault and every key wrap from this device. Only for the explicit
  * "restore from seed phrase" flow (and dev/testing) — there is no undo.
