@@ -9,7 +9,7 @@ import {
 } from "@numpay/core/wallet";
 import { NETWORKS, BPAN_CHAINS } from "@numpay/core/networks";
 import { findOwnedBPANs } from "@numpay/core/bpan";
-import { formatFiat, type Rates } from "@numpay/core/currency";
+import { formatFiat, getErc20UsdPrice, type Rates } from "@numpay/core/currency";
 import { classifyToken } from "@numpay/core/tokenSpam";
 import { loadHiddenTokens, setTokenHidden, tokenHideKey } from "@numpay/core/hiddenTokens";
 
@@ -21,19 +21,9 @@ const SYMBOL_TO_COINGECKO: Record<string, string> = {
   TRX: "tron", XRP: "ripple", LTC: "litecoin",
 };
 
-// ERC-20 token symbol → CoinGecko ID for tokens whose prices are in the rates cache
-const ERC20_TO_COINGECKO: Record<string, string> = {
-  // Stablecoins: tether ≈ $1, used as USD proxy
-  USDC: "tether", USDT: "tether", DAI: "tether", cUSD: "tether",
-  BUSD: "tether", TUSD: "tether",
-  // Wrapped natives — priced via the underlying asset
-  WBTC: "bitcoin", BTCB: "bitcoin",
-  WETH: "ethereum",
-  WAVAX: "avalanche-2",
-  WBNB: "binancecoin",
-  // BEP-20 bridge tokens priced via their underlying
-  XRP: "ripple", ADA: "tether", DOGE: "tether",
-};
+// The ERC-20 symbol → CoinGecko id table used to live here. It now lives in
+// @numpay/core/currency (getErc20UsdPrice) because mobile needs it too, and the
+// private copy was why mobile priced held USDC at $0.
 
 function getConvertedPrice(symbol: string, targetCurrency: string, rates: Rates): number {
   const coinId = SYMBOL_TO_COINGECKO[symbol] || "ethereum";
@@ -54,9 +44,7 @@ function usdToCurrency(usdAmount: number, currencyCode: string, rates: Rates): n
 /** Compute the display-currency value of a raw ERC-20 token balance.
  *  Returns 0 for unknown tokens so the dust filter never incorrectly hides them. */
 function getErc20UsdValue(symbol: string, balance: number, currencyCode: string, rates: Rates): number {
-  const coinId = ERC20_TO_COINGECKO[symbol.toUpperCase()];
-  if (!coinId) return 0; // unknown price — never treat as dust
-  const priceUsd = rates[coinId]?.["usd"] || 0;
+  const priceUsd = getErc20UsdPrice(symbol, rates); // 0 = unknown, never dust
   if (!priceUsd) return 0;
   return usdToCurrency(balance * priceUsd, currencyCode, rates);
 }

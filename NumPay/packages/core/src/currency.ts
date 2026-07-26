@@ -209,12 +209,60 @@ const SYMBOL_TO_COINGECKO: Record<string, string> = {
   METIS: "metis-token",
 };
 
-// Get USD price for a native symbol using live rates.
+// Get USD price for a NATIVE (gas-coin) symbol using live rates.
 // Unknown symbols return 0 — never another coin's price.
+//
+// This map is natives ONLY. For ERC-20s use getErc20UsdPrice below: passing a
+// token symbol here returns 0, which is what silently valued every stablecoin
+// balance at $0 on mobile.
 export function getUsdPrice(networkSymbol: string, rates: Rates): number {
   const coinId = SYMBOL_TO_COINGECKO[networkSymbol];
   if (!coinId) return 0;
   return rates[coinId]?.["usd"] || 0;
+}
+
+/**
+ * Known ERC-20 symbols → the CoinGecko id whose price stands in for them.
+ * Stablecoins ride tether (≈ $1); wrapped assets ride their underlying.
+ *
+ * Shared because BOTH clients need it and a private per-client copy is how the
+ * two drift: this table lived only in the extension's Dashboard.tsx, so mobile
+ * had no ERC-20 price fallback at all and showed held USDC as $0.00.
+ */
+const ERC20_TO_COINGECKO: Record<string, string> = {
+  // Stablecoins: tether ≈ $1, used as a USD proxy
+  USDC: "tether", USDT: "tether", DAI: "tether", CUSD: "tether",
+  BUSD: "tether", TUSD: "tether",
+  // Wrapped natives — priced via the underlying asset
+  WBTC: "bitcoin", BTCB: "bitcoin",
+  WETH: "ethereum",
+  WAVAX: "avalanche-2",
+  WBNB: "binancecoin",
+  // BEP-20 bridge tokens priced via their underlying
+  XRP: "ripple", ADA: "tether", DOGE: "tether",
+};
+
+/**
+ * USD unit price for a known ERC-20 symbol, or 0 when we have no basis for one.
+ *
+ * Returns a PRICE IN USD, deliberately not a display-currency value: callers
+ * convert once at render (formatFiat / usdToDisplayCurrency). Returning display
+ * currency here is the double-convert trap.
+ *
+ * 0 means "unknown price", NOT "worthless" — callers must not treat it as dust.
+ */
+export function getErc20UsdPrice(symbol: string, rates: Rates): number {
+  const coinId = ERC20_TO_COINGECKO[symbol.toUpperCase()];
+  if (!coinId) return 0;
+  return rates[coinId]?.["usd"] || 0;
+}
+
+/**
+ * Best-effort USD unit price for any token symbol: native table first, then the
+ * ERC-20 table. Unknown → 0.
+ */
+export function getAnyUsdPrice(symbol: string, rates: Rates): number {
+  return getUsdPrice(symbol, rates) || getErc20UsdPrice(symbol, rates);
 }
 
 /**
