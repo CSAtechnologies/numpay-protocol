@@ -3,16 +3,20 @@
 // remove, add), Security (lock, reveal recovery phrase), Connections (dApps),
 // and the danger zone. The version row is the hidden developer-tools entry.
 import { useCallback, useEffect, useState } from "react";
-import { Alert, BackHandler, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import {
   listWallets, renameWallet, removeWallet, getActiveMnemonic, setWalletAvatar,
   type WalletMeta,
 } from "../vault/mobileVault";
 import { CURRENCIES } from "@numpay/core/currency";
-import { colors, radius, type as ts } from "../ui/theme";
-import { AlertCard, Btn, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
+import { colors, type as ts } from "../ui/theme";
+import { Notice, Btn, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
+import { ConfirmSheet } from "../ui/Sheet";
+import { SeedPhraseGrid } from "../ui/SeedPhrase";
+import { toast } from "../ui/Toast";
 import {
-  CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, GlobeIcon,
+  CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, CopyIcon, GlobeIcon,
   LayersIcon, LinkIcon, LockIcon, ShieldIcon, SunIcon,
 } from "../ui/icons";
 import { WalletAvatar, EmojiPicker } from "../ui/WalletAvatar";
@@ -102,6 +106,10 @@ export function SettingsScreen({
   // Re-auth gate in front of the reveal (extension parity — see RevealGate).
   const [revealGate, setRevealGate] = useState(false);
   const [confirmWipe, setConfirmWipe] = useState(false);
+  /** Wallet queued for removal, held while its confirm sheet is open. */
+  const [confirmRemove, setConfirmRemove] = useState<WalletMeta | null>(null);
+  /** Seconds left before a revealed phrase hides itself. */
+  const [revealLeft, setRevealLeft] = useState(0);
   const cur = useCurrencyPref();
   const [showCurrency, setShowCurrency] = useState(false);
   const [currencySearch, setCurrencySearch] = useState("");
@@ -115,10 +123,22 @@ export function SettingsScreen({
 
   // A revealed phrase auto-hides after 30 s, like the extension's. The words
   // stay in component state only for that window; nothing persists them.
+  // The countdown is SHOWN, not just enforced. A phrase that vanishes without
+  // warning while it is being copied down is its own small disaster.
   useEffect(() => {
-    if (!revealed) return;
-    const t = setTimeout(() => setRevealed(null), REVEAL_AUTO_HIDE_MS);
-    return () => clearTimeout(t);
+    if (!revealed) { setRevealLeft(0); return; }
+    const until = Date.now() + REVEAL_AUTO_HIDE_MS;
+    setRevealLeft(Math.ceil(REVEAL_AUTO_HIDE_MS / 1000));
+    // Once a second, and derived from `until` rather than counted down, so a
+    // dropped frame cannot make the phrase outstay its window. Faster ticking
+    // would re-render this whole screen (wallet list included) 100+ times for
+    // a number that only changes once a second.
+    const tick = setInterval(() => {
+      const left = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+      setRevealLeft(left);
+      if (left === 0) setRevealed(null);
+    }, 1000);
+    return () => clearInterval(tick);
   }, [revealed]);
 
   // Switching the active wallet while a phrase is on screen would re-render the
@@ -127,18 +147,10 @@ export function SettingsScreen({
   // wallet?.address change).
   useEffect(() => { setRevealed(null); setRevealGate(false); }, [activeWalletId]);
 
-  // Hardware back closes the GATE, not the whole Settings screen. App.tsx's
-  // handler only knows routes, and RN fires the newest listener first, so
-  // returning true here consumes the press before the global one runs. Same
-  // pattern the Swap/Send token pickers use.
-  useEffect(() => {
-    if (!revealGate) return;
-    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      setRevealGate(false);
-      return true;
-    });
-    return () => sub.remove();
-  }, [revealGate]);
+  // Hardware back closes whichever sheet is open rather than the whole Settings
+  // screen. Sheet registers its own handler while it is mounted (and RN fires
+  // the newest listener first), so the gate's back handling lives there now
+  // instead of being duplicated per caller.
 
   const emojiTarget = wallets.find((w) => w.id === emojiTargetId) ?? null;
 
@@ -147,16 +159,9 @@ export function SettingsScreen({
     setRenaming(null); setRenameVal("");
     reload();
   };
-  const doRemove = (m: WalletMeta) => {
-    Alert.alert(
-      `Remove ${m.name}?`,
-      "This deletes the wallet's keys from this phone. You can only restore it from its recovery phrase.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Remove", style: "destructive", onPress: async () => { await removeWallet(m.id); reload(); } },
-      ],
-    );
-  };
+  // Was a native Alert.alert, which is the one dialog in the app that cannot be
+  // styled and looked like it belonged to a different product entirely.
+  const doRemove = (m: WalletMeta) => setConfirmRemove(m);
 
   return (
     <View style={{ flex: 1 }}>
@@ -240,7 +245,7 @@ export function SettingsScreen({
           <Row
             label="Reveal recovery phrase"
             hint="Show the active wallet's 12/24 words. Never share them."
-            icon={<ShieldIcon size={15} color={colors.amber} />}
+            icon={<ShieldIcon size={15} color={colors.caution} />}
             right={revealed ? "Hide" : undefined}
             onPress={() => {
               // Already showing: hide without re-asking. Otherwise gate first —
@@ -253,16 +258,42 @@ export function SettingsScreen({
         </Card>
         {!!revealed && (
           <View style={{ marginTop: 10 }}>
-            <AlertCard
-              tone="amber"
-              title="Active wallet recovery phrase"
-              body="Anyone with these words controls this wallet. Keep them offline. This hides itself in 30 seconds."
-              style={{ marginBottom: 8 }}
+            <Notice
+              tone="caution"
+              title="Anyone with these words owns this wallet"
+              body="Write them down in order and keep them offline. Never type them into a website, an app, or a support chat."
+              icon={<ShieldIcon size={15} color={colors.caution} />}
+              style={{ marginBottom: 10 }}
             />
-            <Card style={{ padding: 14 }}>
-              <Text style={st.mnemonic} selectable>{revealed}</Text>
-            </Card>
-            <Btn label="Hide" variant="secondary" onPress={() => setRevealed(null)} />
+            <SeedPhraseGrid
+              phrase={revealed}
+              // Masked even though the PIN gate just passed: the gate proves WHO
+              // is holding the phone, not who else can see it.
+              covered
+              footer={
+                <View style={st.revealFoot}>
+                  <View style={st.countdown}>
+                    <View style={st.countdownDot} />
+                    <Text style={st.countdownText}>Hides in {revealLeft}s</Text>
+                  </View>
+                  <Pressable
+                    hitSlop={8}
+                    style={({ pressed }) => [st.copyBtn, pressed && { opacity: 0.6 }]}
+                    onPress={() => {
+                      void Clipboard.setStringAsync(revealed);
+                      toast.warn(
+                        "Phrase copied",
+                        "Your clipboard is readable by other apps. Paste it where you need it, then copy something else.",
+                      );
+                    }}
+                  >
+                    <CopyIcon size={13} color={colors.muted} />
+                    <Text style={st.copyText}>Copy</Text>
+                  </Pressable>
+                </View>
+              }
+            />
+            <Btn label="Hide now" variant="secondary" onPress={() => setRevealed(null)} />
           </View>
         )}
 
@@ -352,10 +383,13 @@ export function SettingsScreen({
             Removing the wallet deletes every key from this phone. The recovery
             phrase is the ONLY way back in.
           </Text>
+          {/* Was a tap-once-then-tap-again button, which is a confirmation the
+              user can complete by accident with one impatient double tap. The
+              sheet makes the second act a different act. */}
           <Btn
-            label={confirmWipe ? "Tap again to remove everything" : "Remove all wallets from this device"}
+            label="Remove all wallets from this device"
             variant="danger"
-            onPress={() => (confirmWipe ? onWipe() : setConfirmWipe(true))}
+            onPress={() => setConfirmWipe(true)}
           />
         </Card>
 
@@ -377,18 +411,50 @@ export function SettingsScreen({
 
       {/* Re-auth gate. Rendered OVER the screen so the phrase cannot appear
           behind it, and the mnemonic is read only once it passes. */}
-      {revealGate && (
-        <RevealGate
-          title="Reveal recovery phrase"
-          body="These words control this wallet on any device. Confirm your PIN before they are shown."
-          onCancel={() => setRevealGate(false)}
-          onPass={async () => {
-            setRevealGate(false);
-            const mn = await getActiveMnemonic();
-            if (mn) setRevealed(mn);
-          }}
-        />
-      )}
+      <RevealGate
+        open={revealGate}
+        title="Reveal recovery phrase"
+        body="These words control this wallet on any device. Confirm your PIN before they are shown."
+        onCancel={() => setRevealGate(false)}
+        onPass={async () => {
+          setRevealGate(false);
+          const mn = await getActiveMnemonic();
+          if (mn) setRevealed(mn);
+        }}
+      />
+
+      <ConfirmSheet
+        open={!!confirmRemove}
+        tone="danger"
+        icon={<ShieldIcon size={21} color={colors.dangerText} />}
+        title={`Remove ${confirmRemove?.name ?? "this wallet"}?`}
+        body="This deletes the wallet's keys from this phone. Its recovery phrase is the only way to get it back."
+        confirmLabel="Remove wallet"
+        onClose={() => setConfirmRemove(null)}
+        onConfirm={async () => {
+          const m = confirmRemove;
+          setConfirmRemove(null);
+          if (!m) return;
+          try {
+            await removeWallet(m.id);
+            reload();
+            toast.success("Wallet removed", `${m.name} is no longer on this phone.`);
+          } catch (e) {
+            toast.error("Could not remove wallet", String((e as Error)?.message ?? e));
+          }
+        }}
+      />
+
+      <ConfirmSheet
+        open={confirmWipe}
+        tone="danger"
+        icon={<ShieldIcon size={21} color={colors.dangerText} />}
+        title="Remove everything?"
+        body="Every wallet and every key is deleted from this phone. Without the recovery phrases there is no way back in, and nobody can restore them for you."
+        confirmLabel="Remove everything"
+        onClose={() => setConfirmWipe(false)}
+        onConfirm={() => { setConfirmWipe(false); onWipe(); }}
+      />
     </View>
   );
 }
@@ -436,7 +502,16 @@ const st = StyleSheet.create({
   curCode: { color: colors.muted, fontSize: ts.small },
   curCurrent: { flexDirection: "row", alignItems: "center", gap: 7 },
   curSymMark: { color: colors.brand2, fontSize: 12, fontWeight: "700", textAlign: "center" },
-  mnemonic: { color: colors.textPrimary, fontSize: 15, lineHeight: 24, fontFamily: "monospace" },
+  // Footer under the revealed phrase: countdown on the left, copy on the right.
+  revealFoot: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  countdown: { flexDirection: "row", alignItems: "center", gap: 6 },
+  countdownDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.caution },
+  countdownText: {
+    color: colors.muted, fontSize: ts.small, fontWeight: "600",
+    fontVariant: ["tabular-nums"],
+  },
+  copyBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 2 },
+  copyText: { color: colors.muted, fontSize: ts.small, fontWeight: "600" },
   version: {
     color: colors.muted2, fontSize: ts.label, textAlign: "center",
     paddingVertical: 24, letterSpacing: 0.4,

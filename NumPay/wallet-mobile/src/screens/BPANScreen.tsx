@@ -25,7 +25,7 @@ import { explorerTxUrl } from "@numpay/core/txLog";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import type { MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, radius, type as ts } from "../ui/theme";
-import { AlertCard, Btn, Card, Field, ScreenHeader } from "../ui/components";
+import { Notice, Btn, Card, Field, ScreenHeader } from "../ui/components";
 import { CheckIcon } from "../ui/icons";
 import { ChainIcon } from "../ui/coins";
 

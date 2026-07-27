@@ -2,7 +2,7 @@
 // remaining non-EVM chains follow). Ports the extension Send page's flow and
 // safety rails: BPAN quorum resolution with the trust-on-first-use changed-
 // mapping acknowledgement (H-03), chain-format validation of resolved
-// addresses, the fee-reserve MAX rule, titled AlertCard failure states from
+// addresses, the fee-reserve MAX rule, titled Notice failure states from
 // core/sendErrors, and the TxResultOverlay. ENS/SNS name resolution is not in
 // this slice.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -31,7 +31,7 @@ import {
 } from "../wallet/send";
 import type { MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, radius, type as ts } from "../ui/theme";
-import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SendErrorCard } from "../ui/components";
+import { Notice, Btn, Chip, Card, Field, ScreenHeader, SendErrorCard } from "../ui/components";
 import { useCurrencyPref, formatFiatLine, formatFeeTail } from "../ui/currency";
 import { AssetIcon, ChainIcon } from "../ui/coins";
 import { ScanIcon, SearchIcon, XIcon } from "../ui/icons";
@@ -478,7 +478,9 @@ export function SendScreen({
           : await sendNonEvmNative(mnemonic, chainId, destinationAddress, amount);
       setTxHash(hash);
       setTxFx("success");
-      w.refresh();
+      // Sending a token's whole balance away has to clear its row, and that
+      // depends on an indexer that trails the block — re-check as it catches up.
+      w.refreshAfterTx();
     } catch (e: any) {
       setError(friendlyTxError(e?.reason || e?.message || "Transaction failed"));
       setTxFx("error");
@@ -657,8 +659,8 @@ export function SendScreen({
         {/* Changed-mapping acknowledgement (H-03) */}
         {bpanChange && (
           <View style={{ marginTop: 10 }}>
-            <AlertCard
-              tone="amber"
+            <Notice
+              tone="caution"
               title="Address Changed"
               body={
                 `This BPAN's ${chainName} address changed since you last used it.\n\n` +

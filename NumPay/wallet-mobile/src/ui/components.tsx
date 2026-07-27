@@ -15,7 +15,8 @@ import Svg, {
 } from "react-native-svg";
 import type { SendErrorView } from "@numpay/core/sendErrors";
 import { activeTheme, colors, gradients, radius, type as ts } from "./theme";
-import { AlertIcon, ArrowLeftIcon } from "./icons";
+import { noticeTone, type NoticeToneInput } from "./notice";
+import { AlertIcon, ArrowLeftIcon, CheckIcon } from "./icons";
 
 // ── Buttons (.btn-primary-premium / .btn-secondary + danger tone) ────────────
 export function Btn({
@@ -224,8 +225,12 @@ export function SectionLabel({ text, style }: { text: string; style?: StyleProp<
 // tracking-tight title, and the brand gradient hairline that fades out at both
 // ends. `right` takes the trailing action the extension puts on some pages
 // (explorer link, refresh).
-export function ScreenHeader({ title, onBack, right }: {
+// `subtitle` is the small line the extension puts under a page title when the
+// page needs to name who is doing the work (Swap: "Powered by LI.FI"). It
+// stacks inside the same 50px bar rather than adding a second row.
+export function ScreenHeader({ title, subtitle, onBack, right }: {
   title: string;
+  subtitle?: string;
   onBack?: () => void;
   right?: ReactNode;
 }) {
@@ -242,7 +247,14 @@ export function ScreenHeader({ title, onBack, right }: {
           <ArrowLeftIcon size={16} color={colors.muted} />
         </Pressable>
       )}
-      <Text style={st.headerTitle} numberOfLines={1}>{title}</Text>
+      {subtitle ? (
+        <View style={{ flexShrink: 1 }}>
+          <Text style={st.headerTitle} numberOfLines={1}>{title}</Text>
+          <Text style={st.headerSubtitle} numberOfLines={1}>{subtitle}</Text>
+        </View>
+      ) : (
+        <Text style={st.headerTitle} numberOfLines={1}>{title}</Text>
+      )}
       {right != null && <View style={{ marginLeft: "auto" }}>{right}</View>}
       <View style={st.headerRule} pointerEvents="none">
         <LinearGradient
@@ -381,75 +393,100 @@ export function EmptyState({ icon, title, hint, style }: {
   );
 }
 
-// ── AlertCard — RN port of components/AlertCard.tsx ──────────────────────────
-// Titled hairline + icon tile, plain-language body, optional hint row,
-// optional Required/Available figure tiles, optional "funds are safe" line.
-export interface AlertCardProps {
+// ── Notice — the inline message panel ────────────────────────────────────────
+//
+// Replaces the old AlertCard, which was a white card with a saturated 2px
+// colour bar welded across the top and a full-strength amber title. Two things
+// were wrong with it. The bar is a decoration that carries no information the
+// icon does not already carry, and it dominated the card. And #f59e0b title
+// text on white measured ~2.2:1, so the most urgent copy in the app was also
+// the hardest to read.
+//
+// Now it is one tinted panel: the tone fills the surface softly and colours the
+// icon and title, and the border is the same hue at low alpha so the panel has
+// an edge without a hard rule. Body copy stays neutral — colouring the whole
+// message is what made these read as browser warning bars.
+//
+// A Notice is for something the user may need to ACT on, and it stays until it
+// is resolved. Transient failures belong in a toast (see Toast.tsx); anything
+// needing an answer belongs in a Sheet.
+export interface NoticeProps {
   title: string;
   body: string;
   hint?: string;
-  tone?: "danger" | "amber";
+  tone?: NoticeToneInput;
+  /** Optional Required/Available tiles (e.g. a fee shortfall). */
   figures?: { required: string; available: string; unit: string };
+  /** Show the "nothing was sent" reassurance line. */
   safe?: boolean;
+  /** Leading glyph. Defaults to the alert triangle. */
+  icon?: ReactNode;
+  /** Compact variant: no icon tile, tighter padding. For dense screens. */
+  dense?: boolean;
   style?: StyleProp<ViewStyle>;
 }
 
-export function AlertCard({
-  title, body, hint, tone = "danger", figures, safe, style,
-}: AlertCardProps) {
-  const color = tone === "danger" ? colors.danger : colors.amber;
-  const iconBg = tone === "danger" ? colors.dangerTint : colors.amberTint;
+export function Notice({
+  title, body, hint, tone = "danger", figures, safe, icon, dense, style,
+}: NoticeProps) {
+  const t = noticeTone(tone);
   return (
-    <Card style={[{ overflow: "hidden" }, style]}>
-      <View style={{ height: 2, backgroundColor: color, opacity: 0.55 }} />
-      <View style={{ padding: 14 }}>
-        <View style={{ flexDirection: "row", gap: 12 }}>
-          <View style={[st.alertIconTile, { backgroundColor: iconBg }]}>
-            <AlertIcon size={17} color={color} />
+    <View
+      style={[
+        st.notice,
+        { backgroundColor: t.tint, borderColor: t.line },
+        dense && { padding: 11 },
+        style,
+      ]}
+    >
+      <View style={{ flexDirection: "row", gap: 11 }}>
+        {!dense && (
+          <View style={[st.noticeIcon, { borderColor: t.line }]}>
+            {icon ?? <AlertIcon size={15} color={t.fg} />}
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ color, fontSize: 13, fontWeight: "700", marginBottom: 2 }}>{title}</Text>
-            <Text style={{ color: colors.textSecondary, fontSize: 11, lineHeight: 16 }}>{body}</Text>
-          </View>
+        )}
+        <View style={{ flex: 1 }}>
+          <Text style={[st.noticeTitle, { color: t.fg }]}>{title}</Text>
+          <Text style={st.noticeBody}>{body}</Text>
         </View>
-        {figures && (
-          <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
-            <View style={st.figureTile}>
-              <Text style={st.figureLabel}>REQUIRED</Text>
-              <Text style={st.figureValue}>
-                ~{figures.required} <Text style={st.figureUnit}>{figures.unit}</Text>
-              </Text>
-            </View>
-            <View style={st.figureTile}>
-              <Text style={st.figureLabel}>AVAILABLE</Text>
-              <Text style={[st.figureValue, { color }]}>
-                {figures.available} <Text style={st.figureUnit}>{figures.unit}</Text>
-              </Text>
-            </View>
-          </View>
-        )}
-        {hint && (
-          <View style={st.hintBox}>
-            <Text style={{ color: colors.muted, fontSize: 10.5, lineHeight: 15 }}>{hint}</Text>
-          </View>
-        )}
-        {safe && (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 12 }}>
-            <Text style={{ color: colors.success, fontSize: 11 }}>{"✓"}</Text>
-            <Text style={{ color: colors.success, fontSize: 10, fontWeight: "500" }}>
-              Nothing was sent. Your funds are safe.
+      </View>
+      {figures && (
+        <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
+          <View style={st.figureTile}>
+            <Text style={st.figureLabel}>REQUIRED</Text>
+            <Text style={st.figureValue}>
+              ~{figures.required} <Text style={st.figureUnit}>{figures.unit}</Text>
             </Text>
           </View>
-        )}
-      </View>
-    </Card>
+          <View style={st.figureTile}>
+            <Text style={st.figureLabel}>AVAILABLE</Text>
+            <Text style={[st.figureValue, { color: t.fg }]}>
+              {figures.available} <Text style={st.figureUnit}>{figures.unit}</Text>
+            </Text>
+          </View>
+        </View>
+      )}
+      {hint && (
+        <View style={[st.hintBox, { borderColor: t.line }]}>
+          <Text style={{ color: colors.muted, fontSize: 10.5, lineHeight: 15 }}>{hint}</Text>
+        </View>
+      )}
+      {safe && (
+        <View style={st.safeRow}>
+          <CheckIcon size={12} color={colors.successText} />
+          <Text style={st.safeText}>Nothing was sent. Your funds are safe.</Text>
+        </View>
+      )}
+    </View>
   );
 }
 
-// Render a parsed SendErrorView (from @numpay/core/sendErrors).
+// Render a parsed SendErrorView (from @numpay/core/sendErrors). Core still
+// spells the caution tone "amber" because that type is shared with the
+// extension; noticeTone() accepts both spellings so this needs no translation.
 export function SendErrorCard({ view, style }: { view: SendErrorView; style?: StyleProp<ViewStyle> }) {
   return (
-    <AlertCard
+    <Notice
       title={view.title} body={view.body} hint={view.hint}
       tone={view.tone} safe={view.safe} style={style}
     />
@@ -561,6 +598,11 @@ const st = StyleSheet.create({
     letterSpacing: -0.2,
     flexShrink: 1,
   },
+  headerSubtitle: {
+    color: colors.muted,
+    fontSize: 10,
+    marginTop: 1,
+  },
   // The gradient separator under Layout's header bar.
   headerRule: { position: "absolute", left: 0, right: 0, bottom: 0, height: 1 },
   // Ghost back button: no fill or border until pressed (Layout's hover state).
@@ -599,23 +641,36 @@ const st = StyleSheet.create({
     textAlign: "center", paddingHorizontal: 24, lineHeight: 16,
   },
 
-  alertIconTile: {
-    width: 36, height: 36, borderRadius: radius.tile,
-    alignItems: "center", justifyContent: "center", flexShrink: 0,
+  notice: {
+    borderRadius: radius.card,
+    borderWidth: 1,
+    padding: 14,
   },
+  // The tile reads against the panel's own tint, so it carries only a hairline
+  // rather than a second, heavier fill of the same hue.
+  noticeIcon: {
+    width: 32, height: 32, borderRadius: 11,
+    borderWidth: 1,
+    alignItems: "center", justifyContent: "center", flexShrink: 0,
+    backgroundColor: colors.card,
+  },
+  noticeTitle: { fontSize: 13, fontWeight: "700", marginBottom: 3, letterSpacing: -0.1 },
+  noticeBody: { color: colors.textSecondary, fontSize: 11.5, lineHeight: 17 },
+
   figureTile: {
     flex: 1, borderRadius: radius.tile,
-    backgroundColor: colors.surface3, paddingHorizontal: 12, paddingVertical: 8,
+    backgroundColor: colors.card, paddingHorizontal: 12, paddingVertical: 8,
   },
   hintBox: {
     marginTop: 12,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: radius.tile,
-    backgroundColor: colors.surface1,
+    backgroundColor: colors.card,
     borderWidth: 1,
-    borderColor: colors.border,
   },
+  safeRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 12 },
+  safeText: { color: colors.successText, fontSize: 10.5, fontWeight: "600" },
   figureLabel: { fontSize: 9, letterSpacing: 1, color: colors.muted, marginBottom: 2 },
   figureValue: { fontSize: 13, fontWeight: "700", color: colors.textPrimary, fontVariant: ["tabular-nums"] },
   figureUnit: { fontSize: 10, color: colors.muted, fontWeight: "600" },

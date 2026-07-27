@@ -18,7 +18,7 @@ import {
   detectEvmToken, detectSolanaToken, detectErrorMessage, type TokenPreview,
 } from "../wallet/tokenDetect";
 import { colors, radius, type as ts } from "../ui/theme";
-import { AlertCard, Btn, Card, Field, ScreenHeader } from "../ui/components";
+import { Notice, Btn, Card, Field, ScreenHeader } from "../ui/components";
 import { XIcon } from "../ui/icons";
 import { ChainIcon, TokenIcon } from "../ui/coins";
 
@@ -348,8 +348,8 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
             <Text style={st.blurb}>
               Add any EVM-compatible network. Paste the RPC URL, then tap Detect to fill the Chain ID automatically.
             </Text>
-            <AlertCard
-              tone="amber"
+            <Notice
+              tone="caution"
               title="Only add RPC endpoints you trust"
               body="A malicious RPC can report fake balances, gas, and transaction results. Use https:// URLs."
               style={{ marginBottom: 4 }}

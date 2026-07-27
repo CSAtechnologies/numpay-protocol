@@ -26,7 +26,7 @@ import type { AssetRow, MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, radius, type as ts } from "../ui/theme";
 import { LinearGradient } from "expo-linear-gradient";
 import {
-  AlertCard, Card, EmptyState, GradientNumber, SectionLabel, SkeletonRow,
+  Notice, Card, EmptyState, GradientNumber, SectionLabel, SkeletonRow,
 } from "../ui/components";
 import {
   ActivityIcon, AlertIcon, ArrowLeftIcon, ExternalLinkIcon, ReceiveIcon,
@@ -239,7 +239,7 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
         text: `Unwrapped ${sol.toLocaleString(undefined, { maximumFractionDigits: 6 })} SOL to your native balance.`,
         sig: res.signature,
       });
-      w.refresh();
+      w.refreshAfterTx();
     } catch (e: any) {
       setUnwrapMsg({ ok: false, text: e?.message || "Unwrap failed. Try again." });
     } finally {
@@ -293,7 +293,7 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
         {/* Risk / spam warning */}
         {risks.length > 0 && (
           <View style={st.riskBox}>
-            <AlertIcon size={16} color={colors.amber} />
+            <AlertIcon size={16} color={colors.caution} />
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={st.riskTitle}>Caution: this token has risk signals</Text>
               {risks.map((r) => (
@@ -450,7 +450,7 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
           </View>
         )}
         {!!error && (
-          <AlertCard tone="danger" title="Action failed" body={error} style={{ marginTop: 10 }} />
+          <Notice tone="danger" title="Action failed" body={error} style={{ marginTop: 10 }} />
         )}
 
         {/* Market stats */}
@@ -529,9 +529,9 @@ const st = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 10,
     borderRadius: radius.tile, marginBottom: 12,
     borderWidth: 1, borderColor: "rgba(245,158,11,0.4)",
-    backgroundColor: colors.amberTint,
+    backgroundColor: colors.cautionTint,
   },
-  riskTitle: { color: colors.amber, fontSize: 12, fontWeight: "600" },
+  riskTitle: { color: colors.caution, fontSize: 12, fontWeight: "600" },
   riskItem: { color: colors.muted, fontSize: ts.small, marginTop: 2, lineHeight: 15 },
   riskNote: { color: colors.muted2, fontSize: ts.label, marginTop: 5, lineHeight: 14 },
 

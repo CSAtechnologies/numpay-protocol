@@ -9,17 +9,28 @@
 // that IS the wallet, on every device forever — is worth its own proof. An
 // unlocked phone on a desk must not be enough.
 //
+// Presented as a Sheet rather than a full-screen takeover. It used to replace
+// the whole Settings page and open with an amber warning card, which read as
+// "something has gone wrong" when in fact nothing had: the user asked for this
+// and is being asked to confirm. A sheet over the page they were on says that
+// much more honestly, and keeps the context they came from visible behind it.
+//
 // The gate never sees the secret. It reports success and the caller fetches.
 import { useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import {
   VaultError, getStatus, verifyBiometrics, verifyPin,
 } from "../vault/mobileVault";
-import { colors, spacing, type as ts } from "./theme";
-import { AlertCard, ScreenHeader } from "./components";
+import { colors, type as ts } from "./theme";
+import { Sheet } from "./Sheet";
+import { Notice } from "./components";
+import { ShieldIcon } from "./icons";
 import { PinPad } from "./PinPad";
 
-export function RevealGate({ title, body, onPass, onCancel }: {
+export function RevealGate({ open, title, body, onPass, onCancel }: {
+  /** Kept MOUNTED and toggled, so the sheet can animate out on cancel rather
+   *  than blinking away the instant the parent stops rendering it. */
+  open: boolean;
   /** What is about to be revealed, e.g. "Reveal recovery phrase". */
   title: string;
   /** One line on why this is sensitive. */
@@ -38,7 +49,11 @@ export function RevealGate({ title, body, onPass, onCancel }: {
   const live = useRef(true);
   useEffect(() => () => { live.current = false; }, []);
 
+  // Re-read on every OPEN, not once on mount: the gate now outlives a single
+  // use, and a lockout earned on the previous attempt has to be reflected the
+  // next time it opens.
   useEffect(() => {
+    if (!open) { setError(""); return; }
     getStatus()
       .then((s) => {
         if (!live.current) return;
@@ -46,7 +61,7 @@ export function RevealGate({ title, body, onPass, onCancel }: {
         setLockUntil(s.lockUntil);
       })
       .catch(() => {});
-  }, []);
+  }, [open]);
 
   // Drives the lockout countdown, same as the cold lock screen's.
   useEffect(() => {
@@ -99,19 +114,29 @@ export function RevealGate({ title, body, onPass, onCancel }: {
   };
 
   return (
-    <View style={st.overlay}>
-      <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-        <ScreenHeader title={title} onBack={onCancel} />
-        <AlertCard tone="amber" title="Confirm it's you" body={body} style={{ marginBottom: 14 }} />
-        {lockedFor > 0 ? (
-          <AlertCard
-            tone="danger"
-            title="Locked out"
-            body={`Too many attempts. Try again in ${
-              lockedFor >= 60 ? `${Math.ceil(lockedFor / 60)} min` : `${lockedFor} s`
-            }.`}
-          />
-        ) : (
+    <Sheet
+      open={open}
+      onClose={onCancel}
+      // "Confirm it's you" is the ASK, so it is the sheet's title rather than
+      // the headline of a warning card sitting under a page header.
+      title="Confirm it's you"
+      body={body}
+      tone="caution"
+      icon={<ShieldIcon size={21} color={colors.caution} />}
+    >
+      <Text style={st.what}>{title}</Text>
+
+      {lockedFor > 0 ? (
+        <Notice
+          tone="danger"
+          title="Locked out"
+          body={`Too many attempts. Try again in ${
+            lockedFor >= 60 ? `${Math.ceil(lockedFor / 60)} min` : `${lockedFor} s`
+          }.`}
+          style={{ marginTop: 14 }}
+        />
+      ) : (
+        <View style={{ marginTop: 6 }}>
           <PinPad
             onComplete={(pin) => { void submitPin(pin); }}
             onChangeLength={() => setError("")}
@@ -120,26 +145,32 @@ export function RevealGate({ title, body, onPass, onCancel }: {
             showBiometrics={bioEnabled}
             onBiometrics={() => { void submitBio(); }}
           />
-        )}
+        </View>
+      )}
+
+      {/* Reserved height, so a wrong PIN colours a line already in the layout
+          instead of growing the sheet under the user's thumb mid-retry. */}
+      <View style={st.errSlot}>
         {!!error && <Text style={st.err}>{error}</Text>}
-        <Pressable onPress={onCancel} hitSlop={8} style={st.cancel}>
-          <Text style={st.cancelText}>Cancel</Text>
-        </Pressable>
-      </ScrollView>
-    </View>
+      </View>
+
+      <Pressable onPress={onCancel} hitSlop={8} style={st.cancel} accessibilityRole="button">
+        <Text style={st.cancelText}>Cancel</Text>
+      </Pressable>
+    </Sheet>
   );
 }
 
 const st = StyleSheet.create({
-  overlay: {
-    position: "absolute",
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: colors.bg,
-    paddingTop: 56,
-    paddingHorizontal: spacing.screen,
-    zIndex: 20,
+  what: {
+    color: colors.muted,
+    fontSize: ts.small,
+    fontWeight: "600",
+    letterSpacing: 0.3,
+    marginTop: 14,
   },
-  err: { color: colors.danger, fontSize: ts.body, marginTop: 10, textAlign: "center" },
-  cancel: { alignSelf: "center", paddingVertical: 18 },
-  cancelText: { color: colors.muted, fontSize: ts.body, fontWeight: "500" },
+  errSlot: { minHeight: 22, justifyContent: "center" },
+  err: { color: colors.dangerText, fontSize: ts.body, textAlign: "center", fontWeight: "600" },
+  cancel: { alignSelf: "center", paddingVertical: 10, paddingHorizontal: 24 },
+  cancelText: { color: colors.muted, fontSize: ts.body, fontWeight: "600" },
 });

@@ -38,6 +38,32 @@ export interface Palette {
   dangerTint: string;
   amber: string;
   amberTint: string;
+  /** ── Notice tones ────────────────────────────────────────────────────────
+   *  Each tone is a TRIPLE: a text/icon colour, a panel fill and a hairline.
+   *  Notices are soft tinted panels now, so a tone needs all three to stay
+   *  legible; picking a fill without its matching line is what made the old
+   *  amber card look pasted on.
+   *
+   *  `caution` is deliberately NOT `amber`. Raw #f59e0b next to the lilac
+   *  palette read as a browser warning bar, and at 13px bold on white it
+   *  cleared only ~2.2:1. This is the same hue pulled down in lightness until
+   *  it belongs to the palette and passes AA. `amber` survives for the places
+   *  that want a signal DOT or chip rather than a text colour (pending tx). */
+  caution: string;
+  cautionTint: string;
+  cautionLine: string;
+  /** Danger/success as TEXT. The base `danger`/`success` are tuned as icon and
+   *  accent fills; on a white card they are too light for small bold type, so
+   *  titles use these instead. */
+  dangerText: string;
+  dangerLine: string;
+  successText: string;
+  successLine: string;
+  /** Brand-toned notice (the neutral "for your information" panel). */
+  brandLine: string;
+  /** Bottom-sheet fill and its grab handle. */
+  sheet: string;
+  sheetHandle: string;
   coinDisc: string;
   /** Hairline between rows (.token-row / .m-act-row border-bottom). */
   divider: string;
@@ -82,6 +108,20 @@ const dark: Palette = {
   dangerTint: "rgba(248, 113, 113, 0.12)",
   amber: "#fbbf24",
   amberTint: "rgba(251, 191, 36, 0.12)",
+  // Dark theme reverses the problem: the text has to be LIGHTER than the
+  // panel, so caution warms up rather than deepens.
+  caution: "#e9a53f",
+  cautionTint: "rgba(233, 165, 63, 0.12)",
+  cautionLine: "rgba(233, 165, 63, 0.24)",
+  dangerText: "#f87171",
+  dangerLine: "rgba(248, 113, 113, 0.24)",
+  successText: "#34d399",
+  successLine: "rgba(52, 211, 153, 0.24)",
+  brandLine: "rgba(124, 109, 240, 0.26)",
+  // A sheet sits ON the scrim, so it steps one surface above the page rather
+  // than matching it — that edge is what separates it from the dimmed content.
+  sheet: "#181530",
+  sheetHandle: "rgba(255, 255, 255, 0.22)",
   coinDisc: "#1b1830", // .coin house disc backing
   divider: "rgba(42, 36, 80, 0.7)",
   navBg: "rgba(17, 15, 30, 0.96)",
@@ -124,6 +164,25 @@ const light: Palette = {
   dangerTint: "rgba(239, 68, 68, 0.10)",
   amber: "#f59e0b",
   amberTint: "rgba(245, 158, 11, 0.12)",
+  // Measured, not eyeballed. A notice title is 13px bold, which WCAG does NOT
+  // count as large text, so it needs the full 4.5:1 against the surface it
+  // actually sits on — the tinted panel, not the white card behind it.
+  //   #f59e0b (the old amber): 2.15:1 on white. Worst contrast in the app.
+  //   #a1620a: 4.92:1 on white but only 4.25:1 on the panel. Still short.
+  //   #95590a: 4.89:1 on the panel, 5.66:1 on white. Passes on both.
+  caution: "#95590a",
+  cautionTint: "rgba(180, 120, 20, 0.09)",
+  cautionLine: "rgba(180, 120, 20, 0.22)",
+  // #ef4444 on white is ~3.8:1 — fine for an icon, short of AA for 13px bold.
+  dangerText: "#c81e1e",
+  dangerLine: "rgba(239, 68, 68, 0.22)",
+  successText: "#047857",
+  successLine: "rgba(16, 185, 129, 0.22)",
+  brandLine: "rgba(124, 109, 240, 0.22)",
+  // Pure white against the off-white page (#faf9ff), so the sheet edge is
+  // legible without a heavy border.
+  sheet: "#ffffff",
+  sheetHandle: "rgba(18, 16, 30, 0.16)",
   coinDisc: "#f4f2ff",
   divider: "rgba(124, 109, 240, 0.12)",
   navBg: "rgba(255, 255, 255, 0.96)",
@@ -154,7 +213,16 @@ export const radius = {
   tile: 12,
   iconBtn: 10,
   pill: 999,
+  /** Bottom sheet top corners. Deliberately larger than a card: the generous
+   *  curve is most of what makes a sheet read as a sheet and not as a panel
+   *  that happens to be stuck to the bottom of the screen. */
+  sheet: 28,
 } as const;
+
+/** Bottom padding inside a sheet, clearing the gesture bar. The app ships no
+ *  safe-area library (see BottomNav, which hardcodes its own offsets), so this
+ *  is the one place the inset is defined instead of guessed per sheet. */
+export const SHEET_BOTTOM_INSET = 28;
 
 // Type scale as used across the popup (px values map 1:1 to RN dp).
 export const type = {

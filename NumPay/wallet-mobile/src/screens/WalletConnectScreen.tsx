@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { colors, radius, type as ts } from "../ui/theme";
-import { AlertCard, Btn, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
+import { Notice, Btn, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
 import { hasProjectId } from "../walletconnect/config";
 import { disconnectSession, pair } from "../walletconnect/client";
 import {
@@ -107,8 +107,8 @@ export function WalletConnectScreen({ onBack }: { onBack: () => void }) {
       <ScreenHeader title="Connected dApps" onBack={onBack} />
       <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
         {!configured && (
-          <AlertCard
-            tone="amber"
+          <Notice
+            tone="caution"
             title="WalletConnect not configured"
             body="This build has no WALLETCONNECT_PROJECT_ID (polyfills.ts). Pairing is disabled until one is set."
             style={{ marginBottom: 12 }}

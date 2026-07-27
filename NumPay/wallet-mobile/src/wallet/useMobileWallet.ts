@@ -37,6 +37,9 @@ import { sweepEvmNativeBalances, type ChainBalance } from "@numpay/core/balanceS
 import { sweepAllChainTokens, type AutoToken } from "@numpay/core/autoTokens";
 import { fetchRates, getAnyUsdPrice, getUsdPrice, type Rates } from "@numpay/core/currency";
 import { loadHiddenTokens, setTokenHidden, tokenHideKey } from "@numpay/core/hiddenTokens";
+import { loadPinnedAssets, setAssetPinned } from "@numpay/core/pinnedAssets";
+import { homeSection } from "./assetVisibility";
+import { clearBalanceSnapshot, loadBalanceSnapshot, saveBalanceSnapshot } from "./balanceCache";
 import { classifyToken } from "@numpay/core/tokenSpam";
 import { chainNameOf } from "@numpay/core/txLog";
 import { getOwnedBPANCount, findOwnedBPANs } from "@numpay/core/bpan";
@@ -44,7 +47,8 @@ import { getItem, setItem } from "@numpay/core/storage";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import { savePublicAddresses } from "../notify/receiveWatch";
 
-const DUST_USD = 0.01; // same cutoff as the extension dashboard (tokens only)
+// The home/hidden/drop rule (and the dust cutoff and default-five list behind
+// it) lives in ./assetVisibility so it can be read and tested on its own.
 
 // Zero-balance display order for the natives list: the majors a wallet user
 // expects to see first, then everything else in sweep order.
@@ -95,10 +99,11 @@ export interface MobileWalletState {
   /** First owned BPAN (raw 11 digits), "" when none / not yet known. */
   bpan: string;
   rows: AssetRow[];
-  /** Dust + user-hidden token rows, for the dashboard's collapsible "Hidden"
-   *  section (extension parity). Never contains natives: majors always show. */
+  /** Everything kept off the home list: dust, spam, user-hidden tokens, and the
+   *  zero-balance natives outside the default five. Feeds the dashboard's
+   *  collapsible "Hidden (n)" section, where any of them can be added back. */
   dustRows: AssetRow[];
-  /** Hide/unhide a token row by hand. No-op for natives. */
+  /** Remove a row from the home list, or add it back. Works on natives too. */
   setRowHidden: (row: AssetRow, hidden: boolean) => Promise<void>;
   chainIds: string[]; // chains with anything to show, dashboard filter chips
   /** Raw discovered tokens per chain (address/decimals intact) for pickers.
@@ -111,7 +116,15 @@ export interface MobileWalletState {
   rates: Rates | null;
   loading: boolean;
   error: string;
-  refresh: () => void;
+  /** `force` skips the token sweep's 3-minute freshness gate. Pass it whenever
+   *  the user asked for the truth (pull-to-refresh, the refresh button) — a
+   *  plain refresh inside the window re-paints the cache and looks frozen. */
+  refresh: (force?: boolean) => void;
+  /** Re-check after a send/swap of our own. The native balances are right
+   *  immediately (they come off the RPC), but ERC-20 discovery runs through an
+   *  indexer that lags the block, so one refresh at t=0 would just re-cache the
+   *  pre-swap balance. This re-checks as the indexer catches up. */
+  refreshAfterTx: () => void;
   /** Re-read user-added tokens/networks from storage without a full sweep. */
   reloadCustom: () => Promise<void>;
 }
@@ -122,6 +135,7 @@ export interface MobileWalletState {
 function tokenRows(
   byChain: Record<string, AutoToken[]>,
   hidden: Set<string>,
+  pinned: Set<string>,
   rates: Rates | null
 ): { rows: AssetRow[]; dust: AssetRow[] } {
   const rows: AssetRow[] = [];
@@ -151,23 +165,16 @@ function tokenRows(
         securityScore: t.securityScore,
         verifiedContract: t.verifiedContract,
       });
-      if (hidden.has(tokenHideKey(chainId, t.address))) {
-        if (bal > 0) dust.push(mkRow(true));
-        continue;
-      }
-      if (classifyToken(t).hidden) {
-        if (bal > 0) dust.push(mkRow(false));
-        continue;
-      }
-      if (bal <= 0) continue;
-      const usd = price * bal;
-      // Extension-parity dust rule: only a PRICED-but-negligible balance is
-      // dust. An unpriced balance is money we can't value yet, not dust —
-      // treating price-unknown as $0 made every received token the indexer
-      // couldn't price (fresh memecoins, RWA, long-tail stables) invisible,
-      // while the extension deliberately keeps them ("unknown price — never
-      // treat as dust", Dashboard.tsx). Spam still filters via classifyToken.
-      if (usd > 0 && usd < DUST_USD) { dust.push(mkRow(false)); continue; }
+      const hideKey = tokenHideKey(chainId, t.address);
+      const section = homeSection({
+        chainId, isNative: false, address: t.address,
+        balanceNum: bal, usdValue: price * bal,
+        spam: classifyToken(t).hidden,
+      }, hidden, pinned);
+      if (section === "drop") continue;
+      // manualHidden marks the row as the USER's call rather than a rule's,
+      // which is what TokenDetail reads to word its caution banner.
+      if (section === "hidden") { dust.push(mkRow(hidden.has(hideKey))); continue; }
       rows.push(mkRow());
     }
   }
@@ -248,6 +255,10 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
   const [customNets, setCustomNets] = useState<Record<string, Network>>({});
   const [customBal, setCustomBal] = useState<Record<string, string>>({});
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  // Rows the user put on the home list by hand. Kept separate from `hidden`
+  // rather than inverted out of it — see pinnedAssets.ts for why the two are
+  // not the same question.
+  const [pinned, setPinned] = useState<Set<string>>(new Set());
   const [rates, setRates] = useState<Rates | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -265,8 +276,17 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
   // real balance as 0 (observed on-device 2026-07-13).
   const prevEvmByChain = useRef(new Map<string, ChainBalance>());
   const prevNonEvm = useRef<NonEvmChain[] | undefined>(undefined);
+  // The disk snapshot is read once per unlock. Re-reading it after the first
+  // live sweep would paint older numbers over newer ones.
+  const hydratedRef = useRef(false);
+  // Pending post-tx re-checks, so a lock or an unmount cancels them.
+  const txRecheck = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const clearTxRecheck = () => {
+    for (const t of txRecheck.current) clearTimeout(t);
+    txRecheck.current = [];
+  };
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback((force = false) => {
     if (!unlocked || busy.current) return;
     busy.current = true;
     setLoading(true);
@@ -306,14 +326,16 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
       setEvmAddress(evm);
       setNonEvmAddresses(addrs);
 
-      const [liveRates, hiddenSet, ccList, ctList] = await withTimeout(Promise.all([
-        fetchRates(),
+      // Local storage reads only — no network, so this phase is ~instant. It
+      // has to finish first because the sweep needs netMap.
+      const [hiddenSet, pinnedSet, ccList, ctList] = await Promise.all([
         loadHiddenTokens(evm.toLowerCase()),
+        loadPinnedAssets(evm.toLowerCase()),
         getCustomChains().catch(() => []),
         getCustomTokens().catch(() => []),
-      ]), REFRESH_TIMEOUT_MS, "Rates fetch");
-      setRates(liveRates);
+      ]);
       setHidden(hiddenSet);
+      setPinned(pinnedSet);
 
       const netMap = toNetMap(ccList);
       setCustomNets(netMap);
@@ -323,10 +345,16 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
       // quorum read finishes (cached after the first success).
       void loadOwnBPAN(evm).then(setBpan);
 
-      const [evmSweep, nonEvm] = await withTimeout(Promise.all([
+      // Prices and balances go out TOGETHER. Rates used to be awaited in its
+      // own earlier phase, which put a full network round-trip in front of
+      // every sweep for no reason: the sweep does not consume rates, only the
+      // usdValue math below does, and that runs after both have landed.
+      const [liveRates, evmSweep, nonEvm] = await withTimeout(Promise.all([
+        fetchRates(),
         sweepEvmNativeBalances(evm, netMap, prevEvmByChain.current),
         fetchNonEvmBalancesByAddress(addrs, prevNonEvm.current),
       ]), REFRESH_TIMEOUT_MS, "Balance sweep");
+      setRates(liveRates);
       prevEvmByChain.current = new Map(evmSweep.results.map((c) => [c.networkId, c]));
       prevNonEvm.current = nonEvm;
 
@@ -371,9 +399,21 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
       if (!discoveryBusy.current) {
         discoveryBusy.current = true;
         const discovery = Promise.all([
-          sweepAllChainTokens(evm, (chainId, tokens) => {
-            setTokensByChain((prev) => ({ ...prev, [chainId]: tokens }));
-          }),
+          sweepAllChainTokens(evm, (chainId, tokens, final) => {
+            setTokensByChain((prev) => {
+              // Only an AUTHORITATIVE list may shorten the chain's row set.
+              // That is the update that clears a token swapped or sent down to
+              // zero: every other emission carries just what one source found,
+              // so replacing on those made held tokens blink out and back while
+              // the slower sources were still in flight.
+              if (final) return { ...prev, [chainId]: tokens };
+              const byAddr = new Map(
+                (prev[chainId] ?? []).map((t) => [t.address.toLowerCase(), t]),
+              );
+              for (const t of tokens) byAddr.set(t.address.toLowerCase(), t);
+              return { ...prev, [chainId]: Array.from(byAddr.values()) };
+            });
+          }, force),
           // Non-EVM lists query their public endpoints directly. null =
           // provider unreachable → keep the last-known list; [] =
           // authoritative empty.
@@ -405,6 +445,27 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
   }, [unlocked]);
 
   /**
+   * Re-check balances after a send/swap/bridge of our own.
+   *
+   * The native rows come off the RPC and are correct on the next refresh, but
+   * ERC-20 rows come from an indexer that trails the block by seconds to
+   * minutes (the proxy alone caches /v1/tokens for 5 minutes). A single refresh
+   * fired the moment the tx lands therefore re-reads the PRE-swap token balance
+   * and caches it, which is what left a swapped-away token sitting on the
+   * dashboard. So: ask again as the indexer catches up.
+   *
+   * Forced, because these re-checks exist precisely to beat the freshness gate;
+   * core rate-limits the bypass itself, and the spacing clears that limit.
+   */
+  const refreshAfterTx = useCallback(() => {
+    clearTxRecheck();
+    refresh(true);
+    for (const ms of [8_000, 25_000]) {
+      txRecheck.current.push(setTimeout(() => refresh(true), ms));
+    }
+  }, [refresh]);
+
+  /**
    * Re-read the user's custom tokens and networks from storage, and fetch
    * balances for them.
    *
@@ -429,18 +490,119 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
     }
   }, []);
 
+  /**
+   * Persist whatever the dashboard is currently showing.
+   *
+   * Deliberately an effect on the painted values rather than a line at the end
+   * of refresh(): token discovery lands AFTER refresh resolves, so saving
+   * inside it would snapshot a dashboard with no tokens on it. Debounced,
+   * because discovery paints once per chain as each list arrives.
+   *
+   * The `natives.length` guard is what stops a wallet switch (which clears
+   * state before the new sweep) from overwriting a good snapshot with nothing.
+   */
   useEffect(() => {
-    if (unlocked) refresh();
+    if (!unlocked || !evmAddress || !nonEvmAddresses || natives.length === 0) return;
+    const t = setTimeout(() => {
+      void saveBalanceSnapshot(activeWalletId, {
+        evmAddress, addrs: nonEvmAddresses, natives, tokensByChain, customBal, rates,
+      });
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [unlocked, activeWalletId, evmAddress, nonEvmAddresses, natives, tokensByChain, customBal, rates]);
+
+  /**
+   * Prove the snapshot's addresses really belong to this wallet.
+   *
+   * Runs off the critical path, after the cached balances are already on
+   * screen. A mismatch means the snapshot is stale or belongs to another
+   * wallet, and since these addresses reach the Receive screen that has to be
+   * treated as a hard failure: drop the cache, drop the derived state, and
+   * refresh from the addresses we just derived for real.
+   */
+  const verifyCachedAddresses = useCallback(async (cachedEvm: string) => {
+    try {
+      const mnemonic = await getUnlockedMnemonic();
+      if (!mnemonic) return; // relocked; nothing to prove, cache stays unused
+      const real = importFromMnemonic(mnemonic).address;
+      if (real.toLowerCase() === cachedEvm.toLowerCase()) return;
+      await clearBalanceSnapshot(activeWalletId);
+      addrCache.current = null;
+      prevEvmByChain.current = new Map();
+      prevNonEvm.current = undefined;
+      setNatives([]); setTokensByChain({}); setCustomBal({});
+      refresh();
+    } catch {
+      // Verification is a safety net, not a gate: if it cannot run, the next
+      // full refresh re-derives anyway.
+    }
+  }, [activeWalletId, refresh]);
+
+  /**
+   * Paint the last-known dashboard from disk, THEN refresh over the network.
+   *
+   * The snapshot's public addresses seed `addrCache`, which is the part that
+   * actually removes the wait: without it every launch re-derived seven
+   * addresses (BIP39 seed + BIP32/SLIP-10 per chain) before the first request
+   * could even be sent, with nothing on screen the whole time.
+   *
+   * Seeding means the sweep trusts an address that came off disk, and a wrong
+   * one would be shown on Receive. So derivation still runs — just in the
+   * BACKGROUND, off the critical path — purely to prove the cache right. Any
+   * mismatch throws the snapshot away and starts over from the real addresses.
+   */
+  const hydrateThenRefresh = useCallback(async () => {
+    if (!hydratedRef.current) {
+      hydratedRef.current = true;
+      const snap = await loadBalanceSnapshot(activeWalletId);
+      if (snap && !addrCache.current) {
+        addrCache.current = { evm: snap.evmAddress, addrs: snap.addrs };
+        setEvmAddress(snap.evmAddress);
+        setNonEvmAddresses(snap.addrs);
+        setNatives(snap.natives);
+        setTokensByChain(snap.tokensByChain);
+        setCustomBal(snap.customBal);
+        if (snap.rates) setRates(snap.rates);
+        // Seed EVM retention too, or the first sweep has no previous value to
+        // fall back on and one network blip repaints real balances as 0.
+        // EVM only: a NonEvmChain carries fields (decimals, address) an
+        // AssetRow does not, and handing core a half-built one would be worse
+        // than handing it nothing.
+        prevEvmByChain.current = new Map(
+          snap.natives
+            .filter((r) => r.isNative && NETWORKS[r.chainId])
+            .map((r) => [r.chainId, {
+              networkId: r.chainId, name: r.chainName, symbol: r.symbol,
+              logo: NETWORKS[r.chainId]?.logo ?? "",
+              balance: String(r.balanceNum), balanceNum: r.balanceNum,
+              usdValue: r.usdValue,
+            } satisfies ChainBalance]),
+        );
+        void verifyCachedAddresses(snap.evmAddress);
+      }
+    }
+    refresh();
+  }, [activeWalletId, refresh, verifyCachedAddresses]);
+
+  useEffect(() => {
+    if (unlocked) { void hydrateThenRefresh(); }
     else {
       // Lock: cached addresses die with the session, and so does balance
       // retention — a wipe→import could unlock a DIFFERENT wallet next, which
       // must not inherit this one's last-known rows.
+      clearTxRecheck();
       addrCache.current = null;
       prevEvmByChain.current = new Map();
       prevNonEvm.current = undefined;
+      // Re-read the snapshot on the next unlock: a wipe→import could bring up a
+      // DIFFERENT wallet, and the ownership check only runs on a fresh read.
+      hydratedRef.current = false;
       setCustomBal({});
     }
-  }, [unlocked, refresh]);
+  }, [unlocked, hydrateThenRefresh]);
+
+  // Unmount: a pending post-tx re-check must not fire into a dead hook.
+  useEffect(() => clearTxRecheck, []);
 
   // Active wallet switched (multi-wallet): the mnemonic behind
   // getUnlockedMnemonic now differs, so drop the derived addresses + last-known
@@ -457,37 +619,53 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
     prevNonEvm.current = undefined;
     setNatives([]); setTokensByChain({}); setBpan(""); setEvmAddress("");
     setNonEvmAddresses(null); setCustomBal({});
-    refresh();
-  }, [activeWalletId, unlocked, refresh]);
+    // The new wallet has its own snapshot; hydrate from THAT rather than
+    // leaving the previous wallet's rows on screen while its sweep runs.
+    hydratedRef.current = false;
+    void hydrateThenRefresh();
+  }, [activeWalletId, unlocked, hydrateThenRefresh]);
 
-  // Hide / unhide a token by hand — the manual backstop for spam the classifier
-  // misses, and the way back for anything hidden by mistake. Natives are exempt
-  // (majors must never disappear). Optimistic: the set updates in state right
-  // away so the row moves between sections on the next render, not the next
-  // sweep.
+  // Remove from / add back to the home list. The SINGLE writer for both sets,
+  // which is what keeps them from disagreeing: every call sets one and clears
+  // the other, so a key can never be hidden and pinned at once.
+  //
+  // Natives are included now. They used to be exempt so majors could never
+  // disappear; the default-five rule covers that intent, and the user asked to
+  // be able to remove those too. A native has no contract address, and
+  // tokenHideKey already yields a stable "chainId:" for that case.
+  //
+  // Optimistic: state updates first so the row moves between sections on the
+  // next render rather than the next sweep, and rolls back if persistence fails
+  // so the UI keeps telling the truth about what survives a reload.
   const setRowHidden = useCallback(async (row: AssetRow, hide: boolean) => {
-    if (row.isNative || !evmAddress) return;
-    const addr = row.key.split(":")[1];
+    if (!evmAddress) return;
+    const addr = row.isNative ? undefined : row.key.split(":")[1];
     const key = tokenHideKey(row.chainId, addr);
-    setHidden((prev) => {
-      const next = new Set(prev);
-      if (hide) next.add(key); else next.delete(key);
-      return next;
-    });
-    try {
-      await setTokenHidden(evmAddress.toLowerCase(), key, hide);
-    } catch {
-      // Persist failed: put the in-memory set back so the UI keeps telling the
-      // truth about what will survive a reload.
+    const owner = evmAddress.toLowerCase();
+    const apply = (h: boolean) => {
       setHidden((prev) => {
         const next = new Set(prev);
-        if (hide) next.delete(key); else next.add(key);
+        if (h) next.add(key); else next.delete(key);
         return next;
       });
+      setPinned((prev) => {
+        const next = new Set(prev);
+        if (h) next.delete(key); else next.add(key);
+        return next;
+      });
+    };
+    apply(hide);
+    try {
+      await Promise.all([
+        setTokenHidden(owner, key, hide),
+        setAssetPinned(owner, key, !hide),
+      ]);
+    } catch {
+      apply(!hide);
     }
   }, [evmAddress]);
 
-  const { rows: tokens, dust: tokenDust } = tokenRows(tokensByChain, hidden, rates);
+  const { rows: tokens, dust: tokenDust } = tokenRows(tokensByChain, hidden, pinned, rates);
   // Custom (user-added) token rows. Deliberately EXEMPT from the dust rule and
   // spam classification: the user explicitly asked for this token, so an
   // unpriced balance must not vanish (that reads as "add token is broken").
@@ -516,11 +694,27 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
     if (hidden.has(tokenHideKey(ct.chainId, ct.address))) customDust.push({ ...row, manualHidden: true });
     else customRows.push(row);
   }
-  // Every native the sweeps return stays VISIBLE, zero balance included —
-  // matching the extension dashboard (user directive 2026-07-15: majors must
-  // never be hidden). Holders sort to the top by USD value; the zero-balance
-  // tail follows a fixed major-chain order instead of alphabet soup.
-  const rows = [...natives, ...tokens, ...customRows].sort((a, b) => {
+  // A native earns its home row by holding something, by being one of the
+  // default five, or by an explicit pin — in that order, with a manual hide
+  // beating all three. The zero-balance rest wait in the Hidden section instead
+  // of padding the list, and every one of them carries a way back.
+  //
+  // `manualHidden: true` on the hidden ones is deliberate: it is what marks a
+  // row as "the user's call", and natives parked here by the default-five rule
+  // are still user-recoverable, so they must not read as classifier output.
+  const nativeVisible: AssetRow[] = [];
+  const nativeHidden: AssetRow[] = [];
+  for (const n of natives) {
+    const section = homeSection({
+      chainId: n.chainId, isNative: true,
+      balanceNum: n.balanceNum, usdValue: n.usdValue,
+    }, hidden, pinned);
+    if (section === "home") nativeVisible.push(n);
+    else nativeHidden.push({ ...n, manualHidden: true });
+  }
+  // Holders sort to the top by USD value; the zero-balance tail follows a fixed
+  // major-chain order instead of alphabet soup.
+  const rows = [...nativeVisible, ...tokens, ...customRows].sort((a, b) => {
     if (b.usdValue !== a.usdValue) return b.usdValue - a.usdValue;
     const aHolds = a.balanceNum > 0 ? 0 : 1;
     const bHolds = b.balanceNum > 0 ? 0 : 1;
@@ -529,10 +723,21 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
     const bi = MAJOR_ORDER.indexOf(b.chainId);
     return (ai === -1 ? MAJOR_ORDER.length : ai) - (bi === -1 ? MAJOR_ORDER.length : bi);
   });
-  const portfolioUsd = rows.reduce((s, r) => s + r.usdValue, 0);
+  // Hidden NATIVES still count toward the total. Taking a chain off the home
+  // list is a display choice, not a claim that the coins stopped existing, and
+  // a total that silently drops when you tidy the list is a total you cannot
+  // trust. (Dust and spam stay out, as in the extension.)
+  const portfolioUsd = [...rows, ...nativeHidden].reduce((s, r) => s + r.usdValue, 0);
   const chainIds = [...new Set(rows.map((r) => r.chainId))];
   // Hidden section: biggest first, so anything worth recovering is at the top.
-  const dustRows = [...tokenDust, ...customDust].sort((a, b) => b.usdValue - a.usdValue);
+  // Zero-value rows (the empty natives parked here) fall back to major order so
+  // the tail is stable rather than reshuffling on every price tick.
+  const dustRows = [...nativeHidden, ...tokenDust, ...customDust].sort((a, b) => {
+    if (b.usdValue !== a.usdValue) return b.usdValue - a.usdValue;
+    const ai = MAJOR_ORDER.indexOf(a.chainId);
+    const bi = MAJOR_ORDER.indexOf(b.chainId);
+    return (ai === -1 ? MAJOR_ORDER.length : ai) - (bi === -1 ? MAJOR_ORDER.length : bi);
+  });
 
   // Merge customs into the picker lists so Send/TokenDetail can select them.
   // Derived here (not in setTokensByChain) so the discovery sweep's per-chain
@@ -562,6 +767,7 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
     loading,
     error,
     refresh,
+    refreshAfterTx,
     reloadCustom,
   };
 }

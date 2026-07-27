@@ -7,7 +7,7 @@
 // core can route (23 incl. Solana) is offered here, not a hand-kept list.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ethers } from "ethers";
-import { BackHandler, Keyboard, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { BackHandler, Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { NETWORKS } from "@numpay/core/networks";
 import { getUsdPrice } from "@numpay/core/currency";
 import {
@@ -25,10 +25,11 @@ import { buildChainTokenList, buildSolanaTokenList } from "../wallet/tokenList";
 import { explorerTxUrl } from "../wallet/send";
 import type { MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, radius, type as ts } from "../ui/theme";
-import { AlertCard, Btn, Chip, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
+import { Notice, Btn, Chip, Card, Field, IconBtn, ScreenHeader, SectionLabel } from "../ui/components";
+import { Sheet, SheetActions, SheetPanel, SheetRow } from "../ui/Sheet";
 import { useCurrencyPref, formatFiatLine } from "../ui/currency";
-import { AssetIcon, ChainBadge, ChainIcon } from "../ui/coins";
-import { ChevronDownIcon, LayersIcon, SearchIcon, SwapIcon, XIcon } from "../ui/icons";
+import { AssetIcon, ChainBadge, ChainIcon, LogoCoin } from "../ui/coins";
+import { ChevronDownIcon, LayersIcon, SearchIcon, SettingsIcon, SwapIcon, XIcon } from "../ui/icons";
 import { ImportTokenCard } from "../ui/ImportTokenCard";
 import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
 
@@ -54,14 +55,14 @@ function bridgeName(r: BridgeRoute): string {
   return r.steps?.[0]?.toolDetails?.name || r.steps?.[0]?.tool || "Bridge";
 }
 
-/** One label/value line in the pre-sign preview. */
-function ConfirmRow({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={st.confirmRow}>
-      <Text style={st.confirmLabel}>{label}</Text>
-      <Text style={st.confirmValue}>{value}</Text>
-    </View>
-  );
+/** LI.FI quotes carry the bridge's own mark and its expected duration. */
+function bridgeLogo(r: BridgeRoute): string {
+  return r.steps?.[0]?.toolDetails?.logoURI || "";
+}
+
+function bridgeMinutes(r: BridgeRoute): number | null {
+  const dur = r.steps?.[0]?.estimate?.executionDuration;
+  return dur ? Math.ceil(dur / 60) : null;
 }
 
 export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initialFromAddr }: {
@@ -134,6 +135,10 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
   const [importError, setImportError] = useState("");
   const [amount, setAmount] = useState("");
   const [slippage, setSlippage] = useState("0.5");
+  // Slippage lives behind the header gear, as in the extension: it is a setting,
+  // not a step in the flow, and giving it a permanent row on a phone screen
+  // pushed the routes below the fold.
+  const [showSettings, setShowSettings] = useState(false);
   const [routes, setRoutes] = useState<RouteOption[]>([]);
   const [bRoutes, setBRoutes] = useState<BridgeRoute[]>([]);
   const [selRoute, setSelRoute] = useState(0);
@@ -250,20 +255,25 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
     scheduleQuote(clean, fromToken, toToken);
   }
 
-  async function handleMax() {
+  // Amount presets (extension parity: 25 / 50 / 75 / MAX). Every one of them is
+  // reserve-aware, not just MAX: the reserve caps the result, so a 75% of a
+  // nearly-empty native balance can still not exceed what is actually spendable.
+  async function applyPreset(p: number) {
     if (!fromToken) return;
     const bal = parseFloat(fromToken.balance) || 0;
     if (bal <= 0) return;
-    let v = bal;
-    if (!fromToken.address) {
-      // Native coin: hold back the network fee (SOL rent+fee, or live EVM gas —
-      // a bridge costs more gas than a swap, hence the forBridge flag).
-      const reserve = fromToken.chainId === "solana"
-        ? SOL_FEE_RESERVE
-        : await evmSwapReserve(fromToken.chainId, isBridge);
-      v = Math.max(0, bal - reserve);
-    }
-    const s = v > 0 ? String(Number(v.toFixed(8))) : "0";
+    // Native input pays the fee out of this same balance: SOL keeps its fee +
+    // ATA-rent cushion, a native EVM coin reserves the live estimated fee for an
+    // aggregator-sized tx (a bridge costs more gas than a swap, hence the flag).
+    // ERC-20s and SPL tokens need none, the fee comes from the native coin.
+    const isNativeSol = fromToken.chainId === "solana" && !fromToken.address;
+    const isNativeEvm = !fromToken.address && !!NETWORKS[fromToken.chainId];
+    const reserve = isNativeSol
+      ? SOL_FEE_RESERVE
+      : isNativeEvm ? await evmSwapReserve(fromToken.chainId, isBridge) : 0;
+    const cap = Math.max(0, bal - reserve);
+    const v = Math.min(bal * p, cap);
+    const s = v > 0 ? String(Number(v.toFixed(Math.min(fromToken.decimals, 8)))) : "0";
     setAmount(s);
     scheduleQuote(s, fromToken, toToken);
   }
@@ -381,7 +391,11 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
       }
       setTxHash(hash);
       setTxFx("success");
-      w.refresh();
+      // The whole point of a swap is that the FROM balance drops, often to
+      // zero. That row only clears once the token indexer catches up with the
+      // block, so this re-checks instead of asking once and caching the
+      // pre-swap answer for the next three minutes.
+      w.refreshAfterTx();
     } catch (e: any) {
       setError(e?.message || (isBridge ? "Bridge failed" : "Swap failed"));
       setTxFx("error");
@@ -418,6 +432,19 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
   // to the Solana address, everything else to the EVM one.
   const payoutChain = isBridge ? toChainId : chainId;
   const recipient = (payoutChain === "solana" ? solanaAddress : w.evmAddress) || "";
+
+  // Who is actually quoting. Naming them is the honest version of "best price":
+  // the wallet is not the venue, it is reading these aggregators.
+  const providerLine = isBridge
+    ? "Powered by LI.FI"
+    : chainId === "solana" ? "Powered by Jupiter" : "ParaSwap · KyberSwap · Relay";
+
+  // Unit price of the pair as quoted. Swap-only: a bridge's destination amount
+  // is net of bridge fees, so a "1 X ≈ Y" line there would read as a market
+  // rate while actually being rate-minus-fees.
+  const rateLine = !isBridge && hasRoute && receiveAmt && parseFloat(amount) > 0 && fromToken && toToken
+    ? `1 ${fromToken.symbol} ≈ ${(parseFloat(receiveAmt) / parseFloat(amount)).toFixed(4)} ${toToken.symbol}`
+    : "";
 
   // Token picker takes over the screen while active: the wallet's own
   // holdings first (with balance + fiat value), then the curated list —
@@ -559,8 +586,38 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
 
   return (
     <View style={{ flex: 1 }}>
-      <ScreenHeader title={isBridge ? "Bridge" : "Swap"} onBack={onBack} />
+      <ScreenHeader
+        title={isBridge ? "Bridge" : "Swap"}
+        subtitle={providerLine}
+        onBack={onBack}
+        right={
+          <IconBtn onPress={() => setShowSettings((s) => !s)} label="Swap settings">
+            <SettingsIcon size={15} color={showSettings ? colors.brand2 : colors.muted} />
+          </IconBtn>
+        }
+      />
       <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        {/* Slippage, behind the gear. Chips for the common values plus a free
+            field, because a thin pair on a small-cap token sometimes needs a
+            number the chips do not offer. */}
+        {showSettings && (
+          <Card style={st.settingsCard}>
+            <SectionLabel text="Slippage tolerance" style={{ marginTop: 0, marginBottom: 8 } as object} />
+            <View style={st.slipRow}>
+              {["0.1", "0.5", "1.0"].map((v) => (
+                <Chip key={v} label={`${v}%`} active={slippage === v} onPress={() => setSlippage(v)} />
+              ))}
+              <Field
+                value={slippage}
+                onChangeText={(v) => setSlippage(v.replace(/[^0-9.]/g, ""))}
+                keyboardType="decimal-pad"
+                placeholder="%"
+                style={st.slipInput}
+              />
+            </View>
+          </Card>
+        )}
+
         {/* SELL */}
         <SectionLabel text={isBridge ? `Sell on ${chainLabel(chainId)}` : "Sell"} style={{ marginTop: 10 } as object} />
         <Card style={st.sideCard}>
@@ -590,11 +647,20 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
         <View style={st.subRow}>
           <Text style={st.subText}>
             Balance {parseFloat(fromToken?.balance || "0").toLocaleString(undefined, { maximumFractionDigits: 6 })}
-            {"  "}
-            <Text style={st.maxInline} onPress={() => { void handleMax(); }}>MAX</Text>
           </Text>
           <Text style={st.subText}>{sellUsd > 0 ? `≈ ${formatFiatLine(sellUsd, cur.code, cur.currency, w.rates)}` : " "}</Text>
         </View>
+        {/* Amount presets. Hidden on a zero balance: there is nothing for a
+            percentage to be a percentage OF, and the extension hides them too. */}
+        {(parseFloat(fromToken?.balance || "0") || 0) > 0 && (
+          <View style={st.presetRow}>
+            {[{ l: "25%", p: 0.25 }, { l: "50%", p: 0.5 }, { l: "75%", p: 0.75 }, { l: "MAX", p: 1 }].map(({ l, p }) => (
+              <Pressable key={l} onPress={() => { void applyPreset(p); }} style={st.presetBtn}>
+                <Text style={st.presetText}>{l}</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
 
         {/* Flip. Doubles as the mode indicator, the way the extension's does:
             a plain swap arrow while the pair is same-chain, and a brand-tinted
@@ -631,32 +697,41 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
           <View style={{ flex: 1, alignItems: "flex-end", paddingRight: 4 }}>
             <Text style={st.receiveText}>{hasRoute ? receiveAmt : quoting ? "…" : "0"}</Text>
             {buyUsd > 0 && <Text style={st.subText}>≈ {formatFiatLine(buyUsd, cur.code, cur.currency, w.rates)}</Text>}
+            {!!rateLine && <Text style={st.subText}>{rateLine}</Text>}
           </View>
         </Card>
-
-        {/* Slippage */}
-        <View style={st.slipRow}>
-          <Text style={st.subText}>Slippage</Text>
-          {["0.1", "0.5", "1"].map((v) => (
-            <Chip key={v} label={`${v}%`} active={slippage === v} onPress={() => setSlippage(v)} />
-          ))}
-        </View>
 
         {/* Routes */}
         {isBridge && bRoutes.length > 0 && (
           <View style={{ marginTop: 10 }}>
             <SectionLabel text="Routes" />
-            {bRoutes.map((r, i) => (
-              <Pressable key={r.id} onPress={() => setSelRoute(i)} style={[st.routeRow, i === selRoute && st.routeSel]}>
-                <Text style={st.routeName}>{bridgeName(r)}</Text>
-                {r.tags?.[0] && <Text style={st.routeTag}>{r.tags[0]}</Text>}
-                <View style={{ flex: 1 }} />
-                <View style={{ alignItems: "flex-end" }}>
-                  <Text style={st.routeAmt}>{bridgeReceive(r, toToken)} {toToken?.symbol}</Text>
-                  <Text style={st.subText}>Gas ~${parseFloat(r.gasCostUSD || "0").toFixed(2)}</Text>
-                </View>
-              </Pressable>
-            ))}
+            {bRoutes.map((r, i) => {
+              const logo = bridgeLogo(r);
+              const mins = bridgeMinutes(r);
+              return (
+                <Pressable key={r.id} onPress={() => setSelRoute(i)} style={[st.routeRow, i === selRoute && st.routeSel]}>
+                  {/* The bridge's own mark. LI.FI does not always send one, and
+                      an anonymous row is worse than a generic layers disc. */}
+                  {logo
+                    ? <LogoCoin uri={logo} label={bridgeName(r)} size={20} />
+                    : <View style={st.routeLogoFallback}><LayersIcon size={10} color={colors.muted} /></View>}
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <View style={st.routeNameRow}>
+                      <Text style={st.routeName} numberOfLines={1}>{bridgeName(r)}</Text>
+                      {r.tags?.[0] && <Text style={st.routeTag}>{r.tags[0]}</Text>}
+                    </View>
+                    {/* Time matters more on a bridge than on a swap: the funds
+                        are in flight, not just pending a block. */}
+                    <Text style={st.subText}>
+                      Gas ~${parseFloat(r.gasCostUSD || "0").toFixed(2)}{mins ? ` · ~${mins} min` : ""}
+                    </Text>
+                  </View>
+                  <View style={{ alignItems: "flex-end" }}>
+                    <Text style={st.routeAmt}>{bridgeReceive(r, toToken)} {toToken?.symbol}</Text>
+                  </View>
+                </Pressable>
+              );
+            })}
           </View>
         )}
         {!isBridge && routes.length > 0 && (
@@ -664,12 +739,20 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
             <SectionLabel text="Routes" />
             {routes.map((r, i) => (
               <Pressable key={r.provider} onPress={() => setSelRoute(i)} style={[st.routeRow, i === selRoute && st.routeSel]}>
-                <Text style={st.routeName}>{r.label}</Text>
-                {r.tag && <Text style={st.routeTag}>{r.tag}</Text>}
-                <View style={{ flex: 1 }} />
+                {/* Same row shape as a bridge route, so the aggregator is named
+                    and pictured on both sides of the mode switch. */}
+                {r.logo
+                  ? <LogoCoin uri={r.logo} label={r.label} size={20} />
+                  : <View style={st.routeLogoFallback}><SwapIcon size={10} color={colors.muted} /></View>}
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <View style={st.routeNameRow}>
+                    <Text style={st.routeName} numberOfLines={1}>{r.label}</Text>
+                    {r.tag && <Text style={st.routeTag}>{r.tag}</Text>}
+                  </View>
+                  <Text style={st.subText}>Gas ~${parseFloat(r.gasCostUSD || "0").toFixed(2)}</Text>
+                </View>
                 <View style={{ alignItems: "flex-end" }}>
                   <Text style={st.routeAmt}>{r.destAmount} {toToken?.symbol}</Text>
-                  <Text style={st.subText}>Gas ~${parseFloat(r.gasCostUSD || "0").toFixed(2)}</Text>
                 </View>
               </Pressable>
             ))}
@@ -682,8 +765,8 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
         )}
 
         {errView && (
-          <AlertCard
-            tone={errView.preSend ? "amber" : "danger"}
+          <Notice
+            tone={errView.preSend ? "caution" : "danger"}
             title={errView.title}
             body={errView.body}
             hint={errView.hint}
@@ -711,50 +794,42 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
       {/* Pre-sign preview (extension parity). Nothing is signed until the
           confirm button here is pressed, and the figures shown are the ones
           the execute path binds against. */}
-      {showConfirm && fromToken && toToken && (
-        <Modal transparent animationType="fade" onRequestClose={() => setShowConfirm(false)}>
-          <Pressable style={st.confirmScrim} onPress={() => setShowConfirm(false)}>
-            <Pressable style={st.confirmSheet} onPress={() => {}}>
-              <Text style={st.confirmTitle}>{isBridge ? "Confirm bridge" : "Confirm swap"}</Text>
-              <View>
-                <ConfirmRow label="You pay" value={`${amount} ${fromToken.symbol} · ${chainLabel(chainId)}`} />
-                <ConfirmRow
-                  label="You receive (est.)"
-                  value={`≈ ${receiveAmt || "—"} ${toToken.symbol} · ${chainLabel(toChainId)}`}
-                />
-                {minReceived && (
-                  <ConfirmRow
-                    label="Minimum received"
-                    value={`${minReceived} ${toToken.symbol} (slippage ${sanitizeSlippagePct(slippage)}%)`}
-                  />
-                )}
-                <ConfirmRow label="Route" value={routeLabel} />
-                <ConfirmRow
-                  label="Recipient"
-                  value={recipient
-                    ? `Your wallet · ${recipient.slice(0, 6)}…${recipient.slice(-4)}`
-                    : "Your wallet"}
-                />
-              </View>
-              <Text style={st.confirmNote}>
-                The transaction is checked against this quote before it is signed. Funds are sent to
-                your own wallet.
-              </Text>
-              <View style={st.confirmActions}>
-                <Pressable style={st.confirmCancel} onPress={() => setShowConfirm(false)}>
-                  <Text style={st.confirmCancelText}>Cancel</Text>
-                </Pressable>
-                <View style={{ flex: 1 }}>
-                  <Btn
-                    label={isBridge ? "Confirm & bridge" : "Confirm & swap"}
-                    onPress={() => { setShowConfirm(false); void handleSubmit(); }}
-                    style={{ marginTop: 0 }}
-                  />
-                </View>
-              </View>
-            </Pressable>
-          </Pressable>
-        </Modal>
+      {fromToken && toToken && (
+        <Sheet
+          open={showConfirm}
+          onClose={() => setShowConfirm(false)}
+          title={isBridge ? "Confirm bridge" : "Confirm swap"}
+          body="Nothing is signed until you confirm. The transaction is re-checked against this quote first, and the funds go to your own wallet."
+          tone="info"
+          icon={<SwapIcon size={20} color={colors.brand2} />}
+        >
+          <SheetPanel>
+            <SheetRow label="You pay" value={`${amount} ${fromToken.symbol} · ${chainLabel(chainId)}`} strong />
+            <SheetRow
+              label="You receive"
+              value={`≈ ${receiveAmt || "—"} ${toToken.symbol} · ${chainLabel(toChainId)}`}
+              strong
+            />
+            {minReceived && (
+              <SheetRow
+                label="Minimum received"
+                value={`${minReceived} ${toToken.symbol} · ${sanitizeSlippagePct(slippage)}% slippage`}
+              />
+            )}
+            <SheetRow label="Route" value={routeLabel} />
+            <SheetRow
+              label="Recipient"
+              value={recipient
+                ? `Your wallet · ${recipient.slice(0, 6)}…${recipient.slice(-4)}`
+                : "Your wallet"}
+            />
+          </SheetPanel>
+          <SheetActions
+            confirmLabel={isBridge ? "Confirm & bridge" : "Confirm & swap"}
+            onConfirm={() => { setShowConfirm(false); void handleSubmit(); }}
+            onCancel={() => setShowConfirm(false)}
+          />
+        </Sheet>
       )}
 
       {txFx && (
@@ -798,7 +873,15 @@ const st = StyleSheet.create({
   receiveText: { color: colors.textPrimary, fontSize: 20, fontWeight: "600", fontVariant: ["tabular-nums"] },
   subRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 6, gap: 10 },
   subText: { color: colors.muted2, fontSize: 10.5 },
-  maxInline: { color: colors.brand2, fontWeight: "700" },
+  // Preset pills (.pill-brand at chip scale): brand-tinted so they read as
+  // controls, not as the muted balance text they sit under.
+  presetRow: { flexDirection: "row", gap: 8, marginTop: 8 },
+  presetBtn: {
+    paddingHorizontal: 12, paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: "rgba(124, 109, 240, 0.10)",
+  },
+  presetText: { color: colors.brand2, fontSize: 11, fontWeight: "700" },
   flipBtn: {
     alignSelf: "center",
     flexDirection: "row",
@@ -815,7 +898,21 @@ const st = StyleSheet.create({
     color: colors.brand2, fontSize: 10, fontWeight: "700",
     letterSpacing: 0.8,
   },
-  slipRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 12 },
+  settingsCard: { padding: 12, marginTop: 10 },
+  slipRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  // Free-entry slippage: fixed width so the chips keep their size, and the
+  // number is centred the way the extension's input is.
+  slipInput: {
+    width: 64, marginTop: 0,
+    paddingVertical: 6, paddingHorizontal: 8,
+    textAlign: "center", fontSize: 12,
+  },
+  routeLogoFallback: {
+    width: 20, height: 20, borderRadius: 10,
+    backgroundColor: colors.surface2,
+    alignItems: "center", justifyContent: "center",
+  },
+  routeNameRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   routeRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -858,48 +955,9 @@ const st = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.divider,
   },
-  // Pre-sign preview: bottom sheet, so the summary sits under the thumb on
-  // the same edge as the CTA that opened it.
-  confirmScrim: {
-    flex: 1,
-    backgroundColor: colors.scrim,
-    justifyContent: "flex-end",
-    padding: 12,
-  },
-  confirmSheet: {
-    backgroundColor: colors.card,
-    borderRadius: radius.card,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    padding: 18,
-  },
-  confirmTitle: {
-    color: colors.textPrimary, fontSize: 15, fontWeight: "700", marginBottom: 10,
-  },
-  confirmRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: 12,
-    paddingVertical: 7,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.divider,
-  },
-  confirmLabel: { color: colors.muted, fontSize: 11, flexShrink: 0 },
-  confirmValue: {
-    color: colors.textPrimary, fontSize: 12, fontWeight: "600",
-    flexShrink: 1, textAlign: "right",
-  },
-  confirmNote: { color: colors.muted, fontSize: 10, lineHeight: 15, marginTop: 12 },
-  confirmActions: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 16 },
-  confirmCancel: {
-    flex: 1,
-    paddingVertical: 13,
-    borderRadius: radius.button,
-    backgroundColor: colors.surface2,
-    alignItems: "center",
-  },
-  confirmCancelText: { color: colors.textPrimary, fontSize: 13, fontWeight: "600" },
+  // The pre-sign preview's own scrim/sheet/row/action styles lived here until
+  // it moved onto the shared Sheet primitive (ui/Sheet.tsx), which is now the
+  // single definition of what a modal surface looks like in this app.
   tokenSym: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "600" },
   tokenSub: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
   tokenBal: { color: colors.textPrimary, fontSize: ts.row, fontVariant: ["tabular-nums"] },

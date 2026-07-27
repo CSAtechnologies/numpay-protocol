@@ -6,7 +6,7 @@
 // expo-screen-capture or a config plugin).
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 // Hold the branded native splash (dark bg + NumPay mark, app.json) until the
 // first real screen is ready; hideAsync then reveals the lock/onboard screen,
@@ -14,7 +14,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 SplashScreen.preventAutoHideAsync().catch(() => {});
 import { LinearGradient } from "expo-linear-gradient";
 import * as Clipboard from "expo-clipboard";
-import { BackHandler, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import {
+  Animated, BackHandler, PanResponder, Pressable, RefreshControl, ScrollView,
+  StyleSheet, Switch, Text, View,
+} from "react-native";
 
 import { createWallet, importFromMnemonic } from "@numpay/core/wallet";
 import { formatBPAN } from "@numpay/core/bpan";
@@ -30,9 +33,11 @@ import { runDevnetTx } from "./spike/devnetTx";
 import { useMobileWallet, type AssetRow, type MobileWalletState } from "./src/wallet/useMobileWallet";
 import { activeTheme, colors, radius, type as ts, spacing } from "./src/ui/theme";
 import {
-  AlertCard, AmbientBackground, AnimatedLogo, Btn, Card, EmptyState, Field,
+  Notice, AmbientBackground, AnimatedLogo, Btn, Card, EmptyState, Field,
   GradientNumber, HeroSection, ScreenHeader, SectionLabel, SkeletonRow,
 } from "./src/ui/components";
+import { SeedPhraseGrid } from "./src/ui/SeedPhrase";
+import { ToastHost, toast } from "./src/ui/Toast";
 import { TxResultOverlay, type TxFxKind, type TxFxStatus } from "./src/ui/TxResultOverlay";
 import { QrScanner } from "./src/ui/QrScanner";
 import { parseScannedPayload } from "@numpay/core/qrPayload";
@@ -43,8 +48,8 @@ import { CurrencyProvider, useCurrencyPref, formatFiat } from "./src/ui/currency
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import {
   ArrowUpRightIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon,
-  CopyIcon, HashIcon, LinkIcon, LockIcon, PlusIcon, ReceiveIcon, RefreshIcon,
-  ScanIcon, SwapIcon, TrendingUpIcon, WalletIcon,
+  CopyIcon, EyeOffIcon, HashIcon, LinkIcon, LockIcon, PlusIcon, ReceiveIcon,
+  RefreshIcon, ScanIcon, SwapIcon, TrendingUpIcon, WalletIcon,
 } from "./src/ui/icons";
 import { AssetIcon, ChainBadge, ChainIcon } from "./src/ui/coins";
 import { ReceiveScreen, type ReceiveAddrs } from "./src/screens/ReceiveScreen";
@@ -55,6 +60,7 @@ import { DeFiScreen } from "./src/screens/DeFiScreen";
 import { ActivityScreen } from "./src/screens/ActivityScreen";
 import { BPANScreen } from "./src/screens/BPANScreen";
 import { WalletConnectScreen } from "./src/screens/WalletConnectScreen";
+import { BrowserScreen } from "./src/screens/BrowserScreen";
 import { ManageAssetsScreen } from "./src/screens/ManageAssetsScreen";
 import { WcApprovalHost } from "./src/walletconnect/WcApprovalHost";
 // Side-effect import: defines the background receive-watch task at bundle
@@ -68,6 +74,9 @@ type Mode =
   // No "bridge" mode: bridging is a cross-chain PAIR inside Swap (extension
   // parity), and slot 3 of the dashboard is DeFi.
   | "spike" | "devnet" | "receive" | "send" | "swap" | "defi" | "activity" | "bpan" | "dapps" | "dev" | "settings" | "token" | "assets"
+  // In-app dApp browser. A phone browser cannot host an extension, so this is
+  // the only way to reach dApps that never implemented WalletConnect.
+  | "browser"
   // Universal scanner reached from the dashboard header. Whatever it reads is
   // routed by core/qrPayload: an address or BPAN opens Send prefilled, a wc:
   // code pairs. (Send has its own scanner for the address field alone.)
@@ -113,9 +122,9 @@ function AppInner() {
   const [assetsReturn, setAssetsReturn] = useState<Mode>("settings");
 
   const unlocked =
-    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "defi" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev" || mode === "settings" || mode === "token" || mode === "assets" || mode === "scan";
+    mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "defi" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev" || mode === "settings" || mode === "token" || mode === "assets" || mode === "scan" || mode === "browser";
   // The floating nav shows on its six tabs; focused flows (swap, DeFi,
-  // dApps, dev) keep the full screen.
+  // dApps, browser, dev) keep the full screen.
   const navVisible =
     mode === "home" || mode === "send" || mode === "receive" || mode === "bpan" || mode === "activity" || mode === "settings";
   const w = useMobileWallet(unlocked, activeWalletId);
@@ -255,6 +264,10 @@ function AppInner() {
         setMode("home");
         return true;
       }
+      // NOT "browser": it registers its own back handler, which walks the page
+      // history first and only leaves the screen at the top of it. Handlers run
+      // most-recently-registered first, so its own returns true before this
+      // ever sees the press.
       if (m === "receive" || m === "send" || m === "swap" || m === "defi" ||
           m === "activity" || m === "bpan" || m === "dapps" || m === "dev" ||
           m === "settings" || m === "token") {
@@ -546,14 +559,22 @@ function AppInner() {
         />
       )}
 
+      {/* Toasts sit above the screens but BELOW the lock overlays that follow:
+          a note about a failed refresh must never float over a PIN prompt. */}
+      <ToastHost />
+
       {/* Session-expiry re-auth overlay (see the `relocked` comment above). */}
       {relocked && status && (
         <View style={st.lockOverlay}>
           <AuthHeader />
-          <AlertCard
-            tone="amber"
+          {/* Info, not caution: the wallet did exactly what it promised, and
+              dressing a working security feature in warning colours teaches
+              people to ignore the colour that matters. */}
+          <Notice
+            tone="info"
             title="Session expired"
             body="NumPay locked itself after inactivity. Unlock to pick up where you left off."
+            icon={<LockIcon size={15} color={colors.brand2} />}
             style={{ marginBottom: 12 }}
           />
           <Locked
@@ -615,15 +636,15 @@ function Reveal(p: { mnemonic: string; onNext: () => void }) {
   return (
     <View>
       <Text style={st.h2}>Your recovery phrase</Text>
-      <AlertCard
-        tone="amber"
+      <Notice
+        tone="caution"
         title="This phrase IS the wallet"
         body="Write these words down in order and keep them offline. Your PIN only unlocks this phone's copy."
         style={{ marginBottom: 10 }}
       />
-      <Card style={{ padding: 14 }}>
-        <Text style={st.mnemonic}>{p.mnemonic}</Text>
-      </Card>
+      {/* Not `covered` here: the user just asked to create a wallet and this
+          is the one screen whose entire job is showing them the words. */}
+      <SeedPhraseGrid phrase={p.mnemonic} />
       <Btn label="I saved it, continue" onPress={p.onNext} />
     </View>
   );
@@ -696,8 +717,9 @@ function Locked(p: {
     <View>
       <Text style={[st.h2, { textAlign: "center" }]}>Welcome back</Text>
       {lockedFor > 0 ? (
-        <AlertCard
-          tone="amber"
+        // Danger, not caution: this one really is blocking the user.
+        <Notice
+          tone="danger"
           title="Locked out"
           body={`Too many attempts. Try again in ${lockedFor >= 60 ? `${Math.ceil(lockedFor / 60)} min` : `${lockedFor} s`}.`}
           style={{ marginTop: 10 }}
@@ -710,7 +732,13 @@ function Locked(p: {
           onBiometrics={p.onBio}
         />
       )}
-      {!!p.error && <Text style={[st.err, { textAlign: "center" }]}>{p.error}</Text>}
+      {/* Reserved slot: a wrong PIN must not grow the screen under the thumb
+          that is mid-retry. Kept inline rather than toasted because this is
+          field-level feedback and belongs next to the keypad, not at the top
+          of the screen where the eye is not looking. */}
+      <View style={st.errSlot}>
+        {!!p.error && <Text style={[st.err, st.errCentered]}>{p.error}</Text>}
+      </View>
     </View>
   );
 }
@@ -746,15 +774,13 @@ function AddWalletOverlay(p: { onClose: () => void; onAdded: (id: string) => voi
 
         {generated ? (
           <View>
-            <AlertCard
-              tone="amber"
+            <Notice
+              tone="caution"
               title="Save this recovery phrase"
               body="These words ARE the new wallet. Write them down in order and keep them offline before continuing."
               style={{ marginBottom: 10 }}
             />
-            <Card style={{ padding: 14 }}>
-              <Text style={st.mnemonic}>{generated}</Text>
-            </Card>
+            <SeedPhraseGrid phrase={generated} />
             {!!error && <Text style={st.err}>{error}</Text>}
             <Btn label={busy ? "Adding…" : "I saved it, add wallet"} onPress={() => { void add(generated); }} disabled={busy} />
           </View>
@@ -835,6 +861,18 @@ function Dashboard(p: {
   const dust = filter ? w.dustRows.filter((r) => r.chainId === filter) : w.dustRows;
   const filterName = filter ? (chainNameOf(filter) ?? filter) : "All Assets";
 
+  // A failed sweep is transient and needs no decision, so it toasts instead of
+  // wedging a card between the hero and the asset list — which pushed the whole
+  // dashboard down every time a flaky network hiccuped, and then popped it back
+  // up on the next successful refresh.
+  const lastError = useRef("");
+  useEffect(() => {
+    if (w.error && w.error !== lastError.current) {
+      toast.error("Couldn't refresh balances", "Your funds are safe. Pull down to try again.");
+    }
+    lastError.current = w.error;
+  }, [w.error]);
+
   // The BPAN pill copies on tap, like the extension's. Tapping the "get one"
   // state instead opens the BPAN screen, since there is nothing to copy yet.
   const copyBpan = async () => {
@@ -854,7 +892,10 @@ function Dashboard(p: {
         refreshControl={
           <RefreshControl
             refreshing={w.loading}
-            onRefresh={w.refresh}
+            // Forced: pulling to refresh is the user asking for the truth, and
+            // an unforced sweep inside the 3-minute freshness window just
+            // re-paints the cache, which reads as "refresh does nothing".
+            onRefresh={() => w.refresh(true)}
             tintColor={colors.brand}
             colors={[colors.brand]}
             progressBackgroundColor={colors.card}
@@ -1013,9 +1054,6 @@ function Dashboard(p: {
 
         {/* ── Assets section ── */}
         <View style={st.assetsSection}>
-          {!!w.error && (
-            <AlertCard tone="danger" title="Refresh failed" body={w.error} style={{ marginBottom: 8 }} />
-          )}
 
           <View style={st.assetsHead}>
             <SectionLabel text="Assets" />
@@ -1023,7 +1061,7 @@ function Dashboard(p: {
               <Pressable hitSlop={8} onPress={p.onManageAssets} style={st.headBtn} accessibilityLabel="Manage tokens and networks">
                 <PlusIcon size={14} color={colors.muted} />
               </Pressable>
-              <Pressable hitSlop={8} onPress={w.refresh} style={st.headBtn} accessibilityLabel="Refresh balances">
+              <Pressable hitSlop={8} onPress={() => w.refresh(true)} style={st.headBtn} accessibilityLabel="Refresh balances">
                 <RefreshIcon size={14} color={colors.muted} />
               </Pressable>
             </View>
@@ -1035,7 +1073,10 @@ function Dashboard(p: {
               row={r}
               fiat={formatFiat(r.usdValue, cur.code, cur.currency, w.rates)}
               onPress={() => p.onOpenAsset(r)}
-              onHide={r.isNative ? undefined : () => { void w.setRowHidden(r, true); }}
+              // Every row can leave the home list now, natives included: the
+              // default-five rule is what keeps the majors present, so the old
+              // native exemption would only have blocked a deliberate tidy-up.
+              onHide={() => { void w.setRowHidden(r, true); }}
             />
           ))}
 
@@ -1069,7 +1110,11 @@ function Dashboard(p: {
                     row={r}
                     fiat={formatFiat(r.usdValue, cur.code, cur.currency, w.rates)}
                     onPress={() => p.onOpenAsset(r)}
-                    onUnhide={r.manualHidden ? () => { void w.setRowHidden(r, false); } : undefined}
+                    // Anything in here can go back on the home list, however it
+                    // got here. Gating this on manualHidden left dust and spam
+                    // rows with no way out, so a real token the classifier
+                    // guessed wrong about was stuck for good.
+                    onUnhide={() => { void w.setRowHidden(r, false); }}
                     compact
                   />
                 </View>
@@ -1106,7 +1151,7 @@ function DevScreen(p: {
         text={`Diagnostics${p.argonMs !== null ? ` · argon2 ${p.argonMs} ms` : ""}`}
         style={{ marginTop: 6 } as object}
       />
-      <Btn label="Refresh balances" onPress={p.w.refresh} variant="secondary" />
+      <Btn label="Refresh balances" onPress={() => p.w.refresh(true)} variant="secondary" />
       <Btn label="Run core spike" onPress={p.onSpike} variant="secondary" />
       <Btn label="Devnet tx (Phase 0 gate)" onPress={p.onDevnet} variant="secondary" />
 
@@ -1158,9 +1203,97 @@ function DevScreen(p: {
 }
 
 // Token/holdings row (.token-row): flat row with hairline divider, house-framed
+/** Width of the "Hide" action revealed by the swipe. Same 76 as the popup. */
+const HIDE_ACTION_W = 76;
+
+/**
+ * A row you drag right-to-left to reveal a red "Hide" action, ported from the
+ * extension's SwipeRow (Dashboard.tsx). This is the manual backstop for spam
+ * that gets past the classifier, so it has to be a deliberate, discoverable
+ * gesture — it replaced a long-press, which was both invisible and easy to fire
+ * by accident while scrolling.
+ *
+ * The PanResponder claims the gesture ONLY once the drag is clearly horizontal
+ * (|dx| > |dy| and past a few px). Without that test it swallows vertical drags
+ * and the dashboard stops scrolling.
+ */
+function SwipeToHideRow({ onHide, onPress, children }: {
+  onHide: () => void;
+  onPress?: () => void;
+  children: ReactNode;
+}) {
+  const dx = useRef(new Animated.Value(0)).current;
+  // Read in the responder callbacks, which close over their creation render, so
+  // this has to be a ref rather than state.
+  const openRef = useRef(false);
+  const movedRef = useRef(false);
+
+  const settle = (open: boolean) => {
+    openRef.current = open;
+    Animated.timing(dx, {
+      toValue: open ? -HIDE_ACTION_W : 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const pan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) =>
+        Math.abs(g.dx) > 5 && Math.abs(g.dx) > Math.abs(g.dy),
+      onPanResponderGrant: () => { movedRef.current = false; },
+      onPanResponderMove: (_e, g) => {
+        movedRef.current = true;
+        const base = openRef.current ? -HIDE_ACTION_W : 0;
+        // Clamped: the row never travels past the action, and never right of
+        // its resting position.
+        dx.setValue(Math.max(-HIDE_ACTION_W, Math.min(0, base + g.dx)));
+      },
+      // Past the halfway point stays open, otherwise snap shut (popup parity).
+      onPanResponderRelease: (_e, g) => {
+        const base = openRef.current ? -HIDE_ACTION_W : 0;
+        settle(base + g.dx <= -HIDE_ACTION_W / 2);
+      },
+      onPanResponderTerminate: () => settle(openRef.current),
+    }),
+  ).current;
+
+  return (
+    <View style={{ position: "relative", overflow: "hidden" }}>
+      {/* Action sits beneath the row's right edge, revealed as the row slides. */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Hide token"
+        onPress={() => { settle(false); onHide(); }}
+        style={st.hideAction}
+      >
+        <EyeOffIcon size={15} color="#fff" />
+        <Text style={st.hideActionText}>Hide</Text>
+      </Pressable>
+      {/* Opaque background is load-bearing: it is what keeps the action out of
+          sight until the row is actually dragged off it. */}
+      <Animated.View
+        {...pan.panHandlers}
+        style={{ transform: [{ translateX: dx }], backgroundColor: colors.bg }}
+      >
+        <Pressable
+          onPress={() => {
+            if (movedRef.current) return;             // a swipe, not a tap
+            if (openRef.current) { settle(false); return; } // tap closes it
+            onPress?.();
+          }}
+          style={({ pressed }) => [st.tokenRow, pressed && { opacity: 0.7 }]}
+        >
+          {children}
+        </Pressable>
+      </Animated.View>
+    </View>
+  );
+}
+
 // asset icon + chain corner badge, SYMBOL over chain name left, balance/fiat
-// right — the extension's hierarchy. Long-press hides a token (the touch
-// equivalent of the popup's swipe-to-hide row); hidden rows get Unhide instead.
+// right — the extension's hierarchy. Home rows swipe right-to-left to reveal
+// Hide; hidden rows get an Unhide button instead.
 function AssetRowView(p: {
   row: AssetRow;
   fiat: string;
@@ -1172,13 +1305,8 @@ function AssetRowView(p: {
 }) {
   const r = p.row;
   const disc = p.compact ? 28 : 36;
-  return (
-    <Pressable
-      onPress={p.onPress}
-      onLongPress={p.onHide}
-      delayLongPress={400}
-      style={({ pressed }) => [st.tokenRow, pressed && { opacity: 0.7 }]}
-    >
+  const body = (
+    <>
       <View style={{ width: disc, height: disc }}>
         <AssetIcon
           symbol={r.symbol}
@@ -1206,6 +1334,18 @@ function AssetRowView(p: {
           <Text style={st.unhideText}>Unhide</Text>
         </Pressable>
       )}
+    </>
+  );
+
+  if (p.onHide) {
+    return <SwipeToHideRow onHide={p.onHide} onPress={p.onPress}>{body}</SwipeToHideRow>;
+  }
+  return (
+    <Pressable
+      onPress={p.onPress}
+      style={({ pressed }) => [st.tokenRow, pressed && { opacity: 0.7 }]}
+    >
+      {body}
     </Pressable>
   );
 }
@@ -1405,6 +1545,16 @@ const st = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.divider,
   },
+  // Swipe-to-hide action, pinned to the right edge under the sliding row.
+  // dangerBtn (not the danger text colour): light theme needs the full red
+  // here, since the dark theme's maroon reads as mud on white.
+  hideAction: {
+    position: "absolute", top: 0, right: 0, bottom: 0,
+    width: HIDE_ACTION_W,
+    alignItems: "center", justifyContent: "center", gap: 3,
+    backgroundColor: colors.dangerBtn,
+  },
+  hideActionText: { color: "#fff", fontSize: 10, fontWeight: "600" },
   // Symbol leads the row, as in the popup; the chain name is the subtitle.
   tokenName: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "600" },
   tokenSub: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
@@ -1435,8 +1585,10 @@ const st = StyleSheet.create({
   },
   mono: { color: colors.textPrimary, fontFamily: "monospace", fontSize: ts.row, marginTop: 2 },
   ok: { color: colors.success, fontSize: ts.row },
-  err: { color: colors.danger, fontSize: ts.body, marginTop: 8 },
-  mnemonic: { color: colors.textPrimary, fontSize: 16, lineHeight: 26, fontFamily: "monospace" },
+  err: { color: colors.dangerText, fontSize: ts.body, marginTop: 8, fontWeight: "600" },
+  errCentered: { textAlign: "center", marginTop: 0 },
+  // Height held whether or not there is an error, so the layout never jumps.
+  errSlot: { minHeight: 30, justifyContent: "center", marginTop: 8 },
   segRow: {
     flexDirection: "row", gap: 6,
     padding: 4,
