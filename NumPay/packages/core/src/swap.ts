@@ -75,6 +75,25 @@ export interface BridgeRoute {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
+// Aggregator brand marks for the route rows. Kept together because they are
+// third-party hotlinks that rot: the two CoinGecko/Relay URLs used until
+// 2026-07-27 had gone to HTTP 403 and 404 respectively, and both clients had
+// been drawing a broken image (extension) or a monogram disc (mobile) ever
+// since, with nothing failing loudly. Every URL below was fetched and confirmed
+// 200 with an image content-type on 2026-07-27. Re-check them if a route row
+// loses its mark; do NOT assume the renderer is at fault first.
+export const PROVIDER_LOGO = {
+  // PSP is ParaSwap's own token, so its Trust Wallet asset is the brand mark.
+  // CoinGecko now 403s hotlinks to its asset paths, so it is not usable here.
+  paraswap: "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xcAfE001067cDEF266AfB7Eb5A286dCFD277f3dE5/logo.png",
+  kyberswap: "https://assets.coingecko.com/coins/images/14899/small/RwdVsGcw_400x400.jpg",
+  // assets.relay.link/icon.png is gone (404). LI.FI ships Relay's mark in the
+  // same icon set that feeds the bridge rows, so swap-side and bridge-side
+  // Relay now render the identical logo.
+  relay: "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/bridges/relay.svg",
+  jupiter: "https://assets.coingecko.com/coins/images/34188/small/jup.png",
+} as const;
+
 export const PARASWAP_API     = "https://apiv5.paraswap.io";
 export const LIFI_API         = "https://li.quest/v1";
 export const LIFI_ROUTES_URL  = `${LIFI_API}/advanced/routes`;
@@ -416,7 +435,7 @@ export async function fetchParaswapQuote(chainId: number, from: SwapToken, to: S
     const pr = data.priceRoute;
     return {
       provider: "paraswap", label: "ParaSwap",
-      logo: "https://assets.coingecko.com/coins/images/14929/small/paraswap.png",
+      logo: PROVIDER_LOGO.paraswap,
       destAmount: parseFloat(ethers.formatUnits(pr.destAmount, to.decimals)).toFixed(Math.min(to.decimals, 6)),
       destAmountRaw: pr.destAmount, gasCostUSD: pr.gasCostUSD || "0", priceRoute: pr,
       srcUsd: parseFloat(pr.srcUSD) || undefined, destUsd: parseFloat(pr.destUSD) || undefined,
@@ -443,7 +462,7 @@ export async function fetchKyberQuote(chainId: number, from: SwapToken, to: Swap
     const rs = data.data.routeSummary;
     return {
       provider: "kyberswap", label: "KyberSwap",
-      logo: "https://assets.coingecko.com/coins/images/14899/small/RwdVsGcw_400x400.jpg",
+      logo: PROVIDER_LOGO.kyberswap,
       destAmount: parseFloat(ethers.formatUnits(rs.amountOut, to.decimals)).toFixed(Math.min(to.decimals, 6)),
       destAmountRaw: rs.amountOut, gasCostUSD: rs.gasUsd || "0",
       routeSummary: rs, kyberRouterAddress: data.data.routerAddress,
@@ -485,7 +504,7 @@ export async function fetchRelayQuote(
     const gasUsd = data?.fees?.gas?.amountUsd ?? "0";
     return {
       provider: "relay", label: "Relay",
-      logo: "https://assets.relay.link/icon.png",
+      logo: PROVIDER_LOGO.relay,
       destAmount: parseFloat(ethers.formatUnits(out, to.decimals)).toFixed(Math.min(to.decimals, 6)),
       destAmountRaw: String(out), gasCostUSD: String(gasUsd || "0"),
       relaySteps: data.steps,
@@ -727,7 +746,7 @@ export async function fetchJupiterSwapQuote(
   if (!q) return null;
   return {
     provider: "jupiter", label: "Jupiter",
-    logo: "https://assets.coingecko.com/coins/images/34188/small/jup.png",
+    logo: PROVIDER_LOGO.jupiter,
     destAmount: parseFloat(ethers.formatUnits(q.outAmount, to.decimals)).toFixed(Math.min(to.decimals, 6)),
     destAmountRaw: q.outAmount, gasCostUSD: "0", tag: "Best",
     priceRoute: q.raw, // carry the Jupiter quote for the swap build

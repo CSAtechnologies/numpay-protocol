@@ -7,6 +7,7 @@
 // text label; the disc colour and monogram still match the extension's.
 import { useEffect, useState } from "react";
 import { Image, StyleSheet, Text, View, type ViewStyle } from "react-native";
+import { SvgUri } from "react-native-svg";
 import {
   tokenIconUrl, chainIconUrl, chainLogoLocal, ETH_L2_CHAINS,
   tokenFallbackSpec, chainFallbackSpec, fontSizeFor, type FallbackCoinSpec,
@@ -52,6 +53,16 @@ function FallbackCoin({ spec, size }: { spec: FallbackCoinSpec; size: number }) 
   );
 }
 
+// RN's <Image> decodes PNG/JPG/GIF/WebP and nothing else, so an SVG URL
+// downloads fine and then fails at decode — silently turning every vector logo
+// into the monogram disc. LI.FI serves EVERY bridge/exchange tool icon as .svg
+// (verified 2026-07-27: raw.githubusercontent.com/lifinance/types/…/*.svg,
+// HTTP 200 image/svg+xml), which is why bridge routes showed RELA/NEAR/CCTP/
+// MAYA initials while the extension, whose <img> renders SVG natively, showed
+// real marks. react-native-svg is already a dependency and its SvgUri fetches
+// and renders the vector, so route it there by extension.
+const isSvgUrl = (u: string) => /\.svg(\?|#|$)/i.test(u);
+
 // ── FramedCoin — house disc + ring, walks candidate logo URLs then the disc ──
 function FramedCoin({
   sources, spec, size,
@@ -62,20 +73,35 @@ function FramedCoin({
   useEffect(() => { setIdx(firstViableIdx(srcs)); }, [listKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (idx >= srcs.length) return <FallbackCoin spec={spec} size={size} />;
+  // Both renderers share this handler: a dead source is memoised and the walk
+  // advances to the next candidate, ending at the deterministic disc.
+  const onError = () => {
+    failedLogoUrls.add(srcs[idx]);
+    setIdx((cur) => {
+      let n = cur + 1;
+      while (n < srcs.length && failedLogoUrls.has(srcs[n])) n++;
+      return n;
+    });
+  };
   return (
     <View style={[st.coin, { width: size, height: size, backgroundColor: colors.coinDisc }]}>
-      <Image
-        source={{ uri: srcs[idx] }}
-        style={{ width: "100%", height: "100%" }}
-        onError={() => {
-          failedLogoUrls.add(srcs[idx]);
-          setIdx((cur) => {
-            let n = cur + 1;
-            while (n < srcs.length && failedLogoUrls.has(srcs[n])) n++;
-            return n;
-          });
-        }}
-      />
+      {isSvgUrl(srcs[idx]) ? (
+        // Numeric width/height, not "100%": an SVG without a viewBox has no
+        // intrinsic size to resolve a percentage against and would collapse.
+        <SvgUri
+          uri={srcs[idx]}
+          width={size}
+          height={size}
+          onError={onError}
+          fallback={<FallbackCoin spec={spec} size={size} />}
+        />
+      ) : (
+        <Image
+          source={{ uri: srcs[idx] }}
+          style={{ width: "100%", height: "100%" }}
+          onError={onError}
+        />
+      )}
     </View>
   );
 }

@@ -286,6 +286,29 @@ export function SunIcon({ size = 20, color = "#fff" }: IconProps) {
   );
 }
 
+// The mark on the dashboard's swipe-to-hide action. Ported from the inline SVG
+// in the extension's SwipeRow, stroke 2 like the original (not the 1.8 body
+// weight) so it stays legible on the red action panel.
+export function EyeOffIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frameW(size, 2)} stroke={color}>
+      <Path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+      <Path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+      <Path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+      <Line x1={1} y1={1} x2={23} y2={23} />
+    </Svg>
+  );
+}
+
+export function SettingsIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frame(size)} stroke={color}>
+      <Path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <Circle cx={12} cy={12} r={3} />
+    </Svg>
+  );
+}
+
 // ── Transaction-kind glyphs (TxRow corner badge) ─────────────────────────────
 // White strokes on the kind-coloured disc, ported from the extension TxRow's
 // inline <KindGlyph>: stroke 3 so a 9px glyph still reads.
