@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Privacy | NumPay</title>
+<meta name="description" content="How NumPay handles data. Non-custodial by design: no account, no trackers, and an API that relays balance queries without retaining them."/>
+<link rel="canonical" href="https://csatechnologies.github.io/numpay-site/privacy.html"/>
+<meta name="robots" content="noindex, nofollow"/>
+
+<meta property="og:type" content="article"/>
+<meta property="og:site_name" content="NumPay"/>
+<meta property="og:title" content="Privacy | NumPay"/>
+<meta property="og:description" content="How NumPay handles data. Non-custodial by design: no account, no trackers, and an API that relays balance queries without retaining them."/>
+<meta property="og:url" content="https://csatechnologies.github.io/numpay-site/privacy.html"/>
+<meta property="og:image" content="https://csatechnologies.github.io/numpay-site/numpay/og-image.png"/>
+<meta name="twitter:card" content="summary_large_image"/>
+
+<link rel="icon" type="image/png" href="numpay/numpay-logo.png"/>
+<link rel="stylesheet" href="numpay/fonts/fonts.css"/>
+<link rel="stylesheet" href="numpay/icons/icons.css"/>
+<link rel="stylesheet" href="numpay/site.css"/>
+<script src="numpay/theme-init.js"></script>
+</head>
+<body>
+
+<header class="nav" id="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="index.html">
+      <span class="mark"><img src="numpay/numpay-logo.png" alt="NumPay"/></span>
+      NumPay
+    </a>
+    <div class="nav-right">
+      <a class="nav-back" href="index.html"><i class="ph-bold ph-arrow-left"></i>Back to site</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark theme" aria-pressed="false">
+        <i class="ph-bold ph-sun sun"></i>
+        <i class="ph-bold ph-moon-stars moon"></i>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="wrap doc-head">
+  <span class="eyebrow">Legal</span>
+  <h1>Privacy at NumPay</h1>
+  <div class="doc-meta">Last updated 27 July 2026</div>
+</div>
+
+<main class="wrap prose">
+
+  <p class="lede">NumPay is a non-custodial wallet. Your keys are generated on your device, encrypted on your device, and never leave it. We cannot access your funds, and we built the rest of NumPay to know as little about you as the product allows.</p>
+
+  <h2 id="never">What we never have</h2>
+  <ul>
+    <li>Your recovery phrase, private keys, or PIN. They exist only on your device.</li>
+    <li>An account. There is no signup, no email, and no phone number.</li>
+    <li>Trackers. The wallet contains no analytics SDKs, no advertising identifiers, and no third-party scripts.</li>
+  </ul>
+
+  <h2 id="servers">What our servers see, and for how long</h2>
+  <p>When the wallet shows your balances and token prices, it asks our API instead of calling data providers directly. That server relays the query and forgets it.</p>
+  <ul>
+    <li><b>Wallet addresses.</b> A balance query naturally contains the address being queried. The answer is cached for a few minutes so repeated queries are fast, then it expires. We keep no database of addresses and no log that pairs an address with who asked.</li>
+    <li><b>IP addresses.</b> Any server you connect to sees your IP. We do not log it alongside your queries. It is used only in the moment, to protect the service from abuse through rate limiting.</li>
+    <li><b>A random install ID.</b> The wallet generates a random identifier on your device, used only to rate-limit requests fairly. It is not derived from your addresses and we never store it together with them. Reinstalling the wallet generates a new one.</li>
+  </ul>
+  <p>In short: our API relays balance and price queries, and does not retain them.</p>
+
+  <h2 id="device">What stays on your device</h2>
+  <ul>
+    <li>Your encrypted vault, holding keys and settings.</li>
+    <li>Your activity view, token preferences, address book, and hidden tokens. These are wallet features, not server records.</li>
+  </ul>
+
+  <h2 id="third-parties">Third parties the wallet talks to</h2>
+  <p>To show balances and send transactions, the wallet communicates with public blockchain infrastructure (RPC nodes) and, through our API, with market data providers. These services see the queries needed to answer them, such as an address or a transaction. They do not receive your name, because we do not have it.</p>
+  <p>Swaps and bridges are executed by third-party protocols that you choose in the moment. Their processing is governed by their own terms, shown before you confirm.</p>
+
+  <h2 id="directory">The NumPay ID directory</h2>
+  <p>If you register a NumPay ID, you are asking us to publish a mapping from that number to your wallet addresses, so that other people can pay you by number. That mapping is personal data, and it is public by design: the entire point is that anyone can resolve it.</p>
+  <p>Public registration is not open yet. Before it opens, this section will be expanded to set out retention, correction and removal in full. If you are testing an early build and want a mapping removed, write to <a href="mailto:privacy@numpay.app">privacy@numpay.app</a>.</p>
+
+  <h2 id="rights">Your rights</h2>
+  <p>Under the Nigeria Data Protection Act and the GDPR you have rights over personal data we process. For the wallet API there is nothing at rest to disclose or erase: queries expire from cache within minutes, and no profile of you exists. For the NumPay ID directory, removal and correction work as described in that section.</p>
+  <p>Questions or requests: <a href="mailto:privacy@numpay.app">privacy@numpay.app</a>.</p>
+
+  <h2 id="changes">Changes</h2>
+  <p>We will update this page when data flows change, and the wallet's release notes will say so. Material changes will never be silent.</p>
+
+  <hr/>
+  <p>See also the <a href="terms.html">Terms of Use</a>.</p>
+
+</main>
+
+<footer class="foot wrap">
+  <div class="foot-bottom">
+    <span>&copy; 2026 NumPay. All rights reserved.</span>
+    <div class="socials">
+      <a href="index.html">Home</a>
+      <a href="terms.html">Terms</a>
+    </div>
+  </div>
+</footer>
+
+<script src="numpay/site.js" defer></script>
+</body>
+</html>

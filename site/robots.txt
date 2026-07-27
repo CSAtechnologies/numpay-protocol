@@ -11,3 +11,5 @@
 
 User-agent: *
 Disallow: /
+
+Sitemap: https://csatechnologies.github.io/numpay-site/sitemap.xml

@@ -731,6 +731,52 @@ footer.foot { padding-block: 64px 40px; border-top: 1px solid var(--hair); }
   .reveal.in { opacity: 1; transform: none; }
 }
 
+/* ---------- legal / prose pages ---------- */
+.doc-head { padding: clamp(48px, 7vw, 84px) 0 0; }
+.doc-head h1 { font-size: clamp(34px, 5vw, 54px); letter-spacing: -.03em; line-height: 1.06; margin: 14px 0 0; }
+.doc-meta { margin-top: 16px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+
+.notice {
+  margin: 28px 0 0; padding: 16px 18px; border-radius: var(--r-md);
+  border: 1px solid var(--border); background: var(--brand-soft);
+  font-size: 14.5px; line-height: 1.6; color: var(--text-2);
+}
+.notice b { color: var(--text); }
+
+.prose { max-width: 760px; padding-block: clamp(36px, 5vw, 56px) clamp(60px, 9vw, 110px); }
+.prose h2 {
+  font-size: clamp(21px, 2.6vw, 27px); letter-spacing: -.02em; line-height: 1.25;
+  margin: 46px 0 14px; scroll-margin-top: 90px;
+}
+.prose h2:first-child { margin-top: 0; }
+.prose h3 { font-size: 17px; font-weight: 600; margin: 30px 0 10px; letter-spacing: -.01em; }
+.prose p { margin: 0 0 16px; font-size: 16px; line-height: 1.72; color: var(--text-2); }
+.prose ul { margin: 0 0 18px; padding-left: 0; list-style: none; }
+.prose li {
+  position: relative; padding-left: 26px; margin-bottom: 11px;
+  font-size: 16px; line-height: 1.68; color: var(--text-2);
+}
+.prose li::before {
+  content: ""; position: absolute; left: 6px; top: 11px;
+  width: 6px; height: 6px; border-radius: 50%; background: var(--brand);
+}
+.prose strong, .prose b { color: var(--text); font-weight: 600; }
+.prose a { color: var(--brand-ink); text-decoration: underline; text-underline-offset: 3px; }
+.prose a:hover { text-decoration-thickness: 2px; }
+.prose hr { border: none; border-top: 1px solid var(--hair); margin: 44px 0; }
+.prose .lede { font-size: 18px; line-height: 1.65; color: var(--text); }
+
+/* Simplified header for the legal pages: no section anchors to jump to, so no
+   burger and no mobile panel are needed. */
+.nav-back { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 500; color: var(--muted); }
+.nav-back:hover { color: var(--text); }
+
+/* ---------- 404 ---------- */
+.nf { min-height: 62vh; display: grid; place-items: center; text-align: center; padding-block: 80px; }
+.nf .code { font-family: var(--mono); font-size: clamp(64px, 12vw, 128px); font-weight: 700; line-height: 1; letter-spacing: -.04em; background: var(--brand-grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.nf h1 { font-size: clamp(22px, 3.4vw, 32px); letter-spacing: -.02em; margin: 18px 0 10px; }
+.nf p { color: var(--muted); margin: 0 0 26px; }
+
 /* ---------- responsive ---------- */
 @media (max-width: 920px) {
   .hero-grid { grid-template-columns: 1fr; }

@@ -4,16 +4,116 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>NumPay: Your number is your wallet</title>
-<meta name="description" content="Send and receive crypto with a short 11-digit NumPay ID, not a long address. Non-custodial. Multi-chain."/>
-<!-- Kept out of search results until the store links, legal pages and meta
-     are real. Remove this tag and the matching rules in robots.txt to launch. -->
+<meta name="description" content="Send and receive crypto with a short 11-digit NumPay ID, not a long address. Non-custodial, multi-chain, and your keys never leave your device."/>
+<!-- Kept out of search results until the store links are real. Remove this tag
+     and the matching rules in robots.txt to launch. -->
 <meta name="robots" content="noindex, nofollow"/>
+<link rel="canonical" href="https://csatechnologies.github.io/numpay-site/"/>
+
+<!-- Open Graph / Twitter. og:image must be an absolute URL: crawlers do not
+     resolve relative paths. -->
+<meta property="og:type" content="website"/>
+<meta property="og:site_name" content="NumPay"/>
+<meta property="og:title" content="NumPay: Your number is your wallet"/>
+<meta property="og:description" content="Send and receive crypto with a short 11-digit NumPay ID, not a long address. Non-custodial, multi-chain, and your keys never leave your device."/>
+<meta property="og:url" content="https://csatechnologies.github.io/numpay-site/"/>
+<meta property="og:image" content="https://csatechnologies.github.io/numpay-site/numpay/og-image.png"/>
+<meta property="og:image:width" content="1200"/>
+<meta property="og:image:height" content="630"/>
+<meta property="og:image:alt" content="The NumPay logo on a violet gradient"/>
+<meta property="og:locale" content="en_US"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:title" content="NumPay: Your number is your wallet"/>
+<meta name="twitter:description" content="Send and receive crypto with a short 11-digit NumPay ID, not a long address. Non-custodial and multi-chain."/>
+<meta name="twitter:image" content="https://csatechnologies.github.io/numpay-site/numpay/og-image.png"/>
+
+<meta name="theme-color" content="#7c6df0"/>
 <link rel="icon" type="image/png" href="numpay/numpay-logo.png"/>
+<link rel="apple-touch-icon" href="numpay/numpay-logo.png"/>
 <link rel="preload" href="numpay/fonts/geist-600-normal-latin.woff2" as="font" type="font/woff2" crossorigin/>
 <link rel="stylesheet" href="numpay/fonts/fonts.css"/>
 <link rel="stylesheet" href="numpay/icons/icons.css"/>
 <link rel="stylesheet" href="numpay/site.css"/>
 <script src="numpay/theme-init.js"></script>
+
+<!-- Structured data. This is a JSON-LD data block, not executable script, so
+     it is outside the scope of script-src and does not require 'unsafe-inline'.
+     The FAQ entries must stay in sync with the FAQS array in numpay/site.js;
+     structured data that does not match what the page shows is a violation of
+     Google's guidelines. -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://csatechnologies.github.io/numpay-site/#org",
+      "name": "NumPay",
+      "url": "https://csatechnologies.github.io/numpay-site/",
+      "logo": "https://csatechnologies.github.io/numpay-site/numpay/numpay-logo.png"
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://csatechnologies.github.io/numpay-site/#website",
+      "url": "https://csatechnologies.github.io/numpay-site/",
+      "name": "NumPay",
+      "publisher": { "@id": "https://csatechnologies.github.io/numpay-site/#org" },
+      "inLanguage": "en"
+    },
+    {
+      "@type": "SoftwareApplication",
+      "name": "NumPay",
+      "applicationCategory": "FinanceApplication",
+      "operatingSystem": "iOS, Android, Chrome",
+      "url": "https://csatechnologies.github.io/numpay-site/",
+      "image": "https://csatechnologies.github.io/numpay-site/numpay/og-image.png",
+      "description": "A non-custodial multi-chain crypto wallet where a short 11-digit NumPay ID replaces a long blockchain address. Keys are generated and stored on your own device.",
+      "publisher": { "@id": "https://csatechnologies.github.io/numpay-site/#org" },
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD",
+        "description": "Free to download and to register a NumPay ID. Standard network fees apply to on-chain transactions."
+      }
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "What exactly is a NumPay ID?",
+          "acceptedAnswer": { "@type": "Answer", "text": "It's a short, unique 11-digit number tied to your self-custody wallet. Instead of sharing a long blockchain address, you share your NumPay ID, and it resolves to the right address on whichever chain someone is paying you on." }
+        },
+        {
+          "@type": "Question",
+          "name": "Is NumPay custodial? Do you hold my funds?",
+          "acceptedAnswer": { "@type": "Answer", "text": "No. NumPay is fully non-custodial. Your private keys and recovery phrase are generated and stored only on your device. We can't access, freeze, or move your funds. Your NumPay ID is just a friendly pointer to addresses you already own." }
+        },
+        {
+          "@type": "Question",
+          "name": "Which blockchains are supported?",
+          "acceptedAnswer": { "@type": "Answer", "text": "NumPay supports 20+ networks including Ethereum, Solana, Bitcoin, BNB Chain, Polygon, Arbitrum, Optimism, Base, Avalanche and more, with new chains added regularly." }
+        },
+        {
+          "@type": "Question",
+          "name": "What happens if I lose my phone?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Your wallet is recoverable from your secret recovery phrase on any compatible wallet, including a fresh NumPay install. As long as you've safely backed up that phrase, your funds and NumPay ID are safe." }
+        },
+        {
+          "@type": "Question",
+          "name": "Does it cost anything to use?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Creating a wallet and claiming a NumPay ID is free. You only ever pay the standard network (gas) fees for on-chain transactions, plus any routing fee disclosed up front on swaps." }
+        },
+        {
+          "@type": "Question",
+          "name": "Can someone send to my ID from another wallet?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Sending by NumPay ID works between NumPay users. You can also share a standard address or QR generated in the app, so anyone on any wallet can still pay you." }
+        }
+      ]
+    }
+  ]
+}
+</script>
 </head>
 <body>
 
@@ -440,10 +540,9 @@
     </div>
     <div class="foot-col">
       <h5>Company</h5>
-      <a href="#">About</a>
-      <a href="#">Blog</a>
-      <a href="#">Support</a>
-      <a href="#">Privacy &amp; Terms</a>
+      <a href="mailto:privacy@numpay.app">Contact</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms of Use</a>
     </div>
   </div>
   <div class="foot-bottom">
