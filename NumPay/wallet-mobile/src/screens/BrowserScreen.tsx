@@ -103,8 +103,15 @@ export function BrowserScreen({
 
   // Refs for the callbacks that must not close over stale state: onMessage is
   // handed to the WebView once, and the back handler is registered once.
-  const stateRef = useRef({ origin, chain, account, unlocked, approval });
-  stateRef.current = { origin, chain, account, unlocked, approval };
+  const stateRef = useRef({ origin, chain, account, unlocked });
+  stateRef.current = { origin, chain, account, unlocked };
+
+  // The "one approval at a time" guard has to be a ref, not the state above.
+  // setApproval does not apply until the next render, so a page firing two
+  // signing requests in the same tick would clear the check twice: the second
+  // sheet would replace the first, and the first request would hang forever
+  // with no sheet and no response. This is set synchronously instead.
+  const approvalRef = useRef<PendingApproval | null>(null);
 
   useEffect(() => { void listRecents().then(setRecents); }, []);
   useEffect(() => { void chainLabel(chain).then(setChainName); }, [chain]);
@@ -170,7 +177,7 @@ export function BrowserScreen({
 
       // One approval at a time. Without this a hostile page can loop requests
       // and bury the user in sheets until one is tapped by accident.
-      if (s.approval) {
+      if (approvalRef.current) {
         respond(req.id, req.channel, undefined, RPC_ERR.requestPending);
         return;
       }
@@ -187,8 +194,10 @@ export function BrowserScreen({
       } else if (outcome.kind === "error") {
         respond(req.id, req.channel, undefined, outcome.error);
       } else {
+        const next = { pending: outcome.pending, id: req.id, channel: req.channel };
+        approvalRef.current = next; // synchronous: closes the double-sheet race
         setSheetError("");
-        setApproval({ pending: outcome.pending, id: req.id, channel: req.channel });
+        setApproval(next);
       }
     },
     [respond],
@@ -197,6 +206,7 @@ export function BrowserScreen({
   // ── approval decisions ─────────────────────────────────────────────────────
 
   const closeApproval = useCallback(() => {
+    approvalRef.current = null; // frees the slot for the page's next request
     setApproval(null);
     setBusy(false);
     setSheetError("");
@@ -323,7 +333,7 @@ export function BrowserScreen({
   urlRef.current = url;
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      if (stateRef.current.approval) return true;
+      if (approvalRef.current) return true;
       if (canGoBackRef.current) {
         webRef.current?.goBack();
         return true;
