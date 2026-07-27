@@ -12,26 +12,33 @@
      packages/core/src/chains/ (Bitcoin, Litecoin, Solana, Sui, Tron, XRP).
      Do not add a chain to this list before it ships in the wallet. */
   const CHAINS = [
-    { sym: "ETH", name: "Ethereum",  c: "linear-gradient(135deg,#627eea,#3c5bd4)" },
-    { sym: "SOL", name: "Solana",    c: "linear-gradient(135deg,#9945ff,#14f195)" },
-    { sym: "BTC", name: "Bitcoin",   c: "linear-gradient(135deg,#f7931a,#e8780c)" },
-    { sym: "BNB", name: "BNB Chain", c: "linear-gradient(135deg,#f3ba2f,#d99e16)" },
-    { sym: "POL", name: "Polygon",   c: "linear-gradient(135deg,#8247e5,#6c31c9)" },
-    { sym: "ARB", name: "Arbitrum",  c: "linear-gradient(135deg,#28a0f0,#1b7fc4)" },
-    { sym: "OP",  name: "Optimism",  c: "linear-gradient(135deg,#ff0420,#cc0319)" },
-    { sym: "AVAX", name: "Avalanche", c: "linear-gradient(135deg,#e84142,#c42e2f)" },
-    { sym: "BASE", name: "Base",     c: "linear-gradient(135deg,#0052ff,#0040cc)" },
-    { sym: "SUI", name: "Sui",       c: "linear-gradient(135deg,#6fbcf0,#2f7dd1)" },
-    { sym: "XRP", name: "XRP Ledger", c: "linear-gradient(135deg,#5c6470,#23292f)" },
-    { sym: "TRX", name: "Tron",      c: "linear-gradient(135deg,#ff060a,#cc0508)" },
+    { sym: "ETH",  name: "Ethereum",   file: "ethereum.png" },
+    { sym: "SOL",  name: "Solana",     file: "solana.png" },
+    { sym: "BTC",  name: "Bitcoin",    file: "bitcoin.png" },
+    { sym: "BNB",  name: "BNB Chain",  file: "bsc.png" },
+    { sym: "POL",  name: "Polygon",    file: "polygon.webp" },
+    { sym: "ARB",  name: "Arbitrum",   file: "arbitrum.png" },
+    { sym: "OP",   name: "Optimism",   file: "optimism.png" },
+    { sym: "AVAX", name: "Avalanche",  file: "avalanche.webp" },
+    { sym: "BASE", name: "Base",       file: "base.svg" },
+    { sym: "SUI",  name: "Sui",        file: "sui.webp" },
+    { sym: "XRP",  name: "XRP Ledger", file: "xrp.png" },
+    { sym: "TRX",  name: "Tron",       file: "tron.webp" },
   ];
+
+  // The logo sits next to the chain name in every placement, so it is
+  // decorative and takes an empty alt rather than repeating the name.
+  function logo(ch, px, cls) {
+    return '<img class="' + cls + '" src="numpay/chains/' + ch.file + '" alt="" ' +
+      'width="' + px + '" height="' + px + '" loading="lazy" decoding="async"/>';
+  }
 
   /* ---------- chain grid ---------- */
   const grid = document.getElementById("chainGrid");
   if (grid) {
     grid.innerHTML = CHAINS.map(function (ch) {
       return '<div class="chain-cell">' +
-        '<span class="cd" style="background:' + ch.c + '">' + ch.sym.slice(0, 3) + '</span>' +
+        '<span class="cd">' + logo(ch, 40, "cl") + '</span>' +
         '<span class="cn">' + ch.name + '</span></div>';
     }).join("");
   }
@@ -40,8 +47,8 @@
   const marquee = document.getElementById("marquee");
   if (marquee) {
     const one = CHAINS.map(function (ch) {
-      return '<span class="chain-name"><span class="chain-dot" style="background:' + ch.c + '">' +
-        ch.sym.slice(0, 1) + '</span>' + ch.name + '</span>';
+      return '<span class="chain-name"><span class="chain-dot">' +
+        logo(ch, 24, "cl") + '</span>' + ch.name + '</span>';
     }).join("");
     marquee.innerHTML = one + one; // duplicate for seamless loop
   }
@@ -80,11 +87,47 @@
   window.addEventListener("scroll", onScroll, { passive: true });
   onScroll();
 
-  /* ---------- mobile burger: smooth jump to download ---------- */
+  /* ---------- mobile menu ---------- */
   const burger = document.getElementById("burger");
-  if (burger) burger.addEventListener("click", function () {
-    document.getElementById("how").scrollIntoView({ behavior: "smooth" });
-  });
+  const mobileMenu = document.getElementById("mobileMenu");
+
+  if (burger && mobileMenu) {
+    const setMenu = function (open) {
+      mobileMenu.classList.toggle("on", open);
+      burger.setAttribute("aria-expanded", String(open));
+      burger.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+    };
+
+    burger.addEventListener("click", function (e) {
+      e.stopPropagation();
+      setMenu(burger.getAttribute("aria-expanded") !== "true");
+    });
+
+    // Every link is a same-page jump, so close on the way out.
+    mobileMenu.addEventListener("click", function (e) {
+      if (e.target.closest("a")) setMenu(false);
+    });
+
+    document.addEventListener("click", function (e) {
+      if (!mobileMenu.contains(e.target) && !burger.contains(e.target)) setMenu(false);
+    });
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && burger.getAttribute("aria-expanded") === "true") {
+        setMenu(false);
+        burger.focus();
+      }
+    });
+
+    // Leaving the breakpoint while it is open would otherwise strand the panel
+    // open behind the desktop nav.
+    if (window.matchMedia) {
+      const wide = window.matchMedia("(min-width: 921px)");
+      const closeIfWide = function (ev) { if (ev.matches) setMenu(false); };
+      if (wide.addEventListener) wide.addEventListener("change", closeIfWide);
+      else if (wide.addListener) wide.addListener(closeIfWide);
+    }
+  }
 
   /* ---------- scroll reveal ---------- */
   const reveals = document.querySelectorAll(".reveal");

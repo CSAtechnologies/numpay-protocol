@@ -36,11 +36,20 @@
         <i class="ph-bold ph-moon-stars moon"></i>
       </button>
       <a href="#download" class="btn btn-primary">Get NumPay</a>
-      <button class="nav-burger" id="burger" aria-label="Menu">
-        <i class="ph-bold ph-list"></i>
+      <button class="nav-burger" id="burger" aria-label="Open menu" aria-expanded="false" aria-controls="mobileMenu">
+        <i class="ph-bold ph-list open"></i>
+        <i class="ph-bold ph-x close"></i>
       </button>
     </div>
   </div>
+  <nav class="mobile-menu" id="mobileMenu" aria-label="Main">
+    <a href="#how">How it works</a>
+    <a href="#features">Features</a>
+    <a href="#chains">Chains</a>
+    <a href="#security">Security</a>
+    <a href="#faq">FAQ</a>
+    <a href="#download" class="btn btn-primary mm-cta">Get NumPay</a>
+  </nav>
 </header>
 
 <a id="top"></a>
@@ -296,17 +305,17 @@
             </div>
             <div class="ps-listhead"><span>Assets</span><span>5</span></div>
             <div class="ps-tok">
-              <span class="ti" style="background:linear-gradient(135deg,#627eea,#3c5bd4)">ETH</span>
+              <span class="ti"><img class="cl" src="numpay/chains/ethereum.png" alt="" width="30" height="30" loading="lazy" decoding="async"/></span>
               <span><div class="ts">Ethereum</div><div class="tn">1.84 ETH</div></span>
               <span><div class="tv">$6,210.40</div><div class="tg">+2.4%</div></span>
             </div>
             <div class="ps-tok">
-              <span class="ti" style="background:linear-gradient(135deg,#9945ff,#14f195)">SOL</span>
+              <span class="ti"><img class="cl" src="numpay/chains/solana.png" alt="" width="30" height="30" loading="lazy" decoding="async"/></span>
               <span><div class="ts">Solana</div><div class="tn">142.6 SOL</div></span>
               <span><div class="tv">$4,180.12</div><div class="tg">+5.1%</div></span>
             </div>
             <div class="ps-tok">
-              <span class="ti" style="background:linear-gradient(135deg,#2775ca,#1e5a9e)">USDC</span>
+              <span class="ti"><img class="cl" src="numpay/chains/usdc.png" alt="" width="30" height="30" loading="lazy" decoding="async"/></span>
               <span><div class="ts">USD Coin</div><div class="tn">2,090 USDC</div></span>
               <span><div class="tv">$2,090.41</div><div class="tg" style="color:var(--muted)">0.0%</div></span>
             </div>

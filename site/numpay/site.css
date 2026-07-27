@@ -203,6 +203,55 @@ header.nav.scrolled { border-bottom-color: var(--hair); }
 [data-theme="dark"] .theme-toggle .sun { display: none; }
 [data-theme="dark"] .theme-toggle .moon { display: block; }
 .nav-burger { display: none; }
+.nav-burger .close { display: none; }
+.nav-burger[aria-expanded="true"] .open { display: none; }
+.nav-burger[aria-expanded="true"] .close { display: block; }
+
+/* ---------- mobile menu ----------
+   Hidden above 920px, where .nav-links carries navigation instead. The panel
+   animates on max-height so it can collapse without a fixed height, and it is
+   display:none when closed so its links stay out of the tab order. */
+.mobile-menu { display: none; }
+@media (max-width: 920px) {
+  .mobile-menu {
+    display: grid;
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    visibility: hidden;
+    padding: 0 var(--gut);
+    border-top: 1px solid transparent;
+    background: color-mix(in srgb, var(--bg) 96%, transparent);
+    transition: max-height .32s cubic-bezier(.2,.7,.3,1), opacity .22s, padding .32s, visibility 0s .32s;
+  }
+  .mobile-menu.on {
+    max-height: 70vh;
+    opacity: 1;
+    visibility: visible;
+    padding: 10px var(--gut) 18px;
+    border-top-color: var(--hair);
+    overflow-y: auto;
+    transition: max-height .32s cubic-bezier(.2,.7,.3,1), opacity .22s, padding .32s, visibility 0s;
+  }
+  .mobile-menu a {
+    padding: 14px 4px;
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--text-2);
+    border-bottom: 1px solid var(--hair);
+  }
+  .mobile-menu a:hover { color: var(--brand-ink); }
+  .mobile-menu a:last-child { border-bottom: none; }
+  .mobile-menu .mm-cta {
+    margin-top: 14px;
+    justify-content: center;
+    color: #fff;
+    font-weight: 600;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mobile-menu { transition: none; }
+}
 
 /* ---------- duotone icon tiles (shared premium treatment) ---------- */
 .tile {
@@ -381,7 +430,8 @@ i[class^="ph-"], i[class*=" ph-"] { display: inline-block; line-height: 1; }
 .marquee:hover .marquee-track { animation-play-state: paused; }
 @keyframes scroll-x { to { transform: translateX(-50%); } }
 .chain-name { display: inline-flex; align-items: center; gap: 9px; color: var(--muted); font-weight: 600; font-size: 15.5px; white-space: nowrap; letter-spacing: -.01em; }
-.chain-dot { width: 24px; height: 24px; border-radius: 50%; display: inline-grid; place-items: center; color: #fff; font-size: 10px; font-weight: 700; box-shadow: var(--shadow-1); }
+.chain-dot { width: 24px; height: 24px; border-radius: 50%; display: inline-grid; place-items: center; box-shadow: var(--shadow-1); }
+.chain-dot .cl { width: 24px; height: 24px; }
 
 /* product shot in the bold feature */
 /* object-position reproduces the crop the design tool stored for this slot:
@@ -558,7 +608,8 @@ i[class^="ph-"], i[class*=" ph-"] { display: inline-block; line-height: 1; }
 .ps-act.primary .ai { background: rgba(255,255,255,.22); color: #fff; }
 .ps-listhead { display: flex; align-items: center; justify-content: space-between; margin: 18px 2px 8px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
 .ps-tok { display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: center; padding: 9px 0; }
-.ps-tok .ti { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 10px; font-weight: 700; }
+.ps-tok .ti { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; }
+.ps-tok .ti .cl { width: 30px; height: 30px; }
 .ps-tok .ts { font-size: 13px; font-weight: 600; color: var(--text); }
 .ps-tok .tn { font-size: 11px; color: var(--muted); }
 .ps-tok .tv { text-align: right; font-size: 13px; font-weight: 600; color: var(--text); }
@@ -576,7 +627,23 @@ i[class^="ph-"], i[class*=" ph-"] { display: inline-block; line-height: 1; }
   transition: transform .18s, border-color .18s, box-shadow .18s;
 }
 .chain-cell:hover { transform: translateY(-3px); border-color: var(--border-2); box-shadow: var(--shadow-2); }
-.chain-cell .cd { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 12.5px; font-weight: 700; box-shadow: var(--shadow-1); }
+.chain-cell .cd { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; box-shadow: var(--shadow-1); }
+.chain-cell .cd .cl { width: 40px; height: 40px; }
+
+/* Logo chips. The vendored marks are inconsistent: some (Ethereum, Bitcoin,
+   XRP) are bare glyphs on transparency, others (Sui, Polygon, Tron) already
+   ship as filled badges. A white disc under every one of them is what makes
+   the set read as a single system, and it keeps the dark-on-transparent
+   glyphs legible in dark mode, where a themed surface would swallow them. */
+.chain-dot, .chain-cell .cd, .ps-tok .ti {
+  background: #fff;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+[data-theme="dark"] .chain-dot,
+[data-theme="dark"] .chain-cell .cd,
+[data-theme="dark"] .ps-tok .ti { box-shadow: 0 0 0 1px rgba(255,255,255,.10); }
+.cl { border-radius: 50%; object-fit: cover; display: block; }
 .chain-cell .cn { font-size: 12px; font-weight: 600; color: var(--text-2); }
 .chain-more { text-align: center; margin-top: 24px; font-size: 14px; color: var(--muted); }
 
