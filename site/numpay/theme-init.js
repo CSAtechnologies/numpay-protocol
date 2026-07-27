@@ -3,6 +3,12 @@
    than an inline <script>) so the page can ship a strict CSP with no
    'unsafe-inline' in script-src. */
 (function () {
+  // Marks that scripting is alive. The scroll-reveal animation hides elements
+  // with opacity:0 until site.js adds .in, so that rule is scoped to .js and
+  // the page stays fully readable if any script fails, is blocked, or is still
+  // loading. Content must never depend on JavaScript to be visible.
+  document.documentElement.classList.add("js");
+
   try {
     var saved = localStorage.getItem("numpay-site-theme");
     if (saved !== "dark" && saved !== "light") {

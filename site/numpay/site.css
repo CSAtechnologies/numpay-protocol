@@ -88,13 +88,21 @@ body {
   transition: background-color .4s ease, color .4s ease;
   overflow-x: hidden;
 }
-/* fine grain texture — the premium tell */
-body::after {
-  content: ""; position: fixed; inset: 0; z-index: 9000; pointer-events: none;
-  opacity: .55; mix-blend-mode: multiply;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
+/* Fine grain texture, the premium tell.
+   Desktop only, deliberately. This is a fixed full-viewport layer combining
+   mix-blend-mode with an feTurbulence SVG, which forces the whole page into a
+   composited layer. On mobile GPUs that pairing is a known cause of blank or
+   white rendering, and it costs real paint time for an effect nobody notices
+   on a phone. Pointer and hover are used rather than width so that a narrow
+   desktop window keeps the texture while touch devices never get it. */
+@media (hover: hover) and (pointer: fine) {
+  body::after {
+    content: ""; position: fixed; inset: 0; z-index: 9000; pointer-events: none;
+    opacity: .55; mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
+  }
+  [data-theme="dark"] body::after { mix-blend-mode: screen; opacity: .5; }
 }
-[data-theme="dark"] body::after { mix-blend-mode: screen; opacity: .5; }
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
 .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
@@ -726,9 +734,12 @@ footer.foot { padding-block: 64px 40px; border-top: 1px solid var(--hair); }
 .foot-disclaimer { font-size: 12px; color: var(--muted-2); margin-top: 18px; line-height: 1.55; max-width: 720px; }
 
 /* ---------- reveal animation ---------- */
+/* Scoped to .js (set by theme-init.js before first paint) so that a script
+   failure leaves the page readable instead of invisible. Without the scope,
+   anything with .reveal sits at opacity:0 forever if site.js never runs. */
 @media (prefers-reduced-motion: no-preference) {
-  .reveal { opacity: 0; transform: translateY(24px); transition: opacity .7s cubic-bezier(.2,.7,.3,1), transform .7s cubic-bezier(.2,.7,.3,1); }
-  .reveal.in { opacity: 1; transform: none; }
+  .js .reveal { opacity: 0; transform: translateY(24px); transition: opacity .7s cubic-bezier(.2,.7,.3,1), transform .7s cubic-bezier(.2,.7,.3,1); }
+  .js .reveal.in { opacity: 1; transform: none; }
 }
 
 /* ---------- legal / prose pages ---------- */
