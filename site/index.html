@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>NumPay: Your number is your wallet</title>
+<meta name="description" content="Send and receive crypto with a short 11-digit NumPay ID, not a long address. Non-custodial. Multi-chain."/>
+<link rel="icon" type="image/png" href="numpay/numpay-logo.png"/>
+<link rel="preload" href="numpay/fonts/geist-600-normal-latin.woff2" as="font" type="font/woff2" crossorigin/>
+<link rel="stylesheet" href="numpay/fonts/fonts.css"/>
+<link rel="stylesheet" href="numpay/icons/icons.css"/>
+<link rel="stylesheet" href="numpay/site.css"/>
+</head>
+<body>
+
+<!-- ================= NAV ================= -->
+<header class="nav" id="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top">
+      <span class="mark">
+        <img src="numpay/numpay-logo.png" alt="NumPay"/>
+      </span>
+      NumPay
+    </a>
+    <nav class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#chains">Chains</a>
+      <a href="#security">Security</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <div class="nav-right">
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+        <i class="ph-bold ph-sun sun"></i>
+        <i class="ph-bold ph-moon-stars moon"></i>
+      </button>
+      <a href="#download" class="btn btn-primary">Get NumPay</a>
+      <button class="nav-burger" id="burger" aria-label="Menu">
+        <i class="ph-bold ph-list"></i>
+      </button>
+    </div>
+  </div>
+</header>
+
+<a id="top"></a>
+
+<!-- ================= HERO ================= -->
+<section class="hero wrap">
+  <div class="hero-grid">
+    <div class="hero-copy">
+      <span class="eyebrow" data-comment-anchor="69aed2613e-span"><b class="ix">01</b>Non-custodial · Multi-chain</span>
+      <h1>Your number<br/>is your <span class="serif">wallet.</span></h1>
+      <p class="lead">Send and receive crypto with a short <b>11-digit NumPay ID</b><br/>not a long, error-prone address. One ID works across every chain you hold.</p>
+      <div class="hero-cta">
+        <div class="stores">
+          <a class="store" href="#download" data-store="ios">
+            <i class="ph-fill ph-apple-logo"></i>
+            <span class="st"><span class="k">Download on the</span><span class="v">App Store</span></span>
+          </a>
+          <a class="store" href="#download" data-store="android">
+            <i class="ph-fill ph-google-play-logo"></i>
+            <span class="st"><span class="k">Get it on</span><span class="v">Google Play</span></span>
+          </a>
+          <a class="store" href="#download" data-store="chrome">
+            <i class="ph-fill ph-google-chrome-logo"></i>
+            <span class="st"><span class="k">Add to</span><span class="v">Chrome</span></span>
+          </a>
+        </div>
+        <div class="trust-row">
+          <span><b>Self-custody</b> , your keys</span>
+          <span class="dot"></span>
+          <span><b>20+</b> chains</span>
+          <span class="dot"></span>
+          <span>No sign-up fees</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="hero-visual">
+      <div class="idcard">
+        <div class="idcard-flow">
+          <div class="ic-top">
+            <div class="ic-brand">
+              <img class="glyph" src="numpay/numpay-logo.png" alt=""/>
+              NumPay
+            </div>
+            <div class="ic-contactless">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 8.5a6 6 0 0 1 0 7"/><path d="M9.5 6a10 10 0 0 1 0 12"/><path d="M13 3.5a14 14 0 0 1 0 17"/></svg>
+            </div>
+          </div>
+          <div class="ic-chiprow">
+            <span class="emv" style="margin: 0px 0px 1px"></span>
+            <span class="ic-tag" style="border-width: 1px; padding: 5px 1px 5px 11px">Multi-chain</span>
+          </div>
+          <div class="ic-mid">
+            <div class="ic-label" data-comment-anchor="535aba2ad4-div" style="margin: 3px 0px 0px">NUMPAY ID</div>
+            <div class="ic-num" style="margin: 5px 0px 0px"><span class="h">#</span>123&#8202;4567&#8202;8901</div>
+            <div class="ic-chains">
+              <span class="ic-chip">
+                <svg viewBox="0 0 256 417" xmlns="http://www.w3.org/2000/svg"><path fill="#343434" d="M127.96 0l-2.8 9.5v275.7l2.8 2.79 127.96-75.64z"/><path fill="#8c8c8c" d="M127.96 0L0 212.35l127.96 75.64V154.16z"/><path fill="#3c3c3b" d="M127.96 312.19l-1.58 1.93v98.2l1.58 4.6L256 236.59z"/><path fill="#8c8c8c" d="M127.96 416.9v-104.71L0 236.59z"/><path fill="#141414" d="M127.96 287.99l127.96-75.64-127.96-58.18z"/><path fill="#393939" d="M0 212.35l127.96 75.64V154.16z"/></svg>
+                ETH
+              </span>
+              <span class="ic-chip">
+                <svg viewBox="0 0 398 312" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="solg" x1="360.9" y1="-37.5" x2="141.2" y2="383.3" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#00ffa3"/><stop offset="1" stop-color="#dc1fff"/></linearGradient></defs><path fill="url(#solg)" d="M64.6 237.9c2.4-2.4 5.7-3.8 9.2-3.8h317.4c5.8 0 8.7 7 4.6 11.1l-62.7 62.7c-2.4 2.4-5.7 3.8-9.2 3.8H6.5c-5.8 0-8.7-7-4.6-11.1z"/><path fill="url(#solg)" d="M64.6 3.8C67.1 1.4 70.4 0 73.8 0h317.4c5.8 0 8.7 7 4.6 11.1l-62.7 62.7c-2.4 2.4-5.7 3.8-9.2 3.8H6.5c-5.8 0-8.7-7-4.6-11.1z"/><path fill="url(#solg)" d="M333.1 120.1c-2.4-2.4-5.7-3.8-9.2-3.8H6.5c-5.8 0-8.7 7-4.6 11.1l62.7 62.7c2.4 2.4 5.7 3.8 9.2 3.8h317.4c5.8 0 8.7-7 4.6-11.1z"/></svg>
+                SOL
+              </span>
+              <span class="more">and more</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="float-chip fc-1" data-comment-anchor="391c92d98e-div">
+        <span class="ci" style="background:var(--brand-grad)">
+          <i class="ph-bold ph-paper-plane-tilt"></i>
+        </span>
+        <span class="fc-txt"><b>Sent to #123…</b><small>0.5 ETH · 2s</small></span>
+      </div>
+      <div class="float-chip fc-2">
+        <span class="ci" style="background:linear-gradient(135deg,#34d399,#0f9d62)">
+          <i class="ph-bold ph-tray-arrow-down"></i>
+        </span>
+        <span class="fc-txt"><b>Received</b><small class="fc-amt" data-comment-anchor="5cc5e90ca0-small">+250 USDC</small></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CHAINS STRIP ================= -->
+<section class="strip">
+  <div class="wrap">
+    <div class="strip-label" data-comment-anchor="98df858201-div">
+      <i class="ph-bold ph-link-simple-horizontal"></i>
+      One ID. Every major chain.
+    </div>
+    <div class="marquee">
+      <div class="marquee-track" id="marquee"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= HOW IT WORKS ================= -->
+<section class="section-pad wrap" id="how">
+  <div class="sec-head center reveal">
+    <span class="eyebrow center" data-comment-anchor="a74e8d68f4-span"><b class="ix">02</b>How it works</span>
+    <h2 class="h-sec">Pay anyone in three taps.</h2>
+    <p class="lead">No copy-pasting 42-character strings. No QR fumbling. Just a number you can remember and share like a phone contact.</p>
+  </div>
+  <div class="steps">
+    <div class="step reveal" data-comment-anchor="4328efb9d4-div">
+      <span class="step-bg">01</span>
+      <div class="num" data-comment-anchor="eafd427237-div">01</div><span class="line"></span>
+      <h3>Claim your NumPay ID</h3>
+      <p>Under a minute. No email, no forms, no KYC:</p>
+      <ul class="micro">
+        <li><i class="ph-bold ph-check"></i><span><b>Create a wallet</b>: set a password, save your 12-word phrase. Keys never leave your device.</span></li>
+        <li><i class="ph-bold ph-check"></i><span><b>Pick any free 11-digit number</b>: your birthday, lucky digits, anything you&#8217;ll remember.</span></li>
+        <li><i class="ph-bold ph-check"></i><span><b>Tap Register</b>: one confirmation and the number is yours, mapped to all your addresses.</span></li>
+      </ul>
+    </div>
+    <div class="step reveal">
+      <span class="step-bg">02</span>
+      <div class="num">02</div><span class="line"></span>
+      <h3>Share the number</h3>
+      <p>Give out <span class="mono">#123&#8202;4567&#8202;8901</span> instead of a wallet address. Text it, say it, put it on a card.</p>
+    </div>
+    <div class="step reveal">
+      <span class="step-bg">03</span>
+      <div class="num">03</div>
+      <h3>Send &amp; receive</h3>
+      <p>Anyone with a NumPay ID can send you crypto on any supported chain. Funds land in your self-custody wallet.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FEATURES ================= -->
+<section class="section-pad wrap" id="features">
+  <div class="sec-head reveal">
+    <span class="eyebrow"><b class="ix">03</b>Features</span>
+    <h2 class="h-sec">Everything a modern wallet should be.</h2>
+    <p class="lead">Built for people, not addresses. Fast, multi-chain, and fully in your control.</p>
+  </div>
+  <div class="feat-grid">
+    <div class="feat lg reveal" data-comment-anchor="94a7781af0-div">
+      <div>
+        <div class="tile on-ink"><i class="ph-duotone ph-identification-card"></i></div>
+        <h3>Send by NumPay ID</h3>
+        <p>Replace long, fragile addresses with a memorable 11-digit number that routes to the right chain automatically.</p>
+      </div>
+      <img class="feat-shot" src="numpay/feat-send-shot.webp" alt="The NumPay send screen, addressing a payment to an 11-digit NumPay ID" width="248" height="168" loading="lazy" decoding="async"/>
+    </div>
+    <div class="feat reveal" data-comment-anchor="3c06f2e72d-div">
+      <div class="tile"><i class="ph-duotone ph-stack"></i></div>
+      <h3>Truly multi-chain</h3>
+      <p>Hold ETH, SOL, BTC and 20+ networks in one place, with no bridging mess and no separate apps.</p>
+    </div>
+    <div class="feat reveal">
+      <div class="tile"><i class="ph-duotone ph-key"></i></div>
+      <h3>Self-custody</h3>
+      <p>Your keys never leave your device. NumPay can't freeze, move, or see your funds.</p>
+    </div>
+    <div class="feat reveal">
+      <div class="tile"><i class="ph-duotone ph-swap"></i></div>
+      <h3>In-app swaps</h3>
+      <p>Swap tokens across chains at the best routed rate, right inside your wallet.</p>
+    </div>
+    <div class="feat reveal">
+      <div class="tile"><i class="ph-duotone ph-qr-code"></i></div>
+      <h3>QR &amp; request links</h3>
+      <p>Generate a QR or a shareable request link backed by your NumPay ID for instant payments.</p>
+    </div>
+    <div class="feat reveal">
+      <div class="tile"><i class="ph-duotone ph-plugs-connected"></i></div>
+      <h3>Connect to DeFi</h3>
+      <p>Plug into dApps across ecosystems with one wallet: staking, lending, and more.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= WHY DIFFERENT ================= -->
+<section class="section-pad wrap" id="why">
+  <div class="sec-head center reveal">
+    <span class="eyebrow center"><b class="ix">04</b>Why NumPay</span>
+    <h2 class="h-sec">Addresses are a relic. We fixed that.</h2>
+    <p class="lead">A single mistyped character can lose funds forever. NumPay turns crypto payments into something as simple as sharing a number.</p>
+  </div>
+  <div class="compare">
+    <div class="cmp bad reveal">
+      <span class="tag">The old way</span>
+      <h3>A 42-character address</h3>
+      <div class="addr-old">0x90b8d6c4e2f1a7b3c5d9e0f2a4b6c8d0e1f3a5b7</div>
+      <ul>
+        <li data-comment-anchor="026a31fa38-li"><span class="mk"><i class="ph-bold ph-x" data-comment-anchor="762a3e9275-path"></i></span> One wrong character means lost funds</li>
+        <li><span class="mk"><i class="ph-bold ph-x"></i></span> A different address for every chain</li>
+        <li><span class="mk"><i class="ph-bold ph-x"></i></span> Impossible to remember or say out loud</li>
+      </ul>
+    </div>
+    <div class="cmp good reveal">
+      <span class="tag">The NumPay way</span>
+      <h3>An 11-digit NumPay ID</h3>
+      <div class="addr-new"><span class="h">#</span>123&#8202;4567&#8202;8901</div>
+      <ul>
+        <li><span class="mk"><i class="ph-bold ph-check"></i></span> Short, checksummed, hard to get wrong</li>
+        <li><span class="mk"><i class="ph-bold ph-check"></i></span> One ID resolves to every chain you use</li>
+        <li><span class="mk"><i class="ph-bold ph-check"></i></span> Easy to share like a phone number</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SHOWCASE ================= -->
+<section class="showcase section-pad">
+  <div class="wrap showcase-grid">
+    <div class="reveal">
+      <span class="eyebrow"><b class="ix">05</b>The app</span>
+      <h2 class="h-sec">Your whole portfolio,<br/>one clean home screen.</h2>
+      <p class="lead">Balances across every chain, send and receive flows, swaps and activity, designed to feel calm, not crowded.</p>
+      <div class="callouts">
+        <div class="callout">
+          <div class="tile"><i class="ph-duotone ph-wallet"></i></div>
+          <div><h4>Live unified balance</h4><p>One total across all your chains and tokens, updated in real time.</p></div>
+        </div>
+        <div class="callout">
+          <div class="tile"><i class="ph-duotone ph-paper-plane-tilt"></i></div>
+          <div><h4>Send to any NumPay ID</h4><p>Pay anyone, on any chain, straight from the home screen.</p></div>
+        </div>
+        <div class="callout">
+          <div class="tile"><i class="ph-duotone ph-shield-check"></i></div>
+          <div><h4>Built-in protection</h4><p>Address-poisoning warnings and verified-ID checks before every send.</p></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="phone-stage reveal">
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="phone-screen">
+          <div class="ps-status"><span>9:41</span><span class="dots"><svg width="16" height="11" viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="6" width="3" height="6" rx="1"/><rect x="5" y="3" width="3" height="9" rx="1"/><rect x="10" y="0" width="3" height="12" rx="1"/><rect x="15" y="2" width="3" height="10" rx="1" opacity=".4"/></svg></span></div>
+          <div class="ps-pad">
+            <div class="ps-walrow">
+              <span class="ps-wal"><span class="av"></span> Wallet 1
+                <i class="ph-bold ph-caret-down caret"></i>
+              </span>
+              <i class="ph-bold ph-lock-simple lock"></i>
+            </div>
+            <div class="ps-card">
+              <div class="lbl">Total Portfolio</div>
+              <div class="bal">$12,480.93</div>
+              <div class="ids"><span># 123&#8202;4567&#8202;8901</span></div>
+            </div>
+            <div class="ps-actions">
+              <div class="ps-act primary"><span class="ai"><i class="ph-bold ph-arrow-up-right"></i></span>Send</div>
+              <div class="ps-act"><span class="ai"><i class="ph-bold ph-arrow-down-left"></i></span>Receive</div>
+              <div class="ps-act"><span class="ai"><i class="ph-bold ph-swap"></i></span>Swap</div>
+              <div class="ps-act"><span class="ai"><i class="ph-bold ph-lightning"></i></span>DeFi</div>
+            </div>
+            <div class="ps-listhead"><span>Assets</span><span>5</span></div>
+            <div class="ps-tok">
+              <span class="ti" style="background:linear-gradient(135deg,#627eea,#3c5bd4)">ETH</span>
+              <span><div class="ts">Ethereum</div><div class="tn">1.84 ETH</div></span>
+              <span><div class="tv">$6,210.40</div><div class="tg">+2.4%</div></span>
+            </div>
+            <div class="ps-tok">
+              <span class="ti" style="background:linear-gradient(135deg,#9945ff,#14f195)">SOL</span>
+              <span><div class="ts">Solana</div><div class="tn">142.6 SOL</div></span>
+              <span><div class="tv">$4,180.12</div><div class="tg">+5.1%</div></span>
+            </div>
+            <div class="ps-tok">
+              <span class="ti" style="background:linear-gradient(135deg,#2775ca,#1e5a9e)">USDC</span>
+              <span><div class="ts">USD Coin</div><div class="tn">2,090 USDC</div></span>
+              <span><div class="tv">$2,090.41</div><div class="tg" style="color:var(--muted)">0.0%</div></span>
+            </div>
+          </div>
+          <div class="ps-nav">
+            <span class="nt on"><i class="ph-fill ph-wallet"></i>Wallet</span>
+            <span class="nt"><i class="ph-bold ph-arrow-up-right"></i>Send</span>
+            <span class="nt"><i class="ph-bold ph-arrow-down-left"></i>Receive</span>
+            <span class="nt"><i class="ph-bold ph-hash"></i>ID</span>
+            <span class="nt"><i class="ph-bold ph-chart-line"></i>Activity</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CHAINS ================= -->
+<section class="section-pad wrap" id="chains">
+  <div class="sec-head center reveal">
+    <span class="eyebrow center"><b class="ix">06</b>Supported chains</span>
+    <h2 class="h-sec">20+ networks. One number.</h2>
+    <p class="lead">Your NumPay ID resolves to the right address on whichever chain you're paying, with no manual switching.</p>
+  </div>
+  <div class="chain-grid" id="chainGrid"></div>
+  <p class="chain-more">…and more added regularly.</p>
+</section>
+
+<!-- ================= SECURITY ================= -->
+<section class="security section-pad" id="security">
+  <div class="wrap sec-grid">
+    <div class="reveal">
+      <span class="eyebrow"><b class="ix">07</b>Security &amp; ownership</span>
+      <h2 class="h-sec">Non-custodial,<br/>by design.</h2>
+      <p class="lead">NumPay is a self-custody wallet. Your private keys are generated and stored only on your device. We never hold, see, or control your funds. Your NumPay ID is just a friendly pointer to the addresses you already own.</p>
+    </div>
+    <div class="sec-cards">
+      <div class="sec-card tall reveal">
+        <div class="tile"><i class="ph-duotone ph-key"></i></div>
+        <h4>You hold the keys</h4>
+        <p>A standard recovery phrase you control. Move to any compatible wallet anytime, with no lock-in and no permission needed.</p>
+      </div>
+      <div class="sec-card reveal">
+        <div class="tile"><i class="ph-duotone ph-shield-check"></i></div>
+        <h4>Send-time checks</h4>
+        <p>Verified-ID and anti-poisoning warnings before funds ever leave.</p>
+      </div>
+      <div class="sec-card reveal">
+        <div class="tile"><i class="ph-duotone ph-fingerprint"></i></div>
+        <h4>On-device encryption</h4>
+        <p>Biometric unlock and encrypted local storage keep your wallet sealed.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FAQ ================= -->
+<section class="section-pad wrap" id="faq">
+  <div class="sec-head center reveal">
+    <span class="eyebrow center"><b class="ix">08</b>FAQ</span>
+    <h2 class="h-sec">Questions, answered.</h2>
+  </div>
+  <div class="faq-list" id="faqList"></div>
+</section>
+
+<!-- ================= DOWNLOAD ================= -->
+<section class="download section-pad wrap" id="download">
+  <div class="dl-card reveal">
+    <div>
+      <h2>Get your NumPay ID <span class="serif">today.</span></h2>
+      <p class="dl-lead">Download the app, set up your self-custody wallet in under a minute, and start sending crypto by number.</p>
+      <div class="stores">
+        <a class="store" href="#" data-store="ios">
+          <i class="ph-fill ph-apple-logo"></i>
+          <span class="st"><span class="k">Download on the</span><span class="v">App Store</span></span>
+        </a>
+        <a class="store" href="#" data-store="android">
+          <i class="ph-fill ph-google-play-logo"></i>
+          <span class="st"><span class="k">Get it on</span><span class="v">Google Play</span></span>
+        </a>
+        <a class="store" href="#" data-store="chrome">
+          <i class="ph-fill ph-google-chrome-logo"></i>
+          <span class="st"><span class="k">Add to</span><span class="v">Chrome</span></span>
+        </a>
+      </div>
+    </div>
+    <div class="qr-wrap">
+      <div class="qr"><div class="qg"></div></div>
+      <div class="qr-cap">Scan to download</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FOOTER ================= -->
+<footer class="foot wrap">
+  <div class="foot-top">
+    <div class="foot-brand">
+      <a class="brand" href="#top">
+        <span class="mark">
+          <img src="numpay/numpay-logo.png" alt="NumPay"/>
+        </span>
+        NumPay
+      </a>
+      <p class="lead">Your number is your wallet. Send and receive crypto with a short NumPay ID. Non-custodial and multi-chain.</p>
+    </div>
+    <div class="foot-col">
+      <h5>Product</h5>
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#chains">Supported chains</a>
+      <a href="#security">Security</a>
+    </div>
+    <div class="foot-col">
+      <h5>Get the app</h5>
+      <a href="#download">iOS</a>
+      <a href="#download">Android</a>
+      <a href="#download">Chrome extension</a>
+      <a href="#faq">FAQ</a>
+    </div>
+    <div class="foot-col">
+      <h5>Company</h5>
+      <a href="#">About</a>
+      <a href="#">Blog</a>
+      <a href="#">Support</a>
+      <a href="#">Privacy &amp; Terms</a>
+    </div>
+  </div>
+  <div class="foot-bottom">
+    <span>© 2026 NumPay. All rights reserved.</span>
+    <div class="socials">
+      <a href="#" aria-label="X"><i class="ph-fill ph-x-logo"></i></a>
+      <a href="#" aria-label="GitHub"><i class="ph-fill ph-github-logo"></i></a>
+      <a href="#" aria-label="Telegram"><i class="ph-fill ph-telegram-logo"></i></a>
+    </div>
+  </div>
+  <p class="foot-disclaimer">NumPay is a self-custody wallet; you are solely responsible for safeguarding your recovery phrase. Crypto assets are volatile and may lose value. Nothing here is financial advice. This is a product marketing concept; app store availability and links shown are illustrative.</p>
+</footer>
+
+<!-- ================= TWEAKS ================= -->
+<div class="tweaks" id="tweaks">
+  <div class="th"><h4>Tweaks</h4><button id="tweaksClose" aria-label="Close"><i class="ph-bold ph-x"></i></button></div>
+  <div class="tw-row">
+    <div class="tl">Theme</div>
+    <div class="tw-seg" id="twTheme">
+      <button data-theme-val="light">Light</button>
+      <button data-theme-val="dark">Dark</button>
+    </div>
+  </div>
+  <div class="tw-row">
+    <div class="tl">Accent</div>
+    <div class="tw-swatches" id="twAccent"></div>
+  </div>
+</div>
+
+<script>
+window.NUMPAY_TWEAKS = /*EDITMODE-BEGIN*/{
+  "theme": "light",
+  "accent": "violet"
+}/*EDITMODE-END*/;
+</script>
+<script src="numpay/site.js"></script>
+</body>
+</html>

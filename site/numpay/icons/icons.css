@@ -1,0 +1,127 @@
+/* Phosphor Icons 2.1.2, self-hosted and trimmed to the glyphs this site uses.
+   Upstream CSS is 403 KB across three files; this is the used subset.
+   Regenerate with: node build-icons.js */
+
+@font-face {
+  font-family: "Phosphor-Duotone";
+  src: url("Phosphor-Duotone.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: block;
+}
+
+.ph-duotone {
+  font-family: "Phosphor-Duotone" !important;
+  speak: never;
+  font-style: normal;
+  font-weight: normal;
+  font-variant: normal;
+  text-transform: none;
+  line-height: 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.ph-duotone.ph-fingerprint:before { content: "\e23e"; opacity: 0.2; }
+.ph-duotone.ph-fingerprint:after { content: "\e23f"; margin-left: -1em; }
+.ph-duotone.ph-identification-card:before { content: "\e2c8"; opacity: 0.2; }
+.ph-duotone.ph-identification-card:after { content: "\e2c9"; margin-left: -1em; }
+.ph-duotone.ph-key:before { content: "\e2d6"; opacity: 0.2; }
+.ph-duotone.ph-key:after { content: "\e2d7"; margin-left: -1em; }
+.ph-duotone.ph-paper-plane-tilt:before { content: "\e398"; opacity: 0.2; }
+.ph-duotone.ph-paper-plane-tilt:after { content: "\e399"; margin-left: -1em; }
+.ph-duotone.ph-plugs-connected:before { content: "\eb5a"; opacity: 0.2; }
+.ph-duotone.ph-plugs-connected:after { content: "\eb5b"; margin-left: -1em; }
+.ph-duotone.ph-qr-code:before { content: "\e3e6"; opacity: 0.2; }
+.ph-duotone.ph-qr-code:after { content: "\e3e7"; margin-left: -1em; }
+.ph-duotone.ph-shield-check:before { content: "\e40c"; opacity: 0.2; }
+.ph-duotone.ph-shield-check:after { content: "\e40f"; margin-left: -1em; }
+.ph-duotone.ph-stack:before { content: "\e466"; opacity: 0.2; }
+.ph-duotone.ph-stack:after { content: "\e467"; margin-left: -1em; }
+.ph-duotone.ph-swap:before { content: "\e83c"; opacity: 0.2; }
+.ph-duotone.ph-swap:after { content: "\e83d"; margin-left: -1em; }
+.ph-duotone.ph-wallet:before { content: "\e68a"; opacity: 0.2; }
+.ph-duotone.ph-wallet:after { content: "\e68b"; margin-left: -1em; }
+
+@font-face {
+  font-family: "Phosphor-Bold";
+  src: url("Phosphor-Bold.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: block;
+}
+
+.ph-bold {
+  font-family: "Phosphor-Bold" !important;
+  speak: never;
+  font-style: normal;
+  font-weight: normal;
+  font-variant: normal;
+  text-transform: none;
+  line-height: 1;
+  letter-spacing: 0;
+  -webkit-font-feature-settings: "liga";
+  -moz-font-feature-settings: "liga=1";
+  -moz-font-feature-settings: "liga";
+  -ms-font-feature-settings: "liga" 1;
+  font-feature-settings: "liga";
+  -webkit-font-variant-ligatures: discretionary-ligatures;
+  font-variant-ligatures: discretionary-ligatures;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.ph-bold.ph-arrow-down-left:before { content: "\e040"; }
+.ph-bold.ph-arrow-up-right:before { content: "\e092"; }
+.ph-bold.ph-caret-down:before { content: "\e136"; }
+.ph-bold.ph-chart-line:before { content: "\e154"; }
+.ph-bold.ph-check:before { content: "\e182"; }
+.ph-bold.ph-hash:before { content: "\e2a2"; }
+.ph-bold.ph-lightning:before { content: "\e2de"; }
+.ph-bold.ph-link-simple-horizontal:before { content: "\e2ea"; }
+.ph-bold.ph-list:before { content: "\e2f0"; }
+.ph-bold.ph-lock-simple:before { content: "\e308"; }
+.ph-bold.ph-moon-stars:before { content: "\e58e"; }
+.ph-bold.ph-paper-plane-tilt:before { content: "\e398"; }
+.ph-bold.ph-plus:before { content: "\e3d4"; }
+.ph-bold.ph-sun:before { content: "\e472"; }
+.ph-bold.ph-swap:before { content: "\e83c"; }
+.ph-bold.ph-tray-arrow-down:before { content: "\e010"; }
+.ph-bold.ph-x:before { content: "\e4f6"; }
+
+@font-face {
+  font-family: "Phosphor-Fill";
+  src: url("Phosphor-Fill.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: block;
+}
+
+.ph-fill {
+  font-family: "Phosphor-Fill" !important;
+  speak: never;
+  font-style: normal;
+  font-weight: normal;
+  font-variant: normal;
+  text-transform: none;
+  line-height: 1;
+  letter-spacing: 0;
+  -webkit-font-feature-settings: "liga";
+  -moz-font-feature-settings: "liga=1";
+  -moz-font-feature-settings: "liga";
+  -ms-font-feature-settings: "liga" 1;
+  font-feature-settings: "liga";
+  -webkit-font-variant-ligatures: discretionary-ligatures;
+  font-variant-ligatures: discretionary-ligatures;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.ph-fill.ph-apple-logo:before { content: "\e516"; }
+.ph-fill.ph-github-logo:before { content: "\e576"; }
+.ph-fill.ph-google-chrome-logo:before { content: "\e976"; }
+.ph-fill.ph-google-play-logo:before { content: "\e294"; }
+.ph-fill.ph-telegram-logo:before { content: "\e5bc"; }
+.ph-fill.ph-wallet:before { content: "\e68a"; }
+.ph-fill.ph-x-logo:before { content: "\e4bc"; }
+
