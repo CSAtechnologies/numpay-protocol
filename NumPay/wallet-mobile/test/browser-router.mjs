@@ -192,9 +192,11 @@ for (const m of ["eth_sign", "eth_signTypedData_v3", "eth_sendRawTransaction", "
 r = await route("evm_totallyMadeUp", [], ctx());
 is("an unknown method is refused", r.error.code, 4200);
 
-r = await route("eth_getBalance", [ACCT, "latest"], ctx());
-is("a read method is proxied, not refused", r.kind, "result");
-
+// Reads are stubbed at the fetch layer on purpose. An unstubbed assertion here
+// would depend on a live RPC and API keys, which makes the suite fail for
+// reasons that have nothing to do with the router (observed: it passed on one
+// run and failed on the next).
+//
 // The page never supplies the endpoint: reads must hit OUR configured RPC.
 {
   const seen = [];
@@ -205,6 +207,7 @@ is("a read method is proxied, not refused", r.kind, "result");
   };
   const res = await route("eth_getBalance", [ACCT, "latest"], ctx());
   globalThis.fetch = realFetch;
+  is("a read method is proxied, not refused", res.kind, "result");
   is("the read result reaches the page", res.result, "0x2a");
   check("the read went to an https endpoint we chose", seen[0]?.url.startsWith("https://"), seen[0]?.url);
   is("the read kept its method", seen[0]?.body.method, "eth_getBalance");
