@@ -5,23 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Page not found | NumPay</title>
 <meta name="robots" content="noindex, nofollow"/>
-<!-- Asset paths here are root-relative on purpose. GitHub Pages serves this
-     file for any missing URL at any depth, so a relative path like
-     "numpay/site.css" would resolve against the wrong directory and the page
-     would arrive unstyled. Update the /numpay-site/ prefix if the site ever
-     moves to a custom domain root. -->
-<link rel="icon" type="image/png" href="/numpay-site/numpay/numpay-logo.png"/>
-<link rel="stylesheet" href="/numpay-site/numpay/fonts/fonts.css"/>
-<link rel="stylesheet" href="/numpay-site/numpay/icons/icons.css"/>
-<link rel="stylesheet" href="/numpay-site/numpay/site.css"/>
-<script src="/numpay-site/numpay/theme-init.js"></script>
+<!-- Asset paths here are root-relative on purpose. This file is served for any
+     missing URL at any depth, so a relative path like "numpay/site.css" would
+     resolve against the wrong directory and the page would arrive unstyled.
+     The site is served from a domain root, so a leading slash is correct. -->
+<link rel="icon" type="image/png" href="/numpay/numpay-logo.png"/>
+<link rel="stylesheet" href="/numpay/fonts/fonts.css"/>
+<link rel="stylesheet" href="/numpay/icons/icons.css"/>
+<link rel="stylesheet" href="/numpay/site.css"/>
+<script src="/numpay/theme-init.js"></script>
 </head>
 <body>
 
 <header class="nav" id="nav">
   <div class="wrap nav-inner">
-    <a class="brand" href="/numpay-site/">
-      <span class="mark"><img src="/numpay-site/numpay/numpay-logo.png" alt="NumPay"/></span>
+    <a class="brand" href="/">
+      <span class="mark"><img src="/numpay/numpay-logo.png" alt="NumPay"/></span>
       NumPay
     </a>
     <div class="nav-right">
@@ -38,10 +37,10 @@
     <div class="code">404</div>
     <h1>That page does not exist.</h1>
     <p>The link may be out of date, or the address may have a typo in it.</p>
-    <a href="/numpay-site/" class="btn btn-primary">Back to NumPay</a>
+    <a href="/" class="btn btn-primary">Back to NumPay</a>
   </div>
 </main>
 
-<script src="/numpay-site/numpay/site.js" defer></script>
+<script src="/numpay/site.js" defer></script>
 </body>
 </html>

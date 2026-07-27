@@ -41,6 +41,17 @@ or a chain is added. See the header of that file for how to run it.
 
 ## Deploying
 
-Published with GitHub Pages from the default branch. This repo is generated
-from the `site/` directory of the main NumPay repo via `git subtree`, so
-changes should be made there and pushed out, not committed here directly.
+Live at <https://numpay-site.pages.dev> on Cloudflare Pages:
+
+```
+wrangler pages deploy site --project-name=numpay-site --branch=main
+```
+
+Cloudflare rather than GitHub Pages because GitHub's Pages addresses turned
+out to be unreachable from Nigerian mobile networks, which is a launch market.
+Cloudflare has an edge node in Lagos.
+
+This repo is generated from the `site/` directory of the main NumPay repo via
+`git subtree`, so changes should be made there and pushed out, not committed
+here directly. The GitHub Pages copy is left running as a mirror; both serve
+the same files, and every page names the Cloudflare URL as its canonical.

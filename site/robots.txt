@@ -1,15 +1,13 @@
 # NumPay marketing site, not ready to be indexed.
 #
-# Note this file only takes effect once the site is served from the root of a
-# domain. Crawlers read robots.txt from the host root only, so on the current
-# GitHub Pages project URL they look at csatechnologies.github.io/robots.txt
-# and never see this copy under /numpay-site/. The noindex meta tag in
-# index.html is what actually keeps the page out of results today; this file
-# takes over the moment a custom domain is attached.
+# The site is served from a domain root on Cloudflare Pages, so crawlers do
+# read this file. The noindex meta tag in index.html backs it up: robots.txt
+# only asks crawlers not to fetch a page, while noindex keeps it out of results
+# even if something reaches it by another route.
 #
 # To launch: delete both rules below and the robots meta tag in index.html.
 
 User-agent: *
 Disallow: /
 
-Sitemap: https://csatechnologies.github.io/numpay-site/sitemap.xml
+Sitemap: https://numpay-site.pages.dev/sitemap.xml
