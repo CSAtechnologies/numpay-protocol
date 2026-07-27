@@ -1,7 +1,7 @@
 /* ===========================================================
-   NumPay — marketing site · "Ink, paper & one warm accent"
+   NumPay marketing site · "Ink, paper & one accent"
    Premium refinement. Light-first; dark via [data-theme="dark"].
-   Accent is tweakable (--brand*). Gradients used sparingly;
+   Accent lives in --brand*. Gradients used sparingly;
    bold surfaces are matte INK, not rainbow.
    =========================================================== */
 :root {
@@ -18,14 +18,14 @@
   --muted:     #756e62;
   --muted-2:   #9a9285;
 
-  /* accent (sunset default — overridden live by tweaks) */
-  --brand:     #f97316;
-  --brand-2:   #fb923c;
-  --brand-3:   #ea580c;
-  --brand-ink: #d9540b;   /* readable accent text on paper */
-  --brand-soft: rgba(249,115,22,.12);
-  --brand-glow: rgba(249,115,22,.28);
-  --brand-grad: linear-gradient(135deg, #fb923c, #ea580c);
+  /* accent (NumPay violet, matching the wallet UI) */
+  --brand:     #7c6df0;
+  --brand-2:   #a394ff;
+  --brand-3:   #5b4cdb;
+  --brand-ink: #5b4cdb;   /* readable accent text on paper */
+  --brand-soft: rgba(124,109,240,.12);
+  --brand-glow: rgba(124,109,240,.30);
+  --brand-grad: linear-gradient(135deg, #a394ff 0%, #7c6df0 55%, #5b4cdb 100%);
 
   /* matte ink surface (premium dark card on light page) */
   --ink:        #17140f;
@@ -61,9 +61,9 @@
   --text-2:    #e4ddd0;
   --muted:     #a89e8c;
   --muted-2:   #7d7464;
-  --brand-ink: #fbbf6e;
-  --brand-soft: rgba(249,115,22,.16);
-  --brand-glow: rgba(249,115,22,.4);
+  --brand-ink: #b6abff;
+  --brand-soft: rgba(124,109,240,.18);
+  --brand-glow: rgba(124,109,240,.30);
   --ink:        #14110b;
   --ink-2:      #1d1810;
   --ink-grad:   linear-gradient(158deg, #241e14 0%, #16120c 70%);
@@ -236,7 +236,6 @@ i[class^="ph-"], i[class*=" ph-"] { display: inline-block; line-height: 1; }
 .strip-label i { font-size: 15px; }
 .cmp .mk i { font-size: 13px; color: #fff; }
 .foot-bottom .socials a i { font-size: 18px; }
-.tweaks .th button i { font-size: 15px; }
 .faq .q-ic i { font-size: 20px; }
 /* in-phone UI */
 .ps-act .ai i { font-size: 16px; }
@@ -304,6 +303,7 @@ i[class^="ph-"], i[class*=" ph-"] { display: inline-block; line-height: 1; }
 .idcard .ic-chiprow { display: flex; align-items: center; gap: 14px; margin-top: clamp(16px, 2.4vw, 22px); position: relative; }
 .idcard .emv {
   position: relative; width: 46px; height: 34px; border-radius: 7px; flex-shrink: 0;
+  margin: 0 0 1px;
   background:
     repeating-linear-gradient(0deg, transparent 0 7px, rgba(123,92,24,.5) 7px 8px),
     repeating-linear-gradient(90deg, transparent 0 14px, rgba(123,92,24,.5) 14px 15px),
@@ -320,10 +320,10 @@ i[class^="ph-"], i[class*=" ph-"] { display: inline-block; line-height: 1; }
   box-shadow: 0 1px 2px rgba(0,0,0,.06);
 }
 .idcard .ic-mid { margin-top: auto; position: relative; }
-.idcard .ic-label { font-size: 10.5px; letter-spacing: .26em; font-weight: 700; color: #6a6f7b; }
+.idcard .ic-label { font-size: 10.5px; letter-spacing: .26em; font-weight: 700; color: #6a6f7b; margin-top: 3px; }
 .idcard .ic-num {
   font-family: var(--mono); font-weight: 700; font-variant-numeric: tabular-nums;
-  font-size: clamp(25px, 3.5vw, 38px); letter-spacing: -.01em; margin-top: 9px;
+  font-size: clamp(25px, 3.5vw, 38px); letter-spacing: -.01em; margin-top: 5px;
   white-space: nowrap;
   display: flex; align-items: baseline; gap: .14em;
   color: #23262e;
@@ -663,30 +663,6 @@ footer.foot { padding-block: 64px 40px; border-top: 1px solid var(--hair); }
   .reveal { opacity: 0; transform: translateY(24px); transition: opacity .7s cubic-bezier(.2,.7,.3,1), transform .7s cubic-bezier(.2,.7,.3,1); }
   .reveal.in { opacity: 1; transform: none; }
 }
-
-/* ---------- tweaks panel ---------- */
-.tweaks {
-  position: fixed; right: 20px; bottom: 20px; z-index: 9500;
-  width: 250px; padding: 16px; border-radius: 18px;
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
-  backdrop-filter: blur(22px) saturate(160%);
-  border: 1px solid var(--border); box-shadow: var(--shadow-2);
-  display: none;
-}
-.tweaks.on { display: block; }
-.tweaks .th { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-.tweaks .th h4 { margin: 0; font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
-.tweaks .th button { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; color: var(--muted); }
-.tweaks .th button:hover { background: var(--panel-2); color: var(--text); }
-.tw-row { margin-bottom: 16px; }
-.tw-row .tl { font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 8px; letter-spacing: .03em; }
-.tw-seg { display: flex; gap: 4px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 11px; padding: 3px; }
-.tw-seg button { flex: 1; padding: 7px; border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
-.tw-seg button.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow-1); }
-.tw-swatches { display: flex; gap: 9px; }
-.tw-sw { width: 34px; height: 34px; border-radius: 10px; cursor: pointer; border: 2px solid transparent; transition: transform .15s; box-shadow: var(--shadow-1); }
-.tw-sw:hover { transform: scale(1.08); }
-.tw-sw.on { border-color: var(--text); }
 
 /* ---------- responsive ---------- */
 @media (max-width: 920px) {
