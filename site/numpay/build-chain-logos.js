@@ -23,8 +23,11 @@
 const path = require("path");
 const fs = require("fs");
 
-const DEFAULT_SRC =
-  "C:/Users/HP OMEN/Desktop/NumPay Project/NumPay/wallet-extension/public";
+// Assumes the main NumPay checkout sits alongside this one. Pass an explicit
+// path if it does not.
+const DEFAULT_SRC = path.resolve(
+  __dirname, "../../../NumPay Project/NumPay/wallet-extension/public"
+);
 const SRC = process.argv[2] || DEFAULT_SRC;
 const OUT = path.join(__dirname, "chains");
 const SIZE = 80;
