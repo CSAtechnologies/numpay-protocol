@@ -1,12 +1,20 @@
-// Connected dApps (WalletConnect) screen — Slices 2+4. Pair with a dApp by
-// scanning its QR code or pasting its `wc:` link, and see/disconnect active
-// sessions. The approval sheets themselves live in WcApprovalHost, which is
-// mounted app-wide; this screen only starts pairings and lists the results.
-import { useEffect, useRef, useState } from "react";
+// Connected dApps screen. Two ways in, one place to see and revoke them:
+//   • WalletConnect sessions (paired by QR or a `wc:` link), and
+//   • sites connected in the in-app browser, which grant a per-ORIGIN
+//     permission rather than a session.
+// They are different mechanisms, but from the user's side both are "a site can
+// see my address and ask me to sign", so both belong on this screen. Somewhere
+// you cannot revoke a connection is somewhere connections quietly accumulate.
+//
+// The approval sheets themselves live in WcApprovalHost (mounted app-wide) and
+// BrowserScreen; this screen only starts pairings and lists the results.
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
+import { listOrigins, revoke, type OriginPermission } from "@numpay/core/dapp";
 import { colors, radius, type as ts } from "../ui/theme";
 import { Notice, Btn, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
+import { displayHost } from "../browser/session";
 import { hasProjectId } from "../walletconnect/config";
 import { disconnectSession, pair } from "../walletconnect/client";
 import {
@@ -28,8 +36,13 @@ export function WalletConnectScreen({ onBack }: { onBack: () => void }) {
   // The camera fires onBarcodeScanned many times a second for the same code;
   // only the first wc: hit may start a pairing.
   const scannedRef = useRef(false);
+  // Sites connected through the in-app browser (per-origin grants).
+  const [sites, setSites] = useState<Array<{ origin: string } & OriginPermission>>([]);
 
   useEffect(() => subscribeSessionsChanged(() => setSessions(listSessions())), []);
+
+  const reloadSites = useCallback(() => { void listOrigins().then(setSites); }, []);
+  useEffect(reloadSites, [reloadSites]);
 
   const connect = async (raw: string) => {
     const trimmed = raw.trim();
@@ -172,6 +185,28 @@ export function WalletConnectScreen({ onBack }: { onBack: () => void }) {
               label="Disconnect"
               variant="danger"
               onPress={() => { void disconnect(s.topic); }}
+            />
+          </Card>
+        ))}
+
+        {/* Browser-connected sites. Revoking here takes effect immediately for
+            any future request; a page already open sees it the next time it
+            asks for accounts. */}
+        <SectionLabel text="Sites in the NumPay browser" style={{ marginTop: 18, marginBottom: 4 } as object} />
+        {sites.length === 0 && (
+          <Text style={st.dim}>No sites connected in the browser yet.</Text>
+        )}
+        {sites.map((s) => (
+          <Card key={s.origin} style={{ padding: 14, marginTop: 8 }}>
+            <Text style={st.name} numberOfLines={1}>{displayHost(s.origin)}</Text>
+            <Text style={st.sub} numberOfLines={1}>{s.origin}</Text>
+            <Text style={[st.sub, { marginTop: 6 }]} numberOfLines={1}>
+              {s.account.slice(0, 10)}…{s.account.slice(-6)}
+            </Text>
+            <Btn
+              label="Disconnect"
+              variant="danger"
+              onPress={() => { void revoke(s.origin).then(reloadSites); }}
             />
           </Card>
         ))}
