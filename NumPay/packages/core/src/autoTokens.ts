@@ -329,24 +329,32 @@ function buildChainRpcMap(): Record<string, { rpc: string; tokens: typeof DEFAUL
   return map;
 }
 
+/** What the RPC layer definitively learned about one chain.
+ *  `read` = addresses whose balanceOf actually came back, `held` = the subset
+ *  that came back non-zero. `read` minus `held` is therefore PROVEN zero: read
+ *  straight off chain state, with no indexer between us and the truth. A call
+ *  that failed appears in neither, so it is never mistaken for a zero. */
+interface RpcChainReads { read: Set<string>; held: Set<string> }
+
 /**
  * Check DEFAULT_TOKENS balances via Multicall3 for every chain with known tokens.
  * Falls back to individual balanceOf calls if Multicall3 is unavailable.
- * Returns the chains whose reads actually resolved: for those, a DEFAULT_TOKEN
- * absent from the result verifiably has a zero balance.
+ * Returns the per-chain reads, so callers can tell "this token is at zero" from
+ * "we could not find out".
  */
 async function sweepTokensByRPC(
   address: string,
   onUpdate: (chainId: string, tokens: AutoToken[]) => void,
-): Promise<Set<string>> {
+): Promise<Map<string, RpcChainReads>> {
   const chainMap = buildChainRpcMap();
-  const resolvedChains = new Set<string>();
+  const resolvedChains = new Map<string, RpcChainReads>();
 
   await Promise.all(
     Object.entries(chainMap).map(async ([networkId, { rpc, tokens, mc3 }]) => {
       try {
         const provider = new ethers.JsonRpcProvider(rpc);
         const found: AutoToken[] = [];
+        const reads: RpcChainReads = { read: new Set(), held: new Set() };
 
         // Try Multicall3 aggregate3 — 1 eth_call per chain
         let multicallOk = false;
@@ -369,16 +377,21 @@ async function sweepTokensByRPC(
 
           for (let i = 0; i < tokens.length; i++) {
             const r = decoded[i];
+            const token = tokens[i];
+            const addrLc = token.address.toLowerCase();
             if (!r.success || !r.returnData || r.returnData === "0x") continue;
             let raw256: bigint;
             try {
               // returnData is 32 bytes (64 hex chars) for uint256
               raw256 = BigInt(r.returnData);
             } catch { continue; }
+            // The call answered, so this address is now settled either way —
+            // a zero here is a fact about the chain, not a missing datum.
+            reads.read.add(addrLc);
             if (raw256 <= 0n) continue;
-            const token = tokens[i];
             const balance = ethers.formatUnits(raw256, token.decimals);
             if (parseFloat(balance) <= 0) continue;
+            reads.held.add(addrLc);
             found.push({
               symbol:   token.symbol,
               name:     token.name,
@@ -390,39 +403,41 @@ async function sweepTokensByRPC(
           }
 
           multicallOk = true;
-          resolvedChains.add(networkId);
         } catch {
           // Multicall3 unavailable on this RPC — fall through to individual calls
         }
 
         // Fallback: individual balanceOf calls if multicall3 unavailable
         if (!multicallOk) {
-          let allResolved = true;
           const results = await Promise.all(
             tokens.map(async (token) => {
+              const addrLc = token.address.toLowerCase();
               try {
                 const balance = await Promise.race([
                   getTokenBalance(token.address, address, provider),
                   new Promise<never>((_, r) => setTimeout(() => r(new Error("timeout")), 5000)),
                 ]);
+                // Answered: zero or not, this address is settled.
+                reads.read.add(addrLc);
                 if (parseFloat(balance) <= 0) return null;
+                reads.held.add(addrLc);
                 return {
                   symbol:   token.symbol,
                   name:     token.name,
-                  address:  token.address.toLowerCase(),
+                  address:  addrLc,
                   decimals: token.decimals,
                   balance,
                   logo:     token.logo,
                 } as AutoToken;
-              } catch { allResolved = false; return null; }
+              // A failed call could have been a held token, so it stays out of
+              // `read` and is never counted as a zero.
+              } catch { return null; }
             }),
           );
           for (const t of results) if (t) found.push(t);
-          // Any failed call could have been a held token — only a clean pass
-          // proves that the tokens missing from `found` really sit at zero.
-          if (allResolved) resolvedChains.add(networkId);
         }
 
+        if (reads.read.size > 0) resolvedChains.set(networkId, reads);
         if (found.length > 0) onUpdate(networkId, found);
       } catch (e) {
         console.warn(`[NumPay] RPC sweep ${networkId} failed`, e);
@@ -444,6 +459,18 @@ const FORCE_MIN_INTERVAL = 5 * 1000;
 let lastForcedSweep = 0;
 
 /**
+ * Called as each chain's token list lands.
+ *
+ * `final` marks an AUTHORITATIVE list: every token this address still holds on
+ * that chain, so anything the caller is showing and this list omits is gone and
+ * may be dropped. Without it, updates are additive — the sweep streams partial
+ * results as each layer answers, and a caller that replaced on every one made
+ * held tokens blink out and back while the slower sources were still in flight.
+ */
+export type TokenSweepUpdate =
+  (chainId: string, tokens: AutoToken[], final?: boolean) => void;
+
+/**
  * Sweep every supported EVM chain for ERC-20 tokens.
  * Serves stale cache immediately, then re-fetches in the background.
  * `force` skips the freshness gate (user explicitly asked for truth) but is
@@ -451,7 +478,7 @@ let lastForcedSweep = 0;
  */
 export async function sweepAllChainTokens(
   address: string,
-  onUpdate: (chainId: string, tokens: AutoToken[]) => void,
+  onUpdate: TokenSweepUpdate,
   force = false,
 ): Promise<void> {
   const cacheKey = CACHE_PFX + address.toLowerCase();
@@ -472,7 +499,11 @@ export async function sweepAllChainTokens(
       const { ts, data } = JSON.parse(raw) as { ts: number; data: Record<string, AutoToken[]> };
       for (const [chainId, tokens] of Object.entries(data)) {
         cachedByChain.set(chainId, new Map(tokens.map((t) => [t.address.toLowerCase(), t])));
-        onUpdate(chainId, stripNativeToken(chainId, tokens));
+        // Final: a cache entry is a COMPLETE per-chain list as of the last
+        // sweep, so it may remove rows too. That is what lets a client which
+        // painted from its own persisted snapshot (mobile's balance cache) drop
+        // a token that was already sold in an earlier session.
+        onUpdate(chainId, stripNativeToken(chainId, tokens), true);
       }
       if (Date.now() - ts < CACHE_TTL) cacheIsFresh = true;
     }
@@ -588,6 +619,30 @@ export async function sweepAllChainTokens(
   // nothing — leave the existing cache untouched, including its timestamp.
   if (fullEnumOk.size === 0 && rpcResolved.size === 0) return;
 
+  // Addresses this sweep read straight off chain state and found empty.
+  const provenZeroOn = (chainId: string): Set<string> | null => {
+    const r = rpcResolved.get(chainId);
+    if (!r) return null;
+    const zero = new Set<string>();
+    for (const addr of r.read) if (!r.held.has(addr)) zero.add(addr);
+    return zero;
+  };
+
+  // An on-chain zero OUTRANKS an indexer that still lists the token. The
+  // indexers are minutes behind by construction (the proxy caches /v1/tokens
+  // for 5 minutes, and Moralis has its own lag), and those minutes are exactly
+  // the window where someone who just swapped a token away is staring at the
+  // dashboard waiting for it to go. balanceOf does not lag, so where the two
+  // disagree about zero, believe the chain.
+  for (const [chainId, reads] of rpcResolved) {
+    const list = freshData[chainId];
+    if (!list) continue;
+    freshData[chainId] = list.filter((t) => {
+      const a = t.address.toLowerCase();
+      return !reads.read.has(a) || reads.held.has(a);
+    });
+  }
+
   // Retain cached tokens this sweep could not rule out. Without this, one
   // lean sweep (Moralis 402, Alchemy 403) erased previously discovered tokens
   // from the cache — the popup and the background refresher both write here —
@@ -595,9 +650,9 @@ export async function sweepAllChainTokens(
   for (const [chainId, cachedMap] of cachedByChain) {
     if (fullEnumOk.has(chainId)) continue;
     const have = new Set((freshData[chainId] ?? []).map((t) => t.address.toLowerCase()));
-    // A resolved RPC sweep proves zero balance, but only for that chain's
-    // DEFAULT_TOKENS — the only addresses it queries.
-    const provenZero = rpcResolved.has(chainId) ? defaultTokenAddrs(chainId) : null;
+    // A resolved RPC sweep proves zero balance, but only for the addresses it
+    // actually managed to read — a call that failed proves nothing.
+    const provenZero = provenZeroOn(chainId);
     const keep: AutoToken[] = [];
     for (const [addr, t] of cachedMap) {
       if (have.has(addr)) continue;
@@ -607,14 +662,24 @@ export async function sweepAllChainTokens(
     if (keep.length) freshData[chainId] = [...(freshData[chainId] ?? []), ...keep];
   }
 
+  // Reconcile REMOVALS. Everything above only ever emits tokens that were
+  // found: merge() takes an early return on an empty list, so a chain whose
+  // last holding was swapped or sent away never produced an update at all and
+  // the caller went on painting the stale row. Reported 2026-07-27 — USDC on
+  // Base survived every refresh after being swapped away, because Base had no
+  // other token left whose arrival would have replaced the list. A chain we
+  // could actually enumerate now gets one last authoritative list, empty
+  // included.
+  for (const chainId of new Set([...fullEnumOk, ...rpcResolved.keys()])) {
+    // Materialise the empty so it reaches the cache as well. A chain absent
+    // from the cached object emits nothing at all on the next cold start,
+    // which is how a sold token came back from a persisted snapshot after an
+    // app restart even though the sweep had already dropped it.
+    if (!freshData[chainId]) freshData[chainId] = [];
+    onUpdate(chainId, freshData[chainId], true);
+  }
+
   try {
     await setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: freshData }));
   } catch {}
-}
-
-/** Lowercased DEFAULT_TOKENS addresses for a networkId (the RPC sweep's scope). */
-function defaultTokenAddrs(networkId: string): Set<string> {
-  const net = NETWORKS[networkId];
-  const toks = net ? DEFAULT_TOKENS[net.chainId] ?? [] : [];
-  return new Set(toks.map((t) => t.address.toLowerCase()));
 }
