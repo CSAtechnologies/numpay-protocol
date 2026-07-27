@@ -48,8 +48,8 @@ import { CurrencyProvider, useCurrencyPref, formatFiat } from "./src/ui/currency
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import {
   ArrowUpRightIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon,
-  CopyIcon, EyeOffIcon, HashIcon, LinkIcon, LockIcon, PlusIcon, ReceiveIcon,
-  RefreshIcon, ScanIcon, SwapIcon, TrendingUpIcon, WalletIcon,
+  CopyIcon, EyeOffIcon, GlobeIcon, HashIcon, LinkIcon, LockIcon, PlusIcon,
+  ReceiveIcon, RefreshIcon, ScanIcon, SwapIcon, TrendingUpIcon, WalletIcon,
 } from "./src/ui/icons";
 import { AssetIcon, ChainBadge, ChainIcon } from "./src/ui/coins";
 import { ReceiveScreen, type ReceiveAddrs } from "./src/screens/ReceiveScreen";
@@ -407,6 +407,7 @@ function AppInner() {
           onLock={async () => { await lock(); setError(""); await refresh(); }}
           onBPAN={() => setMode("bpan")}
           onDapps={() => setMode("dapps")}
+          onBrowser={() => setMode("browser")}
           onScan={() => setMode("scan")}
           onAccounts={() => setMode("settings")}
           onManageAssets={() => { setAssetsReturn("home"); setMode("assets"); }}
@@ -527,6 +528,14 @@ function AppInner() {
       )}
       {mode === "dapps" && (
         <WalletConnectScreen onBack={() => setMode("home")} />
+      )}
+      {mode === "browser" && (
+        <BrowserScreen
+          account={w.evmAddress || null}
+          unlocked={!relocked}
+          onBack={() => setMode("home")}
+          onSessionExpired={() => { void showRelock(); }}
+        />
       )}
       {mode === "spike" && <Spike onBack={() => setMode("dev")} />}
       {mode === "devnet" && <DevnetTx onBack={() => setMode("dev")} />}
@@ -843,6 +852,7 @@ function Dashboard(p: {
   onReceive: () => void;
   onBPAN: () => void;
   onDapps: () => void;
+  onBrowser: () => void;
   onScan: () => void;
   onLock: () => void;
   onAccounts: () => void;
@@ -920,6 +930,9 @@ function Dashboard(p: {
               <View style={{ flex: 1 }} />
               <Pressable onPress={p.onScan} style={st.iconBtn} hitSlop={8} accessibilityLabel="Scan a QR code">
                 <ScanIcon size={15} color={colors.muted} />
+              </Pressable>
+              <Pressable onPress={p.onBrowser} style={st.iconBtn} hitSlop={8} accessibilityLabel="Open the dApp browser">
+                <GlobeIcon size={15} color={colors.muted} />
               </Pressable>
               <Pressable onPress={p.onDapps} style={st.iconBtn} hitSlop={8} accessibilityLabel="Connected dApps">
                 <LinkIcon size={15} color={colors.muted} />

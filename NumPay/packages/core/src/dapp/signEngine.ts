@@ -34,9 +34,11 @@ import {
 } from "./txDecode";
 
 // Guard against a hostile dApp streaming a huge payload into the approval
-// render path (same cap the extension router applies). Local copy so the core
-// engine stays free of the extension's transport constants.
-export const MAX_PAYLOAD_BYTES = 128 * 1024;
+// render path. Defined in rpcTypes so the engine and every transport apply one
+// cap; imported in this direction (engine <- rpcTypes) and never the reverse,
+// because rpcTypes has to stay import-free for the injected IIFE bundles.
+import { MAX_PAYLOAD_BYTES } from "./rpcTypes";
+export { MAX_PAYLOAD_BYTES };
 
 // The three EVM methods NumPay signs. eth_sign (blind sign) is intentionally
 // NOT here: per the security posture it never signs without the same guardrails

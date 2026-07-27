@@ -22,6 +22,29 @@ export {
   MAX_PAYLOAD_BYTES, SUPPORTED_EVM_METHODS, DAPP_ERR,
   isSupportedEvmMethod, previewDappRequest, signDappRequest,
 } from "./signEngine";
+// ── Transport layer (injected EIP-1193 provider) ─────────────────────────────
+// Shared by the extension (content script -> background port) and the mobile
+// in-app browser (WebView bridge -> RN router), so ONE provider implementation
+// and ONE permission model serve both clients.
+export {
+  type RpcRequest, type RpcError, type RequestMessage, type ResponseMessage,
+  type EventMessage, type ProviderEventName,
+  TO_CONTENT, TO_INPAGE, RPC_ERR,
+  READ_METHODS, SIGN_METHODS, DEFERRED_METHODS,
+} from "./rpcTypes";
+export {
+  type OriginPermission,
+  getPermission, isConnected, grant, revoke, listOrigins,
+  updateAllConnected, setOriginChain,
+} from "./permissions";
+export {
+  dappEvmChainId, evmChainIdHex, evmChainIdNumber, isReadMethod, proxyRead,
+} from "./rpcProxy";
+export {
+  type AddChainCandidate,
+  parseChainId, resolveInternalChainId, validateHttpsRpc, rpcServesChain,
+  buildAddChainCandidate,
+} from "./chainOps";
 export {
   type SolWcMethod, type SolDappRequestInput, type SolDappRequestPreview,
   type SolPreviewDetail,

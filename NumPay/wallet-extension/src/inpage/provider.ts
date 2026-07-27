@@ -191,6 +191,13 @@ try {
       configurable: true,
       writable: false,
     });
+    // Tell pre-EIP-6963 dApps the provider has arrived. Many of them probe
+    // window.ethereum once on load and, finding nothing, wait on this event
+    // instead of polling. It matters most inside the NumPay mobile browser:
+    // Android cannot guarantee injection before page scripts run, so the
+    // provider is sometimes genuinely late and this is what un-sticks a dApp
+    // that already gave up. Harmless in the extension, where we are early.
+    window.dispatchEvent(new Event("ethereum#initialized"));
   }
 } catch {
   /* another provider locked the property; EIP-6963 still works */

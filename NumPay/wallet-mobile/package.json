@@ -32,14 +32,16 @@
     "react-native-get-random-values": "~1.11.0",
     "react-native-mmkv": "^4.3.2",
     "react-native-nitro-modules": "^0.36.1",
-    "react-native-svg": "15.15.4"
+    "react-native-svg": "15.15.4",
+    "react-native-webview": "13.16.1"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "test": "node test/wc-sessions.mjs && node test/notify-diff.mjs && node test/qr-payload.mjs && node test/token-import.mjs && node test/token-pricing.mjs && node test/asset-visibility.mjs && node test/balance-cache.mjs && node test/token-removal.mjs",
+    "test": "node test/wc-sessions.mjs && node test/notify-diff.mjs && node test/qr-payload.mjs && node test/token-import.mjs && node test/token-pricing.mjs && node test/asset-visibility.mjs && node test/balance-cache.mjs && node test/token-removal.mjs && node test/injected-sync.mjs && node test/browser-origin.mjs && node test/browser-router.mjs",
+    "gen:injected": "node scripts/gen-injected.mjs",
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
