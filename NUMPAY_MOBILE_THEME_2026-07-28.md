@@ -131,6 +131,80 @@ adb command with a `/sdcard/...` or `/data/...` path, or it becomes
 - Cold restart comes back up dark with no light flash.
 - `tsc --noEmit` clean. Full suite green, including `theme-switch` 40/40.
 
+### 4b. The dark visual pass (2026-07-31, native rebuild + all screens)
+
+Native rebuild from a regenerated `android/`, then every screen walked in dark.
+
+**`system` resolves correctly on Android, verified rather than assumed.**
+`expo prebuild` warns `userInterfaceStyle: Install expo-system-ui in your
+project to enable this feature`, which reads like the default preference is
+broken. It is not. The generated project is DayNight-correct on its own
+(`Theme.AppCompat.DayNight.NoActionBar`, a real `values-night`, `uiMode` in the
+activity's `configChanges`), so `automatic` is just Android's native behaviour
+rather than something Expo enforces. Tested by leaving the pref on System and
+flipping the OS with `adb shell cmd uimode night yes`: the app repainted dark
+live, no restart. **Do not add `expo-system-ui` to silence that warning without
+re-testing**; it would start forcing a mode that currently follows the OS.
+
+The dark splash generated correctly too: `#0a0912` in `values-night`, `#faf9ff`
+in `values`.
+
+Walked and correct in dark: dashboard, Send, Receive (the QR keeps its white
+quiet zone, as it must to stay scannable), BPAN, Activity, Swap, DeFi, Browser
+(including the amber open-web caution), TokenDetail with a live chart, Manage
+assets, Connected dApps, Settings, the skeleton loading rows, and the
+arm-wipe ConfirmSheet. The `Tappable` layout fix holds in a real build: the
+dashboard's Receive/Swap/DeFi row spans full width.
+
+Two things the pass turned up, neither of them dark-only:
+
+1. **The primary CTA's label fails AA, in BOTH themes.** `gradients.brand` is
+   deliberately identical light and dark (`#a394ff` -> `#7c6df0` -> `#5b4cdb`,
+   locations `[0, 0.55, 1]`) and `onBrand` is `#ffffff` in both. Measured
+   against white at 15px/600 (`type.body`, not large text, so the bar is 4.5):
+
+       #a394ff  top stop     2.55:1   FAIL
+       #7c6df0  mid, 0.55    3.96:1   FAIL
+       #5b4cdb  bottom       6.00:1   pass
+
+   A centred label sits around the mid stop. This is every primary button in
+   the app: dashboard Send, Copy Address, Register BPAN, Scan QR code, the
+   BPAN tab pill.
+
+   `palette-contrast.mjs` does not catch it for two reasons: it asserts
+   `onBrand` at **3**, not 4.5 (grouped with chip and tile labels), and it
+   tests the flat `brand` token, never the gradient stops the button paints.
+
+   Not a regression from the theme work, and not fixable without a brand
+   decision: darkening the ramp so the mid stop clears 4.5 changes the app's
+   most recognisable colour. Left as a decision, not silently changed.
+
+2. **Manage assets clips its CHAIN chip grid mid-row**, leaving sliced chip
+   tops along the card's bottom edge. Cosmetic, and almost certainly present in
+   light too.
+
+Also worth knowing: `Device integrity` reports "No root detected" on the
+emulator, so `expo-device`'s heuristic does not fire on this AVD and the
+emulator-softened wording path is still untested.
+
+### 4c. Emulator gotchas from this session
+
+- `expo prebuild` **clears `android/` even without `--clean`**. Harmless (it is
+  gitignored CNG and the release keystore lives in `~/.numpay-keys/`), but it
+  does delete `android/app/debug.keystore`. Back that up first: if it comes
+  back different, the install fails on a signature mismatch and the only fix is
+  an uninstall, which wipes the vault.
+- `INSTALL_FAILED_INSUFFICIENT_STORAGE` on a 5.8 GB `/data` at 95% full. Freed
+  by deleting the 66 MB staged APK at `/data/local/tmp/app-debug.apk` (a failed
+  install leaves it behind) and `pm trim-caches 999G`. The AVD also carries
+  unrelated apps (`com.example.dwello_app`, `team.opay.pay`) if more is needed.
+- The runbook's `MSYS_NO_PATHCONV=1` rule applies to **`adb shell df /data`**
+  too, not just `/sdcard` paths. Without it you get a confusing
+  `df: 'C:/Git/data': No such file or directory`.
+- `adb install` wants a WINDOWS path for the local APK (`C:/np/...`). With
+  `MSYS_NO_PATHCONV=1` exported, a `/c/np/...` path is passed through unconverted
+  and fails to stat.
+
 ---
 
 ## 5. Where this stands, and the git situation
@@ -163,10 +237,11 @@ assert every file is byte-identical again before the second commit. It was, all
 
 ### Open, not done
 
-1. **The dark theme has never had a full visual pass.** The palette is measured
-   and AA-checked in `theme.ts`, and the dashboard and Settings look right, but
-   Send, Swap, Receive, BPAN, Activity, Browser and the approval sheets have
-   only ever been seen in light.
+1. **The brand ramp's white label fails AA in both themes.** See 4b. Needs a
+   brand decision, not a silent palette edit. Whatever is decided,
+   `palette-contrast.mjs` should assert the gradient STOPS and not just the
+   flat `brand` token, or the next change re-opens the same hole.
+   (The dark visual pass itself is DONE, 2026-07-31; see 4b.)
 2. **The security stream is not device-verified at all.** It typechecks and its
    arithmetic is unit-tested, but the wipe path has never been run to
    completion on hardware, and both new native modules (`expo-device`,
