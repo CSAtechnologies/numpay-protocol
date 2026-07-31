@@ -209,6 +209,8 @@ function AppInner() {
   const theme = useThemeState();
   const [mode, setMode] = useState<Mode>("loading");
   const [receiveAddrs, setReceiveAddrs] = useState<ReceiveAddrs | null>(null);
+  /** Chain Receive should open on, when it was reached from a token. */
+  const [receiveInit, setReceiveInit] = useState<string | null>(null);
   // Token-detail target and the Send screen's preselection (TokenDetail entry).
   const [tokenDetail, setTokenDetail] = useState<AssetRow | null>(null);
   const [sendInit, setSendInit] = useState<{ chainId: string; token: SendTokenPick | null } | null>(null);
@@ -461,8 +463,12 @@ function AppInner() {
     }
   };
 
-  const goReceive = () => {
+  /** `chainId` preselects the chain when the caller already knows it (a token
+   *  detail page). The six nav tabs and the dashboard tile pass nothing and
+   *  keep opening on the default. */
+  const goReceive = (chainId?: string) => {
     setReceiveAddrs({ evm: w.evmAddress, nonEvm: w.nonEvmAddresses });
+    setReceiveInit(chainId ?? null);
     setMode("receive");
   };
   const navTo = (tab: NavTab) => {
@@ -550,7 +556,9 @@ function AppInner() {
             onSwap={() => setMode("swap")}
             onDeFi={() => setMode("defi")}
             onActivity={() => setMode("activity")}
-            onReceive={goReceive}
+            // Wrapped, not passed bare: a Pressable hands its press event to
+            // the callback, which would land in goReceive's chainId.
+            onReceive={() => goReceive()}
             onLock={async () => { await lock(); setError(""); await refresh(); }}
             onBPAN={() => setMode("bpan")}
             onBrowser={() => setMode("browser")}
@@ -590,7 +598,12 @@ function AppInner() {
           />
         )}
         {mode === "receive" && receiveAddrs && (
-          <ReceiveScreen addrs={receiveAddrs} onBack={() => setMode("home")} />
+          <ReceiveScreen
+            key={receiveInit ?? "default"}
+            addrs={receiveAddrs}
+            initialChainId={receiveInit ?? undefined}
+            onBack={() => { setReceiveInit(null); setMode("home"); }}
+          />
         )}
         {mode === "send" && (
           <SendScreen
@@ -647,7 +660,7 @@ function AppInner() {
               });
               setMode("swap");
             }}
-            onReceive={goReceive}
+            onReceive={() => goReceive(tokenDetail.chainId)}
             onSessionExpired={() => { void showRelock(); }}
           />
         )}

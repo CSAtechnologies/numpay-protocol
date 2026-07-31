@@ -90,8 +90,27 @@ function QrView({ value }: { value: string }) {
   );
 }
 
-export function ReceiveScreen({ addrs, onBack }: { addrs: ReceiveAddrs; onBack: () => void }) {
-  const [selId, setSelId] = useState("ethereum");
+export function ReceiveScreen({ addrs, initialChainId, onBack }: {
+  addrs: ReceiveAddrs;
+  /**
+   * Chain to open on, when Receive was reached from something that already
+   * knows which one the user means (a token's detail page). Arriving from a
+   * SOL row and being handed an Ethereum address is worse than a wasted tap:
+   * the address shown is a real one, just for the wrong chain, and the user
+   * has no reason to doubt it.
+   *
+   * An id with no row in ALL_CHAINS falls back to the default rather than
+   * leaving the picker empty. That happens for a chain the wallet holds a
+   * balance on but Receive does not list (sepolia is filtered out here).
+   */
+  initialChainId?: string;
+  onBack: () => void;
+}) {
+  const [selId, setSelId] = useState(
+    initialChainId && ALL_CHAINS.some((c) => c.id === initialChainId)
+      ? initialChainId
+      : "ethereum",
+  );
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [copied, setCopied] = useState(false);
