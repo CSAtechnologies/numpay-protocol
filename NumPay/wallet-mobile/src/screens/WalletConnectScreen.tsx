@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { listOrigins, revoke, type OriginPermission } from "@numpay/core/dapp";
-import { colors, radius, type as ts } from "../ui/theme";
+import { colors, radius, type as ts, themedStyles } from "../ui/theme";
 import { Notice, Btn, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
 import { displayHost } from "../browser/session";
 import { hasProjectId } from "../walletconnect/config";
@@ -216,7 +216,7 @@ export function WalletConnectScreen({ onBack }: { onBack: () => void }) {
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   hint: { color: colors.muted, fontSize: ts.small, lineHeight: 17, marginTop: 6 },
   scanBox: {
     flex: 1,
@@ -227,7 +227,7 @@ const st = StyleSheet.create({
     backgroundColor: "#000",
   },
   dim: { color: colors.muted, fontSize: ts.row, marginTop: 8 },
-  err: { color: colors.danger, fontSize: ts.body, marginTop: 8 },
+  err: { color: colors.dangerText, fontSize: ts.body, marginTop: 8 },
   icon: { width: 36, height: 36, borderRadius: radius.tile, backgroundColor: colors.surface2 },
   iconFallback: {
     alignItems: "center", justifyContent: "center",
@@ -235,4 +235,4 @@ const st = StyleSheet.create({
   },
   name: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "600" },
   sub: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
-});
+}));

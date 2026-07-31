@@ -16,7 +16,7 @@
  */
 import { useState, type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
-import { colors, radius, type as ts } from "./theme";
+import { colors, radius, type as ts, themedStyles } from "./theme";
 import { EyeOffIcon } from "./icons";
 
 export function SeedPhraseGrid({
@@ -65,7 +65,7 @@ export function SeedPhraseGrid({
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   wrap: {
     position: "relative",
     borderRadius: radius.card,
@@ -131,4 +131,4 @@ const st = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.divider,
   },
-});
+}));

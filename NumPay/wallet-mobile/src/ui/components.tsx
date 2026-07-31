@@ -14,9 +14,158 @@ import Svg, {
   Stop, Ellipse, Text as SvgText,
 } from "react-native-svg";
 import type { SendErrorView } from "@numpay/core/sendErrors";
-import { activeTheme, colors, gradients, radius, type as ts } from "./theme";
+import { colors, elevation, getTheme, gradients, motion, press, radius, type as ts, themedStyles } from "./theme";
 import { noticeTone, type NoticeToneInput } from "./notice";
 import { AlertIcon, ArrowLeftIcon, CheckIcon } from "./icons";
+
+// ── Tappable: the app's ONE press-feedback contract ──────────────────────────
+/**
+ * Before this existed, 61 of the app's 83 Pressables had no pressed style at
+ * all. Tapping a token row, a nav tab or a chip produced nothing at all until
+ * the screen changed, so every interaction read as a dead surface followed by
+ * an abrupt cut. That gap, not the palette, is what made the app feel rigid.
+ *
+ * `feedback` picks how a surface answers a touch, because they should not all
+ * answer the same way:
+ *   row   a list row tints under the finger and ripples on Android. It must not
+ *         scale: a full-width row shrinking looks like the list is collapsing.
+ *   tile  a button, action tile or card presses IN. Scale is animated (native
+ *         driver) rather than snapped, so the release springs back instead of
+ *         popping, which is the difference between "pressed" and "glitched".
+ *   ghost chrome with no fill of its own (header buttons). Tints only, no
+ *         ripple, so it does not draw a box that is not there at rest.
+ *
+ * Everything routes through `motion.press`, so the whole app answers a finger
+ * at one speed.
+ */
+export type PressFeedback = "row" | "tile" | "ghost" | "none";
+
+/**
+ * Style props that size or place the box, as opposed to painting it.
+ *
+ * `tile` has to wrap its Pressable in an Animated.View to carry the scale, and
+ * THAT wrapper, not the Pressable, becomes the flex child of whatever laid the
+ * tile out. So these have to move up to the wrapper. Leaving them inside
+ * collapsed every tile row in the app to its content width: the dashboard's
+ * Receive/Swap/DeFi row and the add-wallet segmented control both bunched up
+ * against the left edge, because their `flex: 1` was landing on a child of a
+ * wrapper that had no width of its own to divide.
+ */
+const TILE_OUTER_KEYS = [
+  "flex", "flexBasis", "flexGrow", "flexShrink", "alignSelf",
+  "width", "height", "minWidth", "minHeight", "maxWidth", "maxHeight",
+  "margin", "marginTop", "marginBottom", "marginLeft", "marginRight",
+  "marginHorizontal", "marginVertical", "marginStart", "marginEnd",
+  "position", "top", "bottom", "left", "right", "zIndex",
+] as const;
+
+// NOTE, unverified on device: shadows are deliberately NOT in the list above.
+// A `tile` that passes `borderRadius` gets `overflow: "hidden"` on the wrapper
+// to keep the Android ripple inside the tile's corners, and that clip is
+// believed to also eat a shadow cast by a CHILD, since an elevation shadow
+// draws outside the child's own bounds. The dashboard Send CTA is the one call
+// site this would affect (its brand glow sits on the LinearGradient inside).
+// Hoisting the shadow to the wrapper is NOT the fix: the wrapper has no
+// background, so Android has no outline to cast from and iOS drops the shadow
+// outright once masksToBounds is set. Needs an emulator check before anything
+// here changes.
+
+/** [outer, inner]: the box props above go to the wrapper, everything that
+ *  paints the tile (padding, fill, border, alignment) stays on the Pressable,
+ *  so the ripple still clips to the tile's own edge. */
+function splitTileStyle(
+  style: StyleProp<ViewStyle>,
+): [ViewStyle, ViewStyle] {
+  const flat = StyleSheet.flatten(style);
+  if (!flat) return [{}, {}];
+  const outer: ViewStyle = {};
+  const inner: ViewStyle = { ...flat };
+  for (const k of TILE_OUTER_KEYS) {
+    if (flat[k] === undefined) continue;
+    (outer[k] as unknown) = flat[k];
+    delete inner[k];
+  }
+  return [outer, inner];
+}
+
+export function Tappable({
+  children, onPress, onLongPress, disabled, feedback = "row", style,
+  hitSlop, borderRadius, accessibilityLabel, accessibilityRole = "button",
+}: {
+  children: ReactNode;
+  onPress?: () => void;
+  onLongPress?: () => void;
+  disabled?: boolean;
+  feedback?: PressFeedback;
+  style?: StyleProp<ViewStyle>;
+  hitSlop?: number;
+  /** Rounds the press tint and clips the Android ripple. Deliberately has NO
+   *  default: a full-width list row carries a divider hairline, and giving it a
+   *  radius curls the ends of that line. Pass the surface's own radius for
+   *  anything that actually is rounded (a pill, a tile, a card). */
+  borderRadius?: number;
+  accessibilityLabel?: string;
+  accessibilityRole?: "button" | "link" | "none";
+}) {
+  const a = useRef(new Animated.Value(0)).current;
+  const scale = a.interpolate({ inputRange: [0, 1], outputRange: [1, press.scale] });
+
+  const drive = (to: number) => {
+    Animated.timing(a, {
+      toValue: to, duration: motion.press,
+      easing: Easing.out(Easing.quad), useNativeDriver: true,
+    }).start();
+  };
+
+  const tint =
+    feedback === "row" || feedback === "ghost" ? press.rowTint : undefined;
+
+  // Only `tile` grows a wrapper, so only `tile` needs the split.
+  const [outerStyle, innerStyle] =
+    feedback === "tile" ? splitTileStyle(style) : [undefined, style];
+
+  const body = (
+    <Pressable
+      onPress={onPress}
+      onLongPress={onLongPress}
+      disabled={disabled}
+      hitSlop={hitSlop}
+      accessibilityRole={accessibilityRole}
+      accessibilityLabel={accessibilityLabel}
+      onPressIn={feedback === "tile" ? () => drive(1) : undefined}
+      onPressOut={feedback === "tile" ? () => drive(0) : undefined}
+      // Ripple is Android's own press language and costs nothing on iOS, where
+      // the `pressed` tint below carries the same job.
+      android_ripple={
+        feedback === "row" || feedback === "tile"
+          ? { color: press.ripple, borderless: false, radius: undefined }
+          : undefined
+      }
+      style={({ pressed }) => [
+        feedback !== "tile" && borderRadius != null && { borderRadius },
+        innerStyle,
+        disabled && { opacity: 0.4 },
+        pressed && !disabled && tint ? { backgroundColor: tint } : null,
+      ]}
+    >
+      {children}
+    </Pressable>
+  );
+
+  if (feedback !== "tile") return body;
+  return (
+    <Animated.View
+      style={[
+        outerStyle,
+        { transform: [{ scale }] },
+        // Overflow clip keeps the ripple inside the tile's own corners.
+        borderRadius != null && { borderRadius, overflow: "hidden" },
+      ]}
+    >
+      {body}
+    </Animated.View>
+  );
+}
 
 // ── Buttons (.btn-primary-premium / .btn-secondary + danger tone) ────────────
 export function Btn({
@@ -28,49 +177,73 @@ export function Btn({
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
+  // Press is ANIMATED rather than a snapped `pressed &&` transform. The snap
+  // version jumps to 0.98 and back in one frame each way, which registers as a
+  // flicker; easing it over motion.press makes the button feel depressed and
+  // then released. Native driver, so it holds 60fps while JS is busy signing.
+  const a = useRef(new Animated.Value(0)).current;
+  const scale = a.interpolate({ inputRange: [0, 1], outputRange: [1, press.scale] });
+  const drive = (to: number) => {
+    Animated.timing(a, {
+      toValue: to, duration: motion.press,
+      easing: Easing.out(Easing.quad), useNativeDriver: true,
+    }).start();
+  };
+  const pressProps = {
+    onPress,
+    disabled,
+    onPressIn: () => drive(1),
+    onPressOut: () => drive(0),
+    accessibilityRole: "button" as const,
+    accessibilityLabel: label,
+  };
+
   if (variant === "primary") {
     // .btn-primary-premium: vertical brand gradient, hairline top light,
     // brand glow. Gradient lives inside the pressable so radius clips it.
     return (
-      <Pressable
-        onPress={onPress}
-        disabled={disabled}
-        style={({ pressed }) => [
-          st.btnPremiumShell,
-          disabled && { opacity: 0.4 },
-          pressed && !disabled && { transform: [{ scale: 0.98 }] },
-          style,
-        ]}
-      >
-        <LinearGradient
-          colors={gradients.brand}
-          locations={gradients.brandLocations}
-          start={{ x: 0.5, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          style={st.btnPremiumFill}
+      // The default top margin lives on this wrapper, NOT on the inner fill, so
+      // a caller passing `marginTop` overrides it instead of stacking on top of
+      // it. (It used to sit on the same node as the caller's style, where the
+      // caller's value simply won.)
+      <Animated.View style={[{ marginTop: 12, transform: [{ scale }] }, style]}>
+        <Pressable
+          {...pressProps}
+          style={[st.btnPremiumShell, disabled && { opacity: 0.4 }]}
         >
-          <Text style={st.btnText}>{label}</Text>
-        </LinearGradient>
-      </Pressable>
+          <LinearGradient
+            colors={gradients.brand}
+            locations={gradients.brandLocations}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={st.btnPremiumFill}
+          >
+            <Text style={st.btnText}>{label}</Text>
+          </LinearGradient>
+        </Pressable>
+      </Animated.View>
     );
   }
   return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      style={({ pressed }) => [
-        st.btn,
-        variant === "secondary" && st.btnSecondary,
-        variant === "danger" && st.btnDanger,
-        disabled && { opacity: 0.35 },
-        pressed && !disabled && { transform: [{ scale: 0.98 }] },
-        style,
-      ]}
-    >
-      <Text style={[st.btnText, variant === "secondary" && { color: colors.textPrimary }]}>
-        {label}
-      </Text>
-    </Pressable>
+    // The default top margin lives on this wrapper, NOT on the inner fill, so
+    // a caller passing `marginTop` overrides it instead of stacking on top of
+    // it. (It used to sit on the same node as the caller's style, where the
+    // caller's value simply won.)
+    <Animated.View style={[{ marginTop: 12, transform: [{ scale }] }, style]}>
+      <Pressable
+        {...pressProps}
+        style={[
+          st.btn,
+          variant === "secondary" && st.btnSecondary,
+          variant === "danger" && st.btnDanger,
+          disabled && { opacity: 0.35 },
+        ]}
+      >
+        <Text style={[st.btnText, variant === "secondary" && { color: colors.textPrimary }]}>
+          {label}
+        </Text>
+      </Pressable>
+    </Animated.View>
   );
 }
 
@@ -200,10 +373,71 @@ export function Field(props: TextInputProps) {
 export function Chip({
   label, active, onPress, icon,
 }: { label: string; active?: boolean; onPress: () => void; icon?: ReactNode }) {
+  // Chips are the app's densest tap target (chain filters, presets), so they
+  // press as a tile: at this size a tint is easy to miss under a fingertip,
+  // where a scale is felt even when the finger covers the chip.
   return (
-    <Pressable onPress={onPress} style={[st.pill, active && st.pillBrand]}>
+    <Tappable
+      feedback="tile"
+      onPress={onPress}
+      borderRadius={radius.pill}
+      accessibilityLabel={label}
+      style={[st.pill, active && st.pillBrand]}
+    >
       {icon}
       <Text style={[st.pillText, active && st.pillTextBrand]}>{label}</Text>
+    </Tappable>
+  );
+}
+
+// ── Toggle ───────────────────────────────────────────────────────────────────
+/**
+ * A binary setting. Hand-built rather than RN's `<Switch>` because that renders
+ * the stock Material control, which is the one widget on these screens that
+ * would announce itself as not-this-product: platform blue-green, platform
+ * proportions, ignores the palette. The extension has no switch to port, so this
+ * is the mobile original, built from the same tokens as everything else.
+ *
+ * The knob animates on the native driver and the track cross-fades, so the
+ * change is legible without the user having to look for a colour they only see
+ * one of at a time.
+ */
+export function Toggle({
+  value, onValueChange, disabled, label,
+}: {
+  value: boolean;
+  onValueChange: (next: boolean) => void;
+  disabled?: boolean;
+  /** Accessibility name. The visible label lives in the row that owns this. */
+  label: string;
+}) {
+  const t = useRef(new Animated.Value(value ? 1 : 0)).current;
+  useEffect(() => {
+    Animated.timing(t, {
+      toValue: value ? 1 : 0,
+      duration: motion.press * 2,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [value, t]);
+
+  return (
+    <Pressable
+      onPress={() => { if (!disabled) onValueChange(!value); }}
+      disabled={disabled}
+      accessibilityRole="switch"
+      accessibilityLabel={label}
+      accessibilityState={{ checked: value, disabled: !!disabled }}
+      // Generous, because the control itself is deliberately small.
+      hitSlop={10}
+      style={[st.toggleTrack, value && st.toggleTrackOn, disabled && { opacity: 0.4 }]}
+    >
+      <Animated.View
+        style={[
+          st.toggleKnob,
+          { transform: [{ translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, 18] }) }] },
+        ]}
+      />
     </Pressable>
   );
 }
@@ -237,15 +471,16 @@ export function ScreenHeader({ title, subtitle, onBack, right }: {
   return (
     <View style={st.header}>
       {onBack && (
-        <Pressable
+        <Tappable
           onPress={onBack}
+          feedback="ghost"
           hitSlop={10}
-          accessibilityRole="button"
+          borderRadius={radius.iconBtn}
           accessibilityLabel="Go back"
-          style={({ pressed }) => [st.ghostBtn, pressed && { backgroundColor: colors.surface2 }]}
+          style={st.ghostBtn}
         >
           <ArrowLeftIcon size={16} color={colors.muted} />
-        </Pressable>
+        </Tappable>
       )}
       {subtitle ? (
         <View style={{ flexShrink: 1 }}>
@@ -275,15 +510,16 @@ export function IconBtn({ children, onPress, label }: {
   label?: string;
 }) {
   return (
-    <Pressable
+    <Tappable
       onPress={onPress}
+      feedback="ghost"
       hitSlop={8}
-      accessibilityRole="button"
+      borderRadius={radius.iconBtn}
       accessibilityLabel={label}
-      style={({ pressed }) => [st.iconBtn, pressed && { borderColor: colors.borderLight }]}
+      style={st.iconBtn}
     >
       {children}
-    </Pressable>
+    </Tappable>
   );
 }
 
@@ -298,7 +534,7 @@ export function HeroSection({ children, style }: {
    *  margins, so the wash reaches the edges the way the popup's does. */
   style?: StyleProp<ViewStyle>;
 }) {
-  const light = activeTheme === "light";
+  const light = getTheme() === "light";
   return (
     <View style={[{ position: "relative" }, style]}>
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -493,19 +729,14 @@ export function SendErrorCard({ view, style }: { view: SendErrorView; style?: St
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   btnPremiumShell: {
     width: "100%",
     borderRadius: radius.button,
-    marginTop: 12,
     borderWidth: 1,
     borderColor: colors.overlayBorder,
     overflow: "hidden",
-    shadowColor: colors.brand,
-    shadowOpacity: 0.5,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 8,
+    ...elevation.brand,
   },
   btnPremiumFill: {
     flexDirection: "row",
@@ -525,7 +756,6 @@ const st = StyleSheet.create({
     paddingHorizontal: 24,
     borderRadius: radius.button,
     backgroundColor: colors.brand,
-    marginTop: 12,
   },
   btnSecondary: {
     backgroundColor: colors.card,
@@ -569,11 +799,46 @@ const st = StyleSheet.create({
   pillText: { color: colors.textSecondary, fontSize: 12 },
   pillTextBrand: { color: colors.brand2, fontWeight: "600" },
 
+  // 42x24 track, 20px knob, 2px inset: the knob travels 18 (see the
+  // interpolation in Toggle, which must match this arithmetic).
+  toggleTrack: {
+    width: 42,
+    height: 24,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface3,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 1,
+    justifyContent: "center",
+  },
+  toggleTrackOn: {
+    backgroundColor: colors.brand,
+    borderColor: colors.brandDark,
+  },
+  toggleKnob: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: colors.onBrand,
+    // Lifted off the track so the OFF state reads as a control and not as a
+    // flat pill: on a light theme the white knob on a pale track needs it.
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  },
+
   card: {
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.card,
+    // The popup gave cards a hairline and nothing else, because inside a
+    // browser panel there is no depth to express: the panel IS the top layer.
+    // On a phone that left every card reading as a rectangle drawn onto the
+    // page. A soft resting shadow is what makes it read as a surface instead.
+    ...elevation.card,
   },
 
   sectionLabel: {
@@ -674,4 +939,4 @@ const st = StyleSheet.create({
   figureLabel: { fontSize: 9, letterSpacing: 1, color: colors.muted, marginBottom: 2 },
   figureValue: { fontSize: 13, fontWeight: "700", color: colors.textPrimary, fontVariant: ["tabular-nums"] },
   figureUnit: { fontSize: 10, color: colors.muted, fontWeight: "600" },
-});
+}));

@@ -6,7 +6,9 @@
 // core/sendErrors, and the TxResultOverlay. ENS/SNS name resolution is not in
 // this slice.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BackHandler, Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  BackHandler, Keyboard, ScrollView, StyleSheet, Text, View,
+} from "react-native";
 import { ethers } from "ethers";
 import {
   isBPANInput, isValidBPAN, resolveBPANChecked, acceptBPANChange,
@@ -30,8 +32,8 @@ import {
   type EvmFeeEstimate, type TokenSendAsset,
 } from "../wallet/send";
 import type { MobileWalletState } from "../wallet/useMobileWallet";
-import { colors, radius, type as ts } from "../ui/theme";
-import { Notice, Btn, Chip, Card, Field, ScreenHeader, SendErrorCard } from "../ui/components";
+import { colors, radius, type as ts, themedStyles } from "../ui/theme";
+import { Notice, Btn, Chip, Card, Field, ScreenHeader, SendErrorCard, Tappable } from "../ui/components";
 import { useCurrencyPref, formatFiatLine, formatFeeTail } from "../ui/currency";
 import { AssetIcon, ChainIcon } from "../ui/coins";
 import { ScanIcon, SearchIcon, XIcon } from "../ui/icons";
@@ -513,7 +515,7 @@ export function SendScreen({
         </ScrollView>
 
         {/* Asset picker: the chain's native coin or any discovered token */}
-        <Pressable onPress={() => { setPickerOpen((v) => !v); resetSearch(); }}>
+        <Tappable feedback="ghost" onPress={() => { setPickerOpen((v) => !v); resetSearch(); }}>
           <Card style={st.assetCard}>
             <AssetIcon
               symbol={symbol} logo={token?.logo} chainId={chainId}
@@ -532,7 +534,7 @@ export function SendScreen({
               {price > 0 && <Text style={st.assetChain}>${(balance * price).toFixed(2)}</Text>}
             </View>
           </Card>
-        </Pressable>
+        </Tappable>
 
         {/* Token list (native first, holdings by value) */}
         {pickerOpen && (
@@ -555,9 +557,9 @@ export function SendScreen({
                   style={st.searchField}
                 />
                 {search.length > 0 && (
-                  <Pressable onPress={resetSearch} hitSlop={8} accessibilityLabel="Clear search">
+                  <Tappable feedback="ghost" onPress={resetSearch} hitSlop={8} accessibilityLabel="Clear search">
                     <XIcon size={12} color={colors.muted} />
-                  </Pressable>
+                  </Tappable>
                 )}
               </View>
             )}
@@ -583,7 +585,7 @@ export function SendScreen({
               />
             )}
             {!searchQ && (
-            <Pressable
+            <Tappable feedback="row"
               style={st.pickRow}
               onPress={() => { setToken(null); setPickerOpen(false); setAmount(""); setError(""); }}
             >
@@ -595,10 +597,10 @@ export function SendScreen({
               <Text style={st.assetBal}>
                 {nativeBalance.toLocaleString(undefined, { maximumFractionDigits: 6 })}
               </Text>
-            </Pressable>
+            </Tappable>
             )}
             {visibleTokens.map((t) => (
-              <Pressable
+              <Tappable feedback="row"
                 key={t.address}
                 style={st.pickRow}
                 onPress={() => { setToken(t); setPickerOpen(false); setAmount(""); setError(""); }}
@@ -613,7 +615,7 @@ export function SendScreen({
                 <Text style={st.assetBal}>
                   {t.balanceNum.toLocaleString(undefined, { maximumFractionDigits: 6 })}
                 </Text>
-              </Pressable>
+              </Tappable>
             ))}
             {visibleTokens.length === 0 && !showImport && (
               <Text style={[st.assetChain, { padding: 12 }]}>
@@ -639,14 +641,14 @@ export function SendScreen({
             onChangeText={(v) => { void handleToChange(v); }}
             style={{ flex: 1 }}
           />
-          <Pressable
+          <Tappable feedback="tile"
             onPress={() => { setScanErr(""); setScanning(true); }}
             style={st.scanBtn}
             hitSlop={6}
             accessibilityLabel="Scan a QR code"
           >
             <ScanIcon size={17} color={colors.brand2} />
-          </Pressable>
+          </Tappable>
         </View>
         {!!scanErr && <Text style={st.scanErr}>{scanErr}</Text>}
         {resolving && <Text style={st.resolving}>Verifying BPAN across independent providers…</Text>}
@@ -685,9 +687,9 @@ export function SendScreen({
             onChangeText={(v) => { setAmount(v.replace(/[^0-9.]/g, "")); setError(""); }}
             style={{ flex: 1 }}
           />
-          <Pressable onPress={handleMax} style={st.maxBtn}>
+          <Tappable feedback="tile" onPress={handleMax} style={st.maxBtn}>
             <Text style={st.maxText}>MAX</Text>
-          </Pressable>
+          </Tappable>
         </View>
         <View style={st.subRow}>
           <Text style={st.subText}>{amountUsd > 0 ? `≈ ${formatFiatLine(amountUsd, cur.code, cur.currency, w.rates)}` : " "}</Text>
@@ -709,14 +711,14 @@ export function SendScreen({
               {(["slow", "normal", "fast"] as GasTier[]).map((t) => {
                 const on = gasTier === t;
                 return (
-                  <Pressable
+                  <Tappable feedback="row"
                     key={t}
                     onPress={() => setGasTier(t)}
                     style={[st.gasBtn, on && st.gasBtnOn]}
                   >
                     <Text style={[st.gasTier, on && st.gasTierOn]}>{t}</Text>
                     <Text style={st.gasGwei}>{tierGwei(t, feeInfo)}</Text>
-                  </Pressable>
+                  </Tappable>
                 );
               })}
             </View>
@@ -749,7 +751,7 @@ export function SendScreen({
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   assetCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -791,9 +793,9 @@ const st = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  scanErr: { color: colors.danger, fontSize: ts.small, marginTop: 6 },
+  scanErr: { color: colors.dangerText, fontSize: ts.small, marginTop: 6 },
   resolving: { color: colors.muted, fontSize: ts.small, marginTop: 6 },
-  resolved: { color: colors.success, fontSize: ts.small, marginTop: 6 },
+  resolved: { color: colors.successText, fontSize: ts.small, marginTop: 6 },
   maxBtn: {
     marginTop: 10,
     paddingVertical: 13,
@@ -837,4 +839,4 @@ const st = StyleSheet.create({
   },
   gasTierOn: { color: colors.brand2 },
   gasGwei: { color: colors.muted2, fontSize: ts.label, fontVariant: ["tabular-nums"], marginTop: 1 },
-});
+}));

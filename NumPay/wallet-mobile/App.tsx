@@ -6,7 +6,9 @@
 // expo-screen-capture or a config plugin).
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode,
+} from "react";
 
 // Hold the branded native splash (dark bg + NumPay mark, app.json) until the
 // first real screen is ready; hideAsync then reveals the lock/onboard screen,
@@ -15,8 +17,9 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 import { LinearGradient } from "expo-linear-gradient";
 import * as Clipboard from "expo-clipboard";
 import {
-  Animated, BackHandler, PanResponder, Pressable, RefreshControl, ScrollView,
-  StyleSheet, Switch, Text, View,
+  AccessibilityInfo, Animated, BackHandler, Easing, PanResponder, Pressable,
+  RefreshControl, ScrollView, StyleSheet, Switch, Text, View,
+  type StyleProp, type ViewStyle,
 } from "react-native";
 
 import { createWallet, importFromMnemonic } from "@numpay/core/wallet";
@@ -31,10 +34,13 @@ import {
 import { runSpike, type SpikeResult } from "./spike/runSpike";
 import { runDevnetTx } from "./spike/devnetTx";
 import { useMobileWallet, type AssetRow, type MobileWalletState } from "./src/wallet/useMobileWallet";
-import { activeTheme, colors, radius, type as ts, spacing } from "./src/ui/theme";
+import {
+  colors, motion, radius, type as ts, spacing, themeReady, themedStyles, TOP_INSET,
+  useThemeState,
+} from "./src/ui/theme";
 import {
   Notice, AmbientBackground, AnimatedLogo, Btn, Card, EmptyState, Field,
-  GradientNumber, HeroSection, ScreenHeader, SectionLabel, SkeletonRow,
+  GradientNumber, HeroSection, ScreenHeader, SectionLabel, SkeletonRow, Tappable,
 } from "./src/ui/components";
 import { SeedPhraseGrid } from "./src/ui/SeedPhrase";
 import { ToastHost, toast } from "./src/ui/Toast";
@@ -48,7 +54,7 @@ import { CurrencyProvider, useCurrencyPref, formatFiat } from "./src/ui/currency
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import {
   ArrowUpRightIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon,
-  CopyIcon, EyeOffIcon, GlobeIcon, HashIcon, LinkIcon, LockIcon, PlusIcon,
+  CopyIcon, EyeOffIcon, GlobeIcon, HashIcon, LockIcon, PlusIcon,
   ReceiveIcon, RefreshIcon, ScanIcon, SwapIcon, TrendingUpIcon, WalletIcon,
 } from "./src/ui/icons";
 import { AssetIcon, ChainBadge, ChainIcon } from "./src/ui/coins";
@@ -68,6 +74,107 @@ import { WcApprovalHost } from "./src/walletconnect/WcApprovalHost";
 import { ensureReceiveWatch } from "./src/notify/backgroundTask";
 import { clearReceiveWatch } from "./src/notify/receiveWatch";
 import { PinPad } from "./src/ui/PinPad";
+
+// ── Screen transitions ───────────────────────────────────────────────────────
+/**
+ * Every screen in this app is rendered by a bare `{mode === "x" && <Screen/>}`
+ * conditional, so a navigation used to replace the whole page between one frame
+ * and the next. Fourteen screens, fourteen jump cuts. No amount of palette work
+ * fixes that: an instant swap is what makes an app feel rigid, because the eye
+ * gets no signal about where the new screen came from.
+ *
+ * This wraps the shell in one animated node that re-enters on every mode
+ * change, so a screen fades up and slides a short distance in the direction the
+ * user travelled. It is deliberately NOT a full push/pop with both screens on
+ * stage at once: that needs the old screen kept mounted (and a navigation
+ * library to own it), and the entering half alone carries most of the feeling.
+ *
+ * Direction comes from `orderOf`. Sliding the same way for a forward tap and a
+ * back tap is worse than not sliding at all, because the motion then actively
+ * contradicts what the user did.
+ */
+const NAV_ORDER: readonly string[] = [
+  "home", "send", "receive", "bpan", "activity", "settings",
+];
+
+/**
+ * Position of a screen along the app's one navigational axis. Screens sort into
+ * three bands: auth (before the wallet exists), the six nav tabs in the order
+ * the tab bar shows them, and everything deeper. So a tab-to-tab move slides
+ * the same way the tab bar reads, and anything opened FROM a tab slides in from
+ * the right and back out to the left, whichever tab it was opened from.
+ */
+function orderOf(mode: Mode): number {
+  const tab = NAV_ORDER.indexOf(mode);
+  if (tab >= 0) return 10 + tab;
+  if (mode === "loading" || mode === "onboard" || mode === "import"
+    || mode === "reveal" || mode === "pin" || mode === "locked") return 0;
+  return 20;
+}
+
+function ScreenTransition({ mode, style, children }: {
+  mode: Mode;
+  style?: StyleProp<ViewStyle>;
+  children: ReactNode;
+}) {
+  const a = useRef(new Animated.Value(1)).current;
+  const prevMode = useRef<Mode>(mode);
+  const dir = useRef(1);
+  const reduceMotion = useRef(false);
+
+  useEffect(() => {
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((on) => { reduceMotion.current = on; })
+      .catch(() => {});
+  }, []);
+
+  // Direction is resolved during RENDER, not in the effect. An effect runs
+  // after the new screen has already been laid out, so reading it there would
+  // animate the first frame of every transition using the PREVIOUS direction.
+  // Latching it in a ref also keeps it stable if an unrelated state update
+  // re-renders mid-flight, which would otherwise flip the slide mid-animation.
+  const changed = prevMode.current !== mode;
+  if (changed) {
+    dir.current = orderOf(mode) >= orderOf(prevMode.current) ? 1 : -1;
+    prevMode.current = mode;
+  }
+
+  // Layout effect, not a plain effect: this must start before the frame is
+  // painted, or the new screen shows for one frame at full opacity and then
+  // snaps back to the start of its own animation.
+  useLayoutEffect(() => {
+    if (!changed) return;
+    if (reduceMotion.current) { a.setValue(1); return; }
+    a.setValue(0);
+    Animated.timing(a, {
+      toValue: 1,
+      duration: motion.screen,
+      // Decelerate: fast off the mark, settling at the end. An ease-in-out here
+      // reads as slow, because the user already committed with the tap.
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <Animated.View
+      style={[
+        style,
+        {
+          opacity: a,
+          transform: [{
+            translateX: a.interpolate({
+              inputRange: [0, 1],
+              outputRange: [dir.current * motion.slide, 0],
+            }),
+          }],
+        },
+      ]}
+    >
+      {children}
+    </Animated.View>
+  );
+}
 
 type Mode =
   | "loading" | "onboard" | "import" | "reveal" | "pin" | "locked" | "home"
@@ -91,6 +198,11 @@ export default function App() {
 }
 
 function AppInner() {
+  // The app's ONE subscription to the theme store. Nothing below is memoised,
+  // so this single re-render repaints every screen, sheet and overlay: the
+  // themed StyleSheets resolve to the new theme and the live `colors` object
+  // has already been repainted by the time this runs.
+  const theme = useThemeState();
   const [mode, setMode] = useState<Mode>("loading");
   const [receiveAddrs, setReceiveAddrs] = useState<ReceiveAddrs | null>(null);
   // Token-detail target and the Send screen's preselection (TokenDetail entry).
@@ -127,6 +239,20 @@ function AppInner() {
   // dApps, browser, dev) keep the full screen.
   const navVisible =
     mode === "home" || mode === "send" || mode === "receive" || mode === "bpan" || mode === "activity" || mode === "settings";
+  /**
+   * Screens that drop the shell's padding and reach the display edges
+   * themselves.
+   *
+   * Home, because the dashboard's hero has to bleed to the edges and up behind
+   * the status bar, which negative margins cannot do inside a ScrollView
+   * (Android clips them). Each dashboard section pads itself instead.
+   *
+   * The browser, because the shell's 20dp gutter was being taken out of the
+   * PAGE: a dApp rendered 40dp narrower than the device it was built for, with
+   * its own sticky chrome landing inside the gutter instead of against the
+   * screen edge. BrowserScreen pads its address bar and connection bar itself.
+   */
+  const flush = mode === "home" || mode === "browser";
   const w = useMobileWallet(unlocked, activeWalletId);
   const unlockedRef = useRef(unlocked);
   unlockedRef.current = unlocked;
@@ -189,12 +315,18 @@ function AppInner() {
     setRelocked(true);
   }, []);
 
+  // The saved theme is read from storage, so it lands a tick after first
+  // render. Holding the splash for it as well as for the first screen is what
+  // keeps a dark-theme user from seeing a light flash on every cold start.
+  const [themeLoaded, setThemeLoaded] = useState(false);
+  useEffect(() => { void themeReady.then(() => setThemeLoaded(true)); }, []);
+
   // Hold the branded native splash until the first real screen is resolved
   // (lock / onboard / home), so it hands straight to content with no black
   // flash — the lock/onboard screens animate the logo in themselves.
   useEffect(() => {
-    if (mode !== "loading") SplashScreen.hideAsync().catch(() => {});
-  }, [mode]);
+    if (mode !== "loading" && themeLoaded) SplashScreen.hideAsync().catch(() => {});
+  }, [mode, themeLoaded]);
 
   useEffect(() => {
     refresh().catch((e) => setError(String(e)));
@@ -329,218 +461,227 @@ function AppInner() {
   };
 
   return (
-    <View
-      style={[
-        st.container,
-        // The dashboard's hero has to reach the screen edges (and up behind the
-        // status bar), which negative margins cannot do inside a ScrollView —
-        // Android clips them. So home drops the shell's padding and each
-        // dashboard section pads itself instead.
-        mode === "home" && st.containerFlush,
-        navVisible && { paddingBottom: BOTTOM_NAV_CLEARANCE },
-      ]}
-    >
+    <View style={st.root}>
       <AmbientBackground />
       {/* Status bar glyphs are the INVERSE of the background: dark icons on
           the light theme's near-white bg, light icons on the dark one. */}
-      <StatusBar style={activeTheme === "light" ? "dark" : "light"} />
-      {(mode === "onboard" || mode === "import" || mode === "reveal" || mode === "pin" || mode === "locked") && (
-        <AuthHeader />
-      )}
-      {mode === "onboard" && (
-        <Onboard
-          onCreate={() => { setPendingMnemonic(createWallet().mnemonic); setMode("reveal"); }}
-          onImport={() => { setError(""); setMode("import"); }}
-        />
-      )}
-      {mode === "import" && (
-        <Import
-          error={error}
-          onBack={() => setMode("onboard")}
-          onSubmit={(phrase) => {
-            try {
-              const wa = importFromMnemonic(phrase);
-              setPendingMnemonic(wa.mnemonic);
-              setError("");
-              setMode("pin");
-            } catch {
-              setError("That doesn't look like a valid recovery phrase.");
-            }
-          }}
-        />
-      )}
-      {mode === "reveal" && (
-        <Reveal mnemonic={pendingMnemonic} onNext={() => setMode("pin")} />
-      )}
-      {mode === "pin" && (
-        <PinSetup
-          bioAvailable={status?.biometricsAvailable ?? false}
-          error={error}
-          onSubmit={async (pin, enableBio) => {
-            try {
-              await createVault(pendingMnemonic, pin, enableBio);
-              setPendingMnemonic("");
-              await onUnlocked();
-            } catch (e) {
-              setError(String(e));
-            }
-          }}
-        />
-      )}
-      {mode === "locked" && status && (
-        <Locked
-          status={status}
-          now={now}
-          error={error}
-          onPin={(pin) => { void pinUnlock(pin, refresh); }}
-          onBio={() => { void bioUnlock(refresh); }}
-        />
-      )}
-      {mode === "home" && (
-        <Dashboard
-          w={w}
-          onSend={() => setMode("send")}
-          onSwap={() => setMode("swap")}
-          onDeFi={() => setMode("defi")}
-          onActivity={() => setMode("activity")}
-          onReceive={goReceive}
-          onLock={async () => { await lock(); setError(""); await refresh(); }}
-          onBPAN={() => setMode("bpan")}
-          onDapps={() => setMode("dapps")}
-          onBrowser={() => setMode("browser")}
-          onScan={() => setMode("scan")}
-          onAccounts={() => setMode("settings")}
-          onManageAssets={() => { setAssetsReturn("home"); setMode("assets"); }}
-          walletName={activeWallet?.name ?? "NumPay"}
-          walletAvatar={activeWallet?.avatar}
-          onOpenAsset={(row) => { setTokenDetail(row); setMode("token"); }}
-        />
-      )}
-      {mode === "settings" && (
-        <SettingsScreen
-          activeWalletId={activeWalletId}
-          onSwitchWallet={onSwitchWallet}
-          onAddWallet={() => { setError(""); setAddWalletOpen(true); }}
-          onLock={async () => { await lock(); setError(""); await refresh(); }}
-          onDapps={() => setMode("dapps")}
-          onManageAssets={() => { setAssetsReturn("settings"); setMode("assets"); }}
-          onDev={() => setMode("dev")}
-          onWipe={async () => { await wipeVault(); await clearReceiveWatch(); setError(""); await refresh(); }}
-        />
-      )}
-      {mode === "assets" && (
-        <ManageAssetsScreen
-          onBack={() => { setMode(assetsReturn); void w.reloadCustom(); }}
-        />
-      )}
-      {mode === "dev" && (
-        <DevScreen
-          w={w}
-          argonMs={getLastArgonMs()}
-          onBack={() => setMode("home")}
-          onSpike={() => setMode("spike")}
-          onDevnet={() => setMode("devnet")}
-          onWipe={async () => { await wipeVault(); await clearReceiveWatch(); setError(""); await refresh(); }}
-        />
-      )}
-      {mode === "receive" && receiveAddrs && (
-        <ReceiveScreen addrs={receiveAddrs} onBack={() => setMode("home")} />
-      )}
-      {mode === "send" && (
-        <SendScreen
-          key={
-            scanPrefill
-              ? `scan:${scanPrefill.to}`
-              : sendInit ? `${sendInit.chainId}:${sendInit.token?.address ?? "native"}` : "default"
-          }
-          w={w}
-          initialChainId={scanPrefill?.chainId ?? sendInit?.chainId}
-          initialToken={sendInit?.token}
-          initialTo={scanPrefill?.to}
-          initialAmount={scanPrefill?.amount}
-          onBack={() => { setSendInit(null); setScanPrefill(null); setMode("home"); }}
-          onSessionExpired={() => { void showRelock(); }}
-        />
-      )}
-      {mode === "scan" && (
-        <View style={{ flex: 1 }}>
-          <ScreenHeader title="Scan" onBack={() => setMode("home")} />
-          <QrScanner
-            title="Scan"
-            hint="Point the camera at a wallet address, payment QR, BPAN or WalletConnect code."
-            onScan={routeScan}
-            onCancel={() => setMode("home")}
+      <StatusBar style={theme.theme === "light" ? "dark" : "light"} />
+      {/* The screen shell. The app's padding lives HERE and not on the root, so
+          that every absolute overlay further down is a SIBLING of it. Yoga lays
+          an absolutely positioned child out against its parent's padding box,
+          so an overlay nested inside this view would start already inset by
+          this padding and then add its own on top: the approval sheets used to
+          sit 112dp down and 40dp in from the edges, reading as a small window
+          floating inside the screen rather than as a takeover. */}
+      <ScreenTransition
+        mode={mode}
+        style={[
+          st.container,
+          flush && st.containerFlush,
+          navVisible && { paddingBottom: BOTTOM_NAV_CLEARANCE },
+        ]}
+      >
+        {(mode === "onboard" || mode === "import" || mode === "reveal" || mode === "pin" || mode === "locked") && (
+          <AuthHeader />
+        )}
+        {mode === "onboard" && (
+          <Onboard
+            onCreate={() => { setPendingMnemonic(createWallet().mnemonic); setMode("reveal"); }}
+            onImport={() => { setError(""); setMode("import"); }}
           />
-        </View>
-      )}
-      {mode === "token" && tokenDetail && (
-        <TokenDetailScreen
-          w={w}
-          row={tokenDetail}
-          onBack={() => setMode("home")}
-          onSend={() => {
-            setSendInit({
-              chainId: tokenDetail.chainId,
-              token: tokenDetail.isNative ? null : {
+        )}
+        {mode === "import" && (
+          <Import
+            error={error}
+            onBack={() => setMode("onboard")}
+            onSubmit={(phrase) => {
+              try {
+                const wa = importFromMnemonic(phrase);
+                setPendingMnemonic(wa.mnemonic);
+                setError("");
+                setMode("pin");
+              } catch {
+                setError("That doesn't look like a valid recovery phrase.");
+              }
+            }}
+          />
+        )}
+        {mode === "reveal" && (
+          <Reveal mnemonic={pendingMnemonic} onNext={() => setMode("pin")} />
+        )}
+        {mode === "pin" && (
+          <PinSetup
+            bioAvailable={status?.biometricsAvailable ?? false}
+            error={error}
+            onSubmit={async (pin, enableBio) => {
+              try {
+                await createVault(pendingMnemonic, pin, enableBio);
+                setPendingMnemonic("");
+                await onUnlocked();
+              } catch (e) {
+                setError(String(e));
+              }
+            }}
+          />
+        )}
+        {mode === "locked" && status && (
+          <Locked
+            status={status}
+            now={now}
+            error={error}
+            onPin={(pin) => { void pinUnlock(pin, refresh); }}
+            onBio={() => { void bioUnlock(refresh); }}
+          />
+        )}
+        {mode === "home" && (
+          <Dashboard
+            w={w}
+            onSend={() => setMode("send")}
+            onSwap={() => setMode("swap")}
+            onDeFi={() => setMode("defi")}
+            onActivity={() => setMode("activity")}
+            onReceive={goReceive}
+            onLock={async () => { await lock(); setError(""); await refresh(); }}
+            onBPAN={() => setMode("bpan")}
+            onBrowser={() => setMode("browser")}
+            onScan={() => setMode("scan")}
+            onAccounts={() => setMode("settings")}
+            onManageAssets={() => { setAssetsReturn("home"); setMode("assets"); }}
+            walletName={activeWallet?.name ?? "NumPay"}
+            walletAvatar={activeWallet?.avatar}
+            onOpenAsset={(row) => { setTokenDetail(row); setMode("token"); }}
+          />
+        )}
+        {mode === "settings" && (
+          <SettingsScreen
+            activeWalletId={activeWalletId}
+            onSwitchWallet={onSwitchWallet}
+            onAddWallet={() => { setError(""); setAddWalletOpen(true); }}
+            onLock={async () => { await lock(); setError(""); await refresh(); }}
+            onDapps={() => setMode("dapps")}
+            onManageAssets={() => { setAssetsReturn("settings"); setMode("assets"); }}
+            onDev={() => setMode("dev")}
+            onWipe={async () => { await wipeVault(); await clearReceiveWatch(); setError(""); await refresh(); }}
+          />
+        )}
+        {mode === "assets" && (
+          <ManageAssetsScreen
+            onBack={() => { setMode(assetsReturn); void w.reloadCustom(); }}
+          />
+        )}
+        {mode === "dev" && (
+          <DevScreen
+            w={w}
+            argonMs={getLastArgonMs()}
+            onBack={() => setMode("home")}
+            onSpike={() => setMode("spike")}
+            onDevnet={() => setMode("devnet")}
+            onWipe={async () => { await wipeVault(); await clearReceiveWatch(); setError(""); await refresh(); }}
+          />
+        )}
+        {mode === "receive" && receiveAddrs && (
+          <ReceiveScreen addrs={receiveAddrs} onBack={() => setMode("home")} />
+        )}
+        {mode === "send" && (
+          <SendScreen
+            key={
+              scanPrefill
+                ? `scan:${scanPrefill.to}`
+                : sendInit ? `${sendInit.chainId}:${sendInit.token?.address ?? "native"}` : "default"
+            }
+            w={w}
+            initialChainId={scanPrefill?.chainId ?? sendInit?.chainId}
+            initialToken={sendInit?.token}
+            initialTo={scanPrefill?.to}
+            initialAmount={scanPrefill?.amount}
+            onBack={() => { setSendInit(null); setScanPrefill(null); setMode("home"); }}
+            onSessionExpired={() => { void showRelock(); }}
+          />
+        )}
+        {mode === "scan" && (
+          <View style={{ flex: 1 }}>
+            <ScreenHeader title="Scan" onBack={() => setMode("home")} />
+            <QrScanner
+              title="Scan"
+              hint="Point the camera at a wallet address, payment QR, BPAN or WalletConnect code."
+              onScan={routeScan}
+              onCancel={() => setMode("home")}
+            />
+          </View>
+        )}
+        {mode === "token" && tokenDetail && (
+          <TokenDetailScreen
+            w={w}
+            row={tokenDetail}
+            onBack={() => setMode("home")}
+            onSend={() => {
+              setSendInit({
                 chainId: tokenDetail.chainId,
-                address: tokenDetail.key.split(":")[1],
-                symbol: tokenDetail.symbol,
-                decimals: w.tokensByChain[tokenDetail.chainId]
-                  ?.find((t) => t.address.toLowerCase() === tokenDetail.key.split(":")[1])?.decimals ?? 18,
-                logo: tokenDetail.logo,
-                balanceNum: tokenDetail.balanceNum,
-                priceUsd: tokenDetail.balanceNum > 0 ? tokenDetail.usdValue / tokenDetail.balanceNum : 0,
-              },
-            });
-            setMode("send");
-          }}
-          onSwap={() => {
-            setSwapInit({
-              chainId: tokenDetail.chainId,
-              fromAddr: tokenDetail.isNative ? undefined : tokenDetail.key.split(":")[1],
-            });
-            setMode("swap");
-          }}
-          onReceive={goReceive}
-          onSessionExpired={() => { void showRelock(); }}
-        />
-      )}
-      {mode === "swap" && (
-        <SwapScreen
-          key={swapInit ? `${swapInit.chainId}:${swapInit.fromAddr ?? "native"}` : "default"}
-          w={w}
-          initialChainId={swapInit?.chainId}
-          initialFromAddr={swapInit?.fromAddr}
-          onBack={() => { setSwapInit(null); setMode("home"); }}
-          onSessionExpired={() => { void showRelock(); }}
-        />
-      )}
-      {mode === "defi" && <DeFiScreen onBack={() => setMode("home")} />}
-      {mode === "activity" && (
-        <ActivityScreen owner={w.evmAddress} onBack={() => setMode("home")} />
-      )}
-      {mode === "bpan" && (
-        <BPANScreen
-          w={w}
-          onBack={() => setMode("home")}
-          onSessionExpired={() => { void showRelock(); }}
-        />
-      )}
-      {mode === "dapps" && (
-        <WalletConnectScreen onBack={() => setMode("home")} />
-      )}
-      {mode === "browser" && (
-        <BrowserScreen
-          account={w.evmAddress || null}
-          unlocked={!relocked}
-          onBack={() => setMode("home")}
-          onSessionExpired={() => { void showRelock(); }}
-        />
-      )}
-      {mode === "spike" && <Spike onBack={() => setMode("dev")} />}
-      {mode === "devnet" && <DevnetTx onBack={() => setMode("dev")} />}
+                token: tokenDetail.isNative ? null : {
+                  chainId: tokenDetail.chainId,
+                  address: tokenDetail.key.split(":")[1],
+                  symbol: tokenDetail.symbol,
+                  decimals: w.tokensByChain[tokenDetail.chainId]
+                    ?.find((t) => t.address.toLowerCase() === tokenDetail.key.split(":")[1])?.decimals ?? 18,
+                  logo: tokenDetail.logo,
+                  balanceNum: tokenDetail.balanceNum,
+                  priceUsd: tokenDetail.balanceNum > 0 ? tokenDetail.usdValue / tokenDetail.balanceNum : 0,
+                },
+              });
+              setMode("send");
+            }}
+            onSwap={() => {
+              setSwapInit({
+                chainId: tokenDetail.chainId,
+                fromAddr: tokenDetail.isNative ? undefined : tokenDetail.key.split(":")[1],
+              });
+              setMode("swap");
+            }}
+            onReceive={goReceive}
+            onSessionExpired={() => { void showRelock(); }}
+          />
+        )}
+        {mode === "swap" && (
+          <SwapScreen
+            key={swapInit ? `${swapInit.chainId}:${swapInit.fromAddr ?? "native"}` : "default"}
+            w={w}
+            initialChainId={swapInit?.chainId}
+            initialFromAddr={swapInit?.fromAddr}
+            onBack={() => { setSwapInit(null); setMode("home"); }}
+            onSessionExpired={() => { void showRelock(); }}
+          />
+        )}
+        {mode === "defi" && <DeFiScreen onBack={() => setMode("home")} />}
+        {mode === "activity" && (
+          <ActivityScreen owner={w.evmAddress} onBack={() => setMode("home")} />
+        )}
+        {mode === "bpan" && (
+          <BPANScreen
+            w={w}
+            onBack={() => setMode("home")}
+            onSessionExpired={() => { void showRelock(); }}
+          />
+        )}
+        {mode === "dapps" && (
+          <WalletConnectScreen onBack={() => setMode("home")} />
+        )}
+        {mode === "browser" && (
+          <BrowserScreen
+            account={w.evmAddress || null}
+            unlocked={!relocked}
+            onBack={() => setMode("home")}
+            onSessionExpired={() => { void showRelock(); }}
+          />
+        )}
+        {mode === "spike" && <Spike onBack={() => setMode("dev")} />}
+        {mode === "devnet" && <DevnetTx onBack={() => setMode("dev")} />}
+      </ScreenTransition>
 
-      {/* Floating pill nav (extension Layout parity) on the six main tabs. */}
+      {/* Floating pill nav (extension Layout parity) on the six main tabs.
+          A sibling of the shell, so its own 12dp offsets are measured from the
+          display edge on every tab. Nested, it inherited the shell's padding
+          and drifted: 32dp in from the left on a padded screen against 12dp on
+          the flush dashboard, for the same nav. */}
       {navVisible && !relocked && (
         <BottomNav active={mode as NavTab} onNavigate={navTo} />
       )}
@@ -796,12 +937,12 @@ function AddWalletOverlay(p: { onClose: () => void; onAdded: (id: string) => voi
         ) : (
           <View>
             <View style={st.segRow}>
-              <Pressable style={[st.seg, tab === "create" && st.segOn]} onPress={() => { setTab("create"); setError(""); }}>
+              <Tappable feedback="tile" borderRadius={radius.tile} style={[st.seg, tab === "create" && st.segOn]} onPress={() => { setTab("create"); setError(""); }}>
                 <Text style={[st.segText, tab === "create" && st.segTextOn]}>Create new</Text>
-              </Pressable>
-              <Pressable style={[st.seg, tab === "import" && st.segOn]} onPress={() => { setTab("import"); setError(""); }}>
+              </Tappable>
+              <Tappable feedback="tile" borderRadius={radius.tile} style={[st.seg, tab === "import" && st.segOn]} onPress={() => { setTab("import"); setError(""); }}>
                 <Text style={[st.segText, tab === "import" && st.segTextOn]}>Import</Text>
-              </Pressable>
+              </Tappable>
             </View>
 
             <Field placeholder="Wallet name (optional)" value={name} onChangeText={setName} />
@@ -851,7 +992,6 @@ function Dashboard(p: {
   onActivity: () => void;
   onReceive: () => void;
   onBPAN: () => void;
-  onDapps: () => void;
   onBrowser: () => void;
   onScan: () => void;
   onLock: () => void;
@@ -922,24 +1062,24 @@ function Dashboard(p: {
             {/* Header: account pill (avatar + wallet name -> Settings/accounts)
                 left, scan + dApps + lock right. Scan is mobile-only (camera). */}
             <View style={st.homeHeader}>
-              <Pressable style={st.acctPill} onPress={p.onAccounts}>
+              <Tappable feedback="tile" borderRadius={radius.pill} style={st.acctPill} onPress={p.onAccounts}>
                 <WalletAvatar avatar={p.walletAvatar} name={p.walletName} size={20} />
                 <Text style={st.acctName} numberOfLines={1}>{p.walletName}</Text>
                 <ChevronDownIcon size={11} color={colors.muted} />
-              </Pressable>
+              </Tappable>
               <View style={{ flex: 1 }} />
-              <Pressable onPress={p.onScan} style={st.iconBtn} hitSlop={8} accessibilityLabel="Scan a QR code">
+              <Tappable onPress={p.onScan} feedback="ghost" borderRadius={radius.iconBtn} style={st.iconBtn} hitSlop={8} accessibilityLabel="Scan a QR code">
                 <ScanIcon size={15} color={colors.muted} />
-              </Pressable>
-              <Pressable onPress={p.onBrowser} style={st.iconBtn} hitSlop={8} accessibilityLabel="Open the dApp browser">
+              </Tappable>
+              {/* The browser takes this slot. Connected dApps moved to
+                  Settings: opening a dApp is the frequent action, reviewing
+                  what is already connected is the occasional one. */}
+              <Tappable onPress={p.onBrowser} feedback="ghost" borderRadius={radius.iconBtn} style={st.iconBtn} hitSlop={8} accessibilityLabel="Open the dApp browser">
                 <GlobeIcon size={15} color={colors.muted} />
-              </Pressable>
-              <Pressable onPress={p.onDapps} style={st.iconBtn} hitSlop={8} accessibilityLabel="Connected dApps">
-                <LinkIcon size={15} color={colors.muted} />
-              </Pressable>
-              <Pressable onPress={p.onLock} style={st.iconBtn} hitSlop={8} accessibilityLabel="Lock wallet">
+              </Tappable>
+              <Tappable onPress={p.onLock} feedback="ghost" borderRadius={radius.iconBtn} style={st.iconBtn} hitSlop={8} accessibilityLabel="Lock wallet">
                 <LockIcon size={15} color={colors.muted} />
-              </Pressable>
+              </Tappable>
             </View>
 
             {/* Balance: the ext's centered gradient portfolio number, no card. */}
@@ -952,7 +1092,7 @@ function Dashboard(p: {
 
             {/* Pills: chain filter + the wallet's BPAN (identity rule) */}
             <View style={st.pillRow}>
-              <Pressable style={st.filterPill} onPress={() => setShowNetworks((v) => !v)}>
+              <Tappable feedback="tile" borderRadius={radius.pill} style={st.filterPill} onPress={() => setShowNetworks((v) => !v)}>
                 {filter
                   ? <ChainIcon chainId={filter} size={15} />
                   : <View style={st.allDisc}><Text style={st.allDiscText}>All</Text></View>}
@@ -960,20 +1100,20 @@ function Dashboard(p: {
                 {showNetworks
                   ? <ChevronUpIcon size={10} color={colors.muted} />
                   : <ChevronDownIcon size={10} color={colors.muted} />}
-              </Pressable>
+              </Tappable>
               {w.bpan ? (
-                <Pressable style={st.bpanPill} onPress={() => { void copyBpan(); }}>
+                <Tappable feedback="tile" borderRadius={radius.pill} style={st.bpanPill} onPress={() => { void copyBpan(); }}>
                   <HashIcon size={9} color={colors.brand2} />
                   <Text style={st.bpanPillText}>{formatBPAN(w.bpan)}</Text>
                   {bpanCopied
                     ? <CheckIcon size={10} color={colors.success} />
                     : <CopyIcon size={10} color={colors.brand2} />}
-                </Pressable>
+                </Tappable>
               ) : (
-                <Pressable style={st.getBpanPill} onPress={p.onBPAN}>
+                <Tappable feedback="tile" borderRadius={radius.pill} style={st.getBpanPill} onPress={p.onBPAN}>
                   <HashIcon size={9} color={colors.textSecondary} />
                   <Text style={st.getBpanText}>Get BPAN</Text>
-                </Pressable>
+                </Tappable>
               )}
             </View>
 
@@ -983,16 +1123,16 @@ function Dashboard(p: {
             {showNetworks && (
               <Card style={{ marginBottom: 14, maxHeight: 250 }}>
                 <ScrollView nestedScrollEnabled>
-                  <Pressable
+                  <Tappable
                     style={st.netRow}
                     onPress={() => { setFilter(null); setShowNetworks(false); }}
                   >
                     <View style={st.allDiscLg}><Text style={st.allDiscText}>All</Text></View>
                     <Text style={[st.netName, filter === null && { color: colors.brand2 }]}>All Assets</Text>
                     {filter === null && <CheckIcon size={14} color={colors.brand2} />}
-                  </Pressable>
+                  </Tappable>
                   {w.chainIds.map((id) => (
-                    <Pressable
+                    <Tappable
                       key={id}
                       style={st.netRow}
                       onPress={() => { setFilter(id); setShowNetworks(false); }}
@@ -1002,21 +1142,21 @@ function Dashboard(p: {
                         {chainNameOf(id) ?? id}
                       </Text>
                       {filter === id && <CheckIcon size={14} color={colors.brand2} />}
-                    </Pressable>
+                    </Tappable>
                   ))}
-                  <Pressable
+                  <Tappable
                     style={[st.netRow, { borderBottomWidth: 0 }]}
                     onPress={() => { setShowNetworks(false); p.onManageAssets(); }}
                   >
                     <View style={st.dashedDisc}><PlusIcon size={11} color={colors.brand2} /></View>
                     <Text style={[st.netName, { color: colors.brand2 }]}>Manage Tokens &amp; Networks</Text>
-                  </Pressable>
+                  </Tappable>
                 </ScrollView>
               </Card>
             )}
 
             {/* Primary Send CTA (ext: gradient bar, "Pay anyone, any chain") */}
-            <Pressable onPress={p.onSend} style={({ pressed }) => [pressed && { transform: [{ scale: 0.99 }] }]}>
+            <Tappable onPress={p.onSend} feedback="tile" borderRadius={radius.card} accessibilityLabel="Send">
               <LinearGradient
                 colors={["#b5a8ff", "#7c6df0", "#5b4cdb"]}
                 locations={[0, 0.5, 1]}
@@ -1042,7 +1182,7 @@ function Dashboard(p: {
                 </View>
                 <ChevronRightIcon size={16} color="rgba(255,255,255,0.7)" />
               </LinearGradient>
-            </Pressable>
+            </Tappable>
 
             {/* Secondary row: Receive / Swap / DeFi — same three as the extension.
                 Bridging is not a slot here: it is a cross-chain pair inside Swap. */}
@@ -1052,14 +1192,17 @@ function Dashboard(p: {
                 { label: "Swap", Icon: SwapIcon, onPress: p.onSwap },
                 { label: "DeFi", Icon: TrendingUpIcon, onPress: p.onDeFi },
               ] as const).map(({ label, Icon, onPress }) => (
-                <Pressable
+                <Tappable
                   key={label}
                   onPress={onPress}
-                  style={({ pressed }) => [st.actionCard, pressed && { borderColor: colors.brand }]}
+                  feedback="tile"
+                  borderRadius={radius.tile}
+                  accessibilityLabel={label}
+                  style={st.actionCard}
                 >
                   <Icon size={14} color={colors.muted} />
                   <Text style={st.actionCardLabel}>{label}</Text>
-                </Pressable>
+                </Tappable>
               ))}
             </View>
           </View>
@@ -1071,12 +1214,12 @@ function Dashboard(p: {
           <View style={st.assetsHead}>
             <SectionLabel text="Assets" />
             <View style={{ flexDirection: "row", gap: 2 }}>
-              <Pressable hitSlop={8} onPress={p.onManageAssets} style={st.headBtn} accessibilityLabel="Manage tokens and networks">
+              <Tappable hitSlop={8} onPress={p.onManageAssets} feedback="ghost" borderRadius={radius.iconBtn} style={st.headBtn} accessibilityLabel="Manage tokens and networks">
                 <PlusIcon size={14} color={colors.muted} />
-              </Pressable>
-              <Pressable hitSlop={8} onPress={() => w.refresh(true)} style={st.headBtn} accessibilityLabel="Refresh balances">
+              </Tappable>
+              <Tappable hitSlop={8} onPress={() => w.refresh(true)} feedback="ghost" borderRadius={radius.iconBtn} style={st.headBtn} accessibilityLabel="Refresh balances">
                 <RefreshIcon size={14} color={colors.muted} />
-              </Pressable>
+              </Tappable>
             </View>
           </View>
 
@@ -1111,12 +1254,12 @@ function Dashboard(p: {
           {/* Dust + hidden tokens, behind a disclosure (ext parity). */}
           {dust.length > 0 && (
             <View style={{ marginTop: 16 }}>
-              <Pressable style={st.dustToggle} onPress={() => setShowDust((v) => !v)}>
+              <Tappable style={st.dustToggle} onPress={() => setShowDust((v) => !v)}>
                 {showDust
                   ? <ChevronUpIcon size={12} color={colors.muted} />
                   : <ChevronDownIcon size={12} color={colors.muted} />}
                 <Text style={st.dustToggleText}>Hidden ({dust.length})</Text>
-              </Pressable>
+              </Tappable>
               {showDust && dust.map((r) => (
                 <View key={`dust-${r.key}`} style={{ opacity: 0.55 }}>
                   <AssetRowView
@@ -1421,11 +1564,19 @@ function DevnetTx(p: { onBack: () => void }) {
   );
 }
 
-const st = StyleSheet.create({
-  container: {
+const st = themedStyles((colors) => ({
+  // Owns the background and the ambient wash so both cover the whole display.
+  // Everything positioned against the screen rather than against page content
+  // hangs off this, not off the padded shell inside it.
+  root: {
     flex: 1,
     backgroundColor: colors.bg,
-    paddingTop: 56,
+  },
+  // No backgroundColor: the root's is showing through, and an opaque colour
+  // here would paint over AmbientBackground.
+  container: {
+    flex: 1,
+    paddingTop: TOP_INSET,
     paddingHorizontal: spacing.screen,
   },
   containerFlush: { paddingTop: 0, paddingHorizontal: 0 },
@@ -1476,7 +1627,9 @@ const st = StyleSheet.create({
     backgroundColor: colors.surface3,
     alignItems: "center", justifyContent: "center",
   },
-  allDiscText: { color: colors.muted, fontSize: 7, fontWeight: "700" },
+  // textSecondary, not muted: this label sits on the surface3 disc, where muted
+  // measures 3.73:1 in light, and at 7px it is the smallest type in the app.
+  allDiscText: { color: colors.textSecondary, fontSize: 7, fontWeight: "700" },
   dashedDisc: {
     width: 18, height: 18, borderRadius: 9,
     borderWidth: 1, borderStyle: "dashed", borderColor: "rgba(124, 109, 240, 0.5)",
@@ -1581,11 +1734,14 @@ const st = StyleSheet.create({
   dustToggle: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 },
   dustToggleText: { color: colors.muted, fontSize: ts.small, fontWeight: "500" },
 
+  // Also used by AddWalletOverlay. Mounted as a sibling of the screen shell,
+  // so top: 0 really is the top of the display and the inset below is the only
+  // one applied.
   lockOverlay: {
     position: "absolute",
     top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: colors.bg,
-    paddingTop: 56,
+    paddingTop: TOP_INSET,
     paddingHorizontal: spacing.screen,
     zIndex: 10,
   },
@@ -1597,7 +1753,7 @@ const st = StyleSheet.create({
     paddingVertical: 28, letterSpacing: 0.4,
   },
   mono: { color: colors.textPrimary, fontFamily: "monospace", fontSize: ts.row, marginTop: 2 },
-  ok: { color: colors.success, fontSize: ts.row },
+  ok: { color: colors.successText, fontSize: ts.row },
   err: { color: colors.dangerText, fontSize: ts.body, marginTop: 8, fontWeight: "600" },
   errCentered: { textAlign: "center", marginTop: 0 },
   // Height held whether or not there is an error, so the layout never jumps.
@@ -1619,4 +1775,4 @@ const st = StyleSheet.create({
   rowBetween: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 14,
   },
-});
+}));

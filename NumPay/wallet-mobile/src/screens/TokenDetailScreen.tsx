@@ -23,10 +23,11 @@ import {
 } from "@numpay/core/tokenMarket";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import type { AssetRow, MobileWalletState } from "../wallet/useMobileWallet";
-import { colors, radius, type as ts } from "../ui/theme";
+import { colors, radius, type as ts, themedStyles } from "../ui/theme";
 import { LinearGradient } from "expo-linear-gradient";
 import {
   Notice, Card, EmptyState, GradientNumber, SectionLabel, SkeletonRow,
+  Tappable,
 } from "../ui/components";
 import {
   ActivityIcon, AlertIcon, ArrowLeftIcon, ExternalLinkIcon, ReceiveIcon,
@@ -338,10 +339,10 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
           </View>
           <View style={st.rangeRow}>
             {RANGES.map((r, i) => (
-              <Pressable key={r.label} onPress={() => setRangeIdx(i)}
+              <Tappable feedback="row" key={r.label} onPress={() => setRangeIdx(i)}
                 style={[st.rangeBtn, rangeIdx === i && st.rangeBtnOn]}>
                 <Text style={[st.rangeText, rangeIdx === i && st.rangeTextOn]}>{r.label}</Text>
-              </Pressable>
+              </Tappable>
             ))}
           </View>
         </Card>
@@ -424,22 +425,28 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
               <Text style={st.actionLabel}>{unwrapping ? "Unwrapping…" : "Unwrap to SOL"}</Text>
             </Pressable>
             {unwrapMsg && (
+              // Was four raw rgba values on a green (#22c55e) that is not in the
+              // palette at all, with the message itself painted in the base
+              // success/danger tones. Those are tuned as ICON fills: at
+              // ts.small on this card the success line measured 2.54:1 and the
+              // failure line 3.76:1. The *Text tones exist for exactly this and
+              // clear 5.4:1+ in both themes.
               <View style={[st.resultBox, {
-                borderColor: unwrapMsg.ok ? "rgba(34,197,94,0.35)" : "rgba(239,68,68,0.35)",
-                backgroundColor: unwrapMsg.ok ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+                borderColor: unwrapMsg.ok ? colors.successLine : colors.dangerLine,
+                backgroundColor: unwrapMsg.ok ? colors.successTint : colors.dangerTint,
               }]}>
-                <Text style={{ color: unwrapMsg.ok ? colors.success : colors.danger, fontSize: ts.small, lineHeight: 16 }}>
+                <Text style={{ color: unwrapMsg.ok ? colors.successText : colors.dangerText, fontSize: ts.small, lineHeight: 16 }}>
                   {unwrapMsg.text}
                 </Text>
                 {unwrapMsg.ok && unwrapMsg.sig && (
-                  <Pressable
+                  <Tappable feedback="row"
                     hitSlop={6}
                     onPress={() => { Linking.openURL(explorerTxUrl("solana", unwrapMsg.sig!)).catch(() => {}); }}
                     style={st.resultLink}
                   >
                     <Text style={st.resultLinkText}>View transaction</Text>
                     <ExternalLinkIcon size={10} color={colors.brand2} />
-                  </Pressable>
+                  </Tappable>
                 )}
               </View>
             )}
@@ -481,7 +488,7 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
         {/* Transactions (on-chain merged with the wallet's own log) */}
         <View style={st.txHead}>
           <SectionLabel text="Transactions" />
-          <Pressable
+          <Tappable feedback="row"
             hitSlop={8}
             disabled={txLoading}
             onPress={() => { void loadTxs(); }}
@@ -489,7 +496,7 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
             accessibilityLabel="Refresh transactions"
           >
             <RefreshIcon size={12} color={colors.muted} />
-          </Pressable>
+          </Tappable>
         </View>
         {txLoading && txs.length === 0 && (
           <>
@@ -512,7 +519,7 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   header: { flexDirection: "row", alignItems: "center", gap: 10, height: 50, marginBottom: 6 },
   headerBtn: {
     width: 32, height: 32, borderRadius: radius.button,
@@ -528,7 +535,9 @@ const st = StyleSheet.create({
     flexDirection: "row", gap: 10,
     paddingHorizontal: 12, paddingVertical: 10,
     borderRadius: radius.tile, marginBottom: 12,
-    borderWidth: 1, borderColor: "rgba(245,158,11,0.4)",
+    // Same half-converted panel as DappApprovalSheet's risk row: the fill and
+    // the title were retoned, the border was left as raw #f59e0b at 0.4.
+    borderWidth: 1, borderColor: colors.cautionLine,
     backgroundColor: colors.cautionTint,
   },
   riskTitle: { color: colors.caution, fontSize: 12, fontWeight: "600" },
@@ -597,4 +606,4 @@ const st = StyleSheet.create({
     marginTop: 20, marginBottom: 2,
   },
   txRefreshBtn: { padding: 6, borderRadius: radius.iconBtn },
-});
+}));

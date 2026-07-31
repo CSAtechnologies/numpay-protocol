@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Animated, Easing, Pressable, StyleSheet, Text, View } from "react-native";
-import { colors, radius, spacing } from "./theme";
+import { colors, radius, spacing, themedStyles } from "./theme";
 import { noticeTone, type NoticeToneInput } from "./notice";
 import { AlertIcon, CheckIcon, XIcon } from "./icons";
 
@@ -124,7 +124,7 @@ export function ToastHost() {
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   host: {
     position: "absolute",
     // Clears the status bar without a safe-area library, matching the fixed
@@ -158,4 +158,4 @@ const st = StyleSheet.create({
   title: { fontSize: 13, fontWeight: "700" },
   body: { color: colors.textSecondary, fontSize: 11.5, lineHeight: 16, marginTop: 1 },
   dismiss: { paddingLeft: 2, paddingRight: 2 },
-});
+}));

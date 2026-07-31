@@ -11,8 +11,8 @@ import * as Clipboard from "expo-clipboard";
 import { LinearGradient } from "expo-linear-gradient";
 import { NETWORKS } from "@numpay/core/networks";
 import type { NonEvmAddressMap } from "@numpay/core/chains";
-import { colors, gradients, radius, type as ts } from "../ui/theme";
-import { Btn, Card, Field, ScreenHeader } from "../ui/components";
+import { colors, gradients, radius, type as ts, themedStyles } from "../ui/theme";
+import { Btn, Card, Field, ScreenHeader, Tappable } from "../ui/components";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon } from "../ui/icons";
 import { NumPayMark } from "../ui/NumPayLogo";
 import { ChainIcon } from "../ui/coins";
@@ -126,7 +126,7 @@ export function ReceiveScreen({ addrs, onBack }: { addrs: ReceiveAddrs; onBack: 
         </Text>
 
         {/* Chain dropdown (extension parity) */}
-        <Pressable onPress={() => { setOpen((v) => !v); setSearch(""); }}>
+        <Tappable feedback="ghost" onPress={() => { setOpen((v) => !v); setSearch(""); }}>
           <Card style={st.selector}>
             <ChainIcon chainId={sel.id} size={22} />
             <Text style={st.selectorText}>{sel.name}</Text>
@@ -134,7 +134,7 @@ export function ReceiveScreen({ addrs, onBack }: { addrs: ReceiveAddrs; onBack: 
               ? <ChevronUpIcon size={14} color={colors.muted} />
               : <ChevronDownIcon size={14} color={colors.muted} />}
           </Card>
-        </Pressable>
+        </Tappable>
         {open && (
           <Card style={{ marginTop: 6, maxHeight: 340 }}>
             <View style={{ paddingHorizontal: 10, paddingBottom: 6 }}>
@@ -146,7 +146,7 @@ export function ReceiveScreen({ addrs, onBack }: { addrs: ReceiveAddrs; onBack: 
                 const disabled = !c.isEVM && !addrs.nonEvm;
                 const active = c.id === selId;
                 return (
-                  <Pressable
+                  <Tappable feedback="row"
                     key={c.id}
                     disabled={disabled}
                     onPress={() => { setSelId(c.id); setOpen(false); setCopied(false); }}
@@ -158,7 +158,7 @@ export function ReceiveScreen({ addrs, onBack }: { addrs: ReceiveAddrs; onBack: 
                     </Text>
                     {active && <CheckIcon size={14} color={colors.brand2} />}
                     {disabled && <Text style={st.chainRowNote}>No mnemonic</Text>}
-                  </Pressable>
+                  </Tappable>
                 );
               })}
             </ScrollView>
@@ -184,8 +184,8 @@ export function ReceiveScreen({ addrs, onBack }: { addrs: ReceiveAddrs; onBack: 
         >
           {copied ? (
             <View style={[st.copyFill, st.copyFillDone]}>
-              <CheckIcon size={16} color={colors.success} />
-              <Text style={[st.copyText, { color: colors.success }]}>Copied!</Text>
+              <CheckIcon size={16} color={colors.successText} />
+              <Text style={[st.copyText, { color: colors.successText }]}>Copied!</Text>
             </View>
           ) : (
             <LinearGradient
@@ -212,7 +212,7 @@ export function ReceiveScreen({ addrs, onBack }: { addrs: ReceiveAddrs; onBack: 
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   subLine: { color: colors.muted, fontSize: ts.row, textAlign: "center", marginBottom: 12 },
 
   selector: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
@@ -264,4 +264,4 @@ const st = StyleSheet.create({
     textAlign: "center",
     lineHeight: 18,
   },
-});
+}));

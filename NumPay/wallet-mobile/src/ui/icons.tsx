@@ -3,6 +3,7 @@
 // same iconography. Only the icons mobile actually uses are ported; add more
 // from the extension file as screens need them — never invent new art.
 import Svg, { Line, Path, Rect, Polyline, Circle } from "react-native-svg";
+import { colors } from "./theme";
 
 interface IconProps {
   size?: number;
@@ -289,6 +290,14 @@ export function SunIcon({ size = 20, color = "#fff" }: IconProps) {
 // The mark on the dashboard's swipe-to-hide action. Ported from the inline SVG
 // in the extension's SwipeRow, stroke 2 like the original (not the 1.8 body
 // weight) so it stays legible on the red action panel.
+export function MoonIcon({ size = 20, color = "#fff" }: IconProps) {
+  return (
+    <Svg {...frame(size)} stroke={color}>
+      <Path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+    </Svg>
+  );
+}
+
 export function EyeOffIcon({ size = 20, color = "#fff" }: IconProps) {
   return (
     <Svg {...frameW(size, 2)} stroke={color}>
@@ -310,12 +319,22 @@ export function SettingsIcon({ size = 20, color = "#fff" }: IconProps) {
 }
 
 // ── Transaction-kind glyphs (TxRow corner badge) ─────────────────────────────
-// White strokes on the kind-coloured disc, ported from the extension TxRow's
-// inline <KindGlyph>: stroke 3 so a 9px glyph still reads.
+// Ported from the extension TxRow's inline <KindGlyph>: stroke 3 so a 9px glyph
+// still reads.
+//
+// The strokes were white there, which is safe on that product's saturated
+// dark-theme discs and not much else. On the receive badge's green fill white
+// measures 2.54:1 in light and 1.92:1 in dark, so the arrow all but vanished
+// into the disc. `onAccent` is the palette's ink for exactly this surface; see
+// the token's own note for the full table.
+//
+// The default is a live palette read, which is correct BECAUSE it is a default
+// parameter: those evaluate per call, i.e. at render, so it tracks a theme
+// switch. Hoisting it to a module constant would freeze it at light.
 
 export type TxKindName = "send" | "receive" | "swap" | "bridge";
 
-export function TxKindGlyph({ kind, size = 9, color = "#fff" }: {
+export function TxKindGlyph({ kind, size = 9, color = colors.onAccent }: {
   kind: TxKindName; size?: number; color?: string;
 }) {
   const p = { ...frameW(size, 3), stroke: color };

@@ -17,8 +17,8 @@ import {
 import {
   detectEvmToken, detectSolanaToken, detectErrorMessage, type TokenPreview,
 } from "../wallet/tokenDetect";
-import { colors, radius, type as ts } from "../ui/theme";
-import { Notice, Btn, Card, Field, ScreenHeader } from "../ui/components";
+import { colors, radius, type as ts, themedStyles } from "../ui/theme";
+import { Notice, Btn, Card, Field, ScreenHeader, Tappable } from "../ui/components";
 import { XIcon } from "../ui/icons";
 import { ChainIcon, TokenIcon } from "../ui/coins";
 
@@ -226,10 +226,10 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
           the active tab is brand-coloured text over a 2px brand rule. */}
       <View style={st.tabs}>
         {TABS.map((t) => (
-          <Pressable key={t.id} onPress={() => setTab(t.id)} style={st.tab}>
+          <Tappable feedback="tile" key={t.id} onPress={() => setTab(t.id)} style={st.tab}>
             <Text style={[st.tabText, tab === t.id && st.tabTextOn]}>{t.label}</Text>
             {tab === t.id && <View style={st.tabUnderline} />}
-          </Pressable>
+          </Tappable>
         ))}
       </View>
 
@@ -246,7 +246,7 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
               <ScrollView style={{ maxHeight: 118 }} nestedScrollEnabled>
                 <View style={st.chainWrap}>
                   {chainOptions.map((c) => (
-                    <Pressable
+                    <Tappable feedback="row"
                       key={c.id}
                       onPress={() => { setChain(c.id); setPreview(null); setDetectErr(""); }}
                       style={[st.chainChip, chain === c.id && st.chainChipOn]}
@@ -258,7 +258,7 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
                       >
                         {c.name}
                       </Text>
-                    </Pressable>
+                    </Tappable>
                   ))}
                 </View>
               </ScrollView>
@@ -279,13 +279,13 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
                   style={{ fontFamily: "monospace", fontSize: 12 }}
                 />
               </View>
-              <Pressable
+              <Tappable feedback="row"
                 disabled={detecting || !tokenAddr.trim()}
                 onPress={() => { void handleDetect(); }}
                 style={[st.detectBtn, (detecting || !tokenAddr.trim()) && { opacity: 0.4 }]}
               >
                 <Text style={st.detectText}>{detecting ? "Detecting" : "Detect"}</Text>
-              </Pressable>
+              </Tappable>
             </View>
             {!!detectErr && <Text style={st.errText}>{detectErr}</Text>}
 
@@ -367,13 +367,13 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
                   keyboardType="url"
                 />
               </View>
-              <Pressable
+              <Tappable feedback="row"
                 disabled={netDetecting || !netRpc.trim()}
                 onPress={() => { void handleDetectChain(); }}
                 style={[st.detectBtn, (netDetecting || !netRpc.trim()) && { opacity: 0.4 }]}
               >
                 <Text style={st.detectText}>{netDetecting ? "Detecting" : "Detect"}</Text>
-              </Pressable>
+              </Tappable>
             </View>
             {!!netDetectErr && <Text style={st.errText}>{netDetectErr}</Text>}
             {netChainId != null && (
@@ -450,7 +450,7 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   tabs: {
     flexDirection: "row", marginBottom: 14,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.divider,
@@ -476,7 +476,7 @@ const st = StyleSheet.create({
     color: colors.muted, fontSize: ts.label, fontWeight: "600",
     letterSpacing: 1, textTransform: "uppercase", marginTop: 14,
   },
-  errText: { color: colors.danger, fontSize: ts.small, marginTop: 8 },
+  errText: { color: colors.dangerText, fontSize: ts.small, marginTop: 8 },
   emptyText: { color: colors.muted, fontSize: ts.small, textAlign: "center", paddingVertical: 20 },
 
   chainCard: { padding: 12, marginTop: 4 },
@@ -515,5 +515,5 @@ const st = StyleSheet.create({
     borderWidth: 1, borderColor: colors.successTint,
   },
   greenDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.success },
-  chainIdText: { color: colors.success, fontSize: ts.small, fontWeight: "600" },
-});
+  chainIdText: { color: colors.successText, fontSize: ts.small, fontWeight: "600" },
+}));

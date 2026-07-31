@@ -10,14 +10,16 @@ import {
   type WalletMeta,
 } from "../vault/mobileVault";
 import { CURRENCIES } from "@numpay/core/currency";
-import { colors, type as ts } from "../ui/theme";
-import { Notice, Btn, Card, Field, ScreenHeader, SectionLabel } from "../ui/components";
+import {
+  colors, type as ts, themedStyles, useThemeState, type ThemePref,
+} from "../ui/theme";
+import { Notice, Btn, Card, Field, ScreenHeader, SectionLabel, Tappable } from "../ui/components";
 import { ConfirmSheet } from "../ui/Sheet";
 import { SeedPhraseGrid } from "../ui/SeedPhrase";
 import { toast } from "../ui/Toast";
 import {
   CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, CopyIcon, GlobeIcon,
-  LayersIcon, LinkIcon, LockIcon, ShieldIcon, SunIcon,
+  LayersIcon, LinkIcon, LockIcon, MoonIcon, SettingsIcon, ShieldIcon, SunIcon,
 } from "../ui/icons";
 import { WalletAvatar, EmojiPicker } from "../ui/WalletAvatar";
 import { RevealGate } from "../ui/RevealGate";
@@ -25,6 +27,33 @@ import { useCurrencyPref } from "../ui/currency";
 
 /** How long a revealed recovery phrase stays on screen (extension: 30 s). */
 const REVEAL_AUTO_HIDE_MS = 30_000;
+
+// ── Theme picker ─────────────────────────────────────────────────────────────
+// "System" first: it is the default and the one most people want, and putting
+// the two manual overrides under it reads as "or pin it".
+const THEME_OPTIONS: ReadonlyArray<{
+  pref: ThemePref;
+  Icon: typeof SunIcon;
+  tint: "amber" | "brand";
+}> = [
+  // No device glyph exists in the ported icon set and this file does not invent
+  // art, so System borrows the gear: "whatever your phone settings say".
+  { pref: "system", Icon: SettingsIcon, tint: "brand" },
+  { pref: "light", Icon: SunIcon, tint: "amber" },
+  { pref: "dark", Icon: MoonIcon, tint: "brand" },
+];
+
+const THEME_LABEL: Record<ThemePref, string> = {
+  system: "System",
+  light: "Light",
+  dark: "Dark",
+};
+
+const THEME_HINT: Record<ThemePref, string> = {
+  system: "Follows your phone's light or dark setting",
+  light: "Always light, whatever the phone does",
+  dark: "Always dark, whatever the phone does",
+};
 
 function shortAddr(a?: string): string {
   return a && a.length >= 10 ? `${a.slice(0, 6)}…${a.slice(-4)}` : (a ?? "");
@@ -77,7 +106,7 @@ function Row({ label, hint, onPress, danger, right, icon }: {
     >
       {icon && <View style={st.rowIcon}>{icon}</View>}
       <View style={{ flex: 1 }}>
-        <Text style={[st.rowLabel, danger && { color: colors.danger }]}>{label}</Text>
+        <Text style={[st.rowLabel, danger && { color: colors.dangerText }]}>{label}</Text>
         {!!hint && <Text style={st.rowHint}>{hint}</Text>}
       </View>
       {!!right && <Text style={st.rowRight}>{right}</Text>}
@@ -111,6 +140,8 @@ export function SettingsScreen({
   /** Seconds left before a revealed phrase hides itself. */
   const [revealLeft, setRevealLeft] = useState(0);
   const cur = useCurrencyPref();
+  const theme = useThemeState();
+  const [showTheme, setShowTheme] = useState(false);
   const [showCurrency, setShowCurrency] = useState(false);
   const [currencySearch, setCurrencySearch] = useState("");
   const filteredCurrencies = CURRENCIES.filter((c) => {
@@ -189,31 +220,31 @@ export function SettingsScreen({
               ) : (
                 <>
                   {/* Avatar — tap to pick an emoji (extension parity) */}
-                  <Pressable hitSlop={6} onPress={() => setEmojiTargetId(m.id)} style={{ marginRight: 10 }}>
+                  <Tappable feedback="ghost" hitSlop={6} onPress={() => setEmojiTargetId(m.id)} style={{ marginRight: 10 }}>
                     <WalletAvatar avatar={m.avatar} name={m.name} size={34} active={m.active} />
-                  </Pressable>
-                  <Pressable style={st.walletMain} onPress={() => onSwitchWallet(m.id)}>
+                  </Tappable>
+                  <Tappable feedback="row" style={st.walletMain} onPress={() => onSwitchWallet(m.id)}>
                     <View style={{ flex: 1 }}>
                       <Text style={st.rowLabel}>{m.name}</Text>
                       <Text style={st.rowHint} numberOfLines={1}>{shortAddr(m.evmAddress)}</Text>
                     </View>
-                  </Pressable>
+                  </Tappable>
                   <View style={{ alignItems: "flex-end" }}>
                     {m.active ? (
                       <Text style={[st.walletActionText, { color: colors.muted }]}>Active</Text>
                     ) : (
-                      <Pressable hitSlop={8} onPress={() => onSwitchWallet(m.id)}>
+                      <Tappable feedback="ghost" hitSlop={8} onPress={() => onSwitchWallet(m.id)}>
                         <Text style={st.walletActionText}>Switch</Text>
-                      </Pressable>
+                      </Tappable>
                     )}
                     <View style={{ flexDirection: "row", gap: 10, marginTop: 4 }}>
-                      <Pressable hitSlop={6} onPress={() => { setRenaming(m.id); setRenameVal(m.name); }}>
+                      <Tappable feedback="ghost" hitSlop={6} onPress={() => { setRenaming(m.id); setRenameVal(m.name); }}>
                         <Text style={st.walletSubAction}>Rename</Text>
-                      </Pressable>
+                      </Tappable>
                       {wallets.length > 1 && (
-                        <Pressable hitSlop={6} onPress={() => doRemove(m)}>
-                          <Text style={[st.walletSubAction, { color: colors.danger }]}>Remove</Text>
-                        </Pressable>
+                        <Tappable feedback="ghost" hitSlop={6} onPress={() => doRemove(m)}>
+                          <Text style={[st.walletSubAction, { color: colors.dangerText }]}>Remove</Text>
+                        </Tappable>
                       )}
                     </View>
                   </View>
@@ -339,13 +370,57 @@ export function SettingsScreen({
               : <ChevronDownIcon size={14} color={colors.muted2} />}
           </Pressable>
           <View style={st.hairline} />
-          <Row
-            label="Theme"
-            hint="Dark theme coming soon"
-            icon={<SunIcon size={15} color={colors.amber} />}
-            right="Light"
-          />
+          {/* Theme. Same disclosure shape as the currency row above: the picker
+              opens as its own card rather than a sheet, so the choice and the
+              screen it repaints are visible at the same time. */}
+          <Pressable
+            onPress={() => setShowTheme((v) => !v)}
+            style={({ pressed }) => [st.row, pressed && { opacity: 0.7 }]}
+          >
+            <View style={st.rowIcon}>
+              {theme.theme === "dark"
+                ? <MoonIcon size={15} color={colors.brand2} />
+                : <SunIcon size={15} color={colors.amber} />}
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={st.rowLabel}>Theme</Text>
+              <Text style={st.rowHint}>{THEME_HINT[theme.pref]}</Text>
+            </View>
+            <Text style={st.rowRight}>{THEME_LABEL[theme.pref]}</Text>
+            {showTheme
+              ? <ChevronUpIcon size={14} color={colors.muted2} />
+              : <ChevronDownIcon size={14} color={colors.muted2} />}
+          </Pressable>
         </Card>
+        {showTheme && (
+          <Card style={{ marginTop: 8 }}>
+            {THEME_OPTIONS.map(({ pref, Icon, tint }, i) => {
+              const on = theme.pref === pref;
+              return (
+                <Pressable
+                  key={pref}
+                  style={({ pressed }) => [
+                    st.row, i > 0 && st.themeRowDivider, pressed && { opacity: 0.7 },
+                  ]}
+                  onPress={() => { theme.setPref(pref); setShowTheme(false); }}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: on }}
+                >
+                  <View style={st.rowIcon}>
+                    <Icon size={15} color={tint === "amber" ? colors.amber : colors.brand2} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[st.rowLabel, on && { color: colors.brand2 }]}>
+                      {THEME_LABEL[pref]}
+                    </Text>
+                    <Text style={st.rowHint}>{THEME_HINT[pref]}</Text>
+                  </View>
+                  {on && <CheckIcon size={14} color={colors.brand2} />}
+                </Pressable>
+              );
+            })}
+          </Card>
+        )}
         {showCurrency && (
           <Card style={{ marginTop: 8, maxHeight: 320 }}>
             <View style={{ padding: 10 }}>
@@ -355,7 +430,7 @@ export function SettingsScreen({
               {filteredCurrencies.map((c) => {
                 const active = cur.code === c.code;
                 return (
-                  <Pressable
+                  <Tappable feedback="row"
                     key={c.code}
                     style={st.curRow}
                     onPress={() => { cur.setCode(c.code); setShowCurrency(false); }}
@@ -366,7 +441,7 @@ export function SettingsScreen({
                     </Text>
                     <Text style={st.curCode}>{c.code.toUpperCase()}</Text>
                     {active && <CheckIcon size={14} color={colors.brand2} />}
-                  </Pressable>
+                  </Tappable>
                 );
               })}
               {filteredCurrencies.length === 0 && (
@@ -393,7 +468,7 @@ export function SettingsScreen({
           />
         </Card>
 
-        <Pressable
+        <Tappable feedback="ghost"
           onPress={() => {
             // 5 taps on the version footer opens the hidden developer screen.
             (SettingsScreen as unknown as { _t?: number })._t =
@@ -404,8 +479,11 @@ export function SettingsScreen({
             }
           }}
         >
-          <Text style={st.version}>NumPay · v0.1.0</Text>
-        </Pressable>
+          {/* Keep in step with app.json `version`. A footer that disagrees with
+              the installed build makes "which version are you on?" unanswerable
+              during support. */}
+          <Text style={st.version}>NumPay · v1.02</Text>
+        </Tappable>
         <View style={{ height: 20 }} />
       </ScrollView>
 
@@ -459,7 +537,7 @@ export function SettingsScreen({
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   row: {
     flexDirection: "row",
     alignItems: "center",
@@ -474,6 +552,12 @@ const st = StyleSheet.create({
     height: StyleSheet.hairlineWidth,
     backgroundColor: colors.divider,
     marginHorizontal: 14,
+  },
+  /** Between theme options. A border on the row rather than a separate hairline
+   *  view, so the whole row stays one press target. */
+  themeRowDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.divider,
   },
 
   walletRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 12 },
@@ -516,4 +600,4 @@ const st = StyleSheet.create({
     color: colors.muted2, fontSize: ts.label, textAlign: "center",
     paddingVertical: 24, letterSpacing: 0.4,
   },
-});
+}));

@@ -25,8 +25,8 @@ import {
   RPC_ERR, revoke, rpcServesChain, resolveInternalChainId, getPermission,
 } from "@numpay/core/dapp";
 import { saveCustomChain } from "@numpay/core/customChains";
-import { colors, radius, spacing, type as ts } from "../ui/theme";
-import { Card, EmptyState, Notice, SectionLabel } from "../ui/components";
+import { BOTTOM_INSET, colors, radius, spacing, TOP_INSET, type as ts, themedStyles } from "../ui/theme";
+import { Card, EmptyState, Notice, SectionLabel, Tappable } from "../ui/components";
 import {
   ArrowLeftIcon, ChevronRightIcon, GlobeIcon, LockIcon, RefreshIcon, XIcon,
 } from "../ui/icons";
@@ -384,9 +384,9 @@ export function BrowserScreen({
           https by construction, and showing the host the WALLET resolved (not
           the one the page claims) is the anti-phishing anchor. */}
       <View style={st.bar}>
-        <Pressable onPress={onBack} hitSlop={8} style={st.barBtn} accessibilityLabel="Leave the browser">
+        <Tappable feedback="tile" onPress={onBack} hitSlop={8} style={st.barBtn} accessibilityLabel="Leave the browser">
           <ArrowLeftIcon size={16} color={colors.muted} />
-        </Pressable>
+        </Tappable>
         <View style={st.urlBox}>
           <LockIcon size={11} color={origin ? colors.success : colors.muted} />
           <TextInput
@@ -395,7 +395,11 @@ export function BrowserScreen({
             onChangeText={setInput}
             onSubmitEditing={() => go(input)}
             placeholder="Search or enter a dApp address"
-            placeholderTextColor={colors.muted}
+            // textSecondary, not the usual muted: this input sits on the
+            // surface2 address bar rather than a card, and muted measures
+            // 4.18:1 there in light. The shared Input keeps muted, which is
+            // safe on the card/page backdrops it actually uses.
+            placeholderTextColor={colors.textSecondary}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
@@ -403,9 +407,9 @@ export function BrowserScreen({
             selectTextOnFocus
           />
           {!!url && (
-            <Pressable onPress={() => webRef.current?.reload()} hitSlop={8} accessibilityLabel="Reload">
+            <Tappable feedback="ghost" onPress={() => webRef.current?.reload()} hitSlop={8} accessibilityLabel="Reload">
               <RefreshIcon size={13} color={colors.muted} />
-            </Pressable>
+            </Tappable>
           )}
         </View>
       </View>
@@ -567,9 +571,9 @@ function ConnectionBar({ origin, chainName, account, onDisconnect }: {
             : "No site loaded"}
       </Text>
       {!!account && (
-        <Pressable onPress={onDisconnect} hitSlop={8} accessibilityLabel="Disconnect this site">
+        <Tappable feedback="ghost" onPress={onDisconnect} hitSlop={8} accessibilityLabel="Disconnect this site">
           <XIcon size={13} color={colors.muted} />
-        </Pressable>
+        </Tappable>
       )}
     </View>
   );
@@ -613,16 +617,16 @@ function StartPage({ recents, onOpen, onForget }: {
           />
         ) : (
           recents.map((r) => (
-            <Pressable key={r.origin} onPress={() => onOpen(r.origin)} style={st.recentRow}>
+            <Tappable feedback="row" key={r.origin} onPress={() => onOpen(r.origin)} style={st.recentRow}>
               <View style={{ flex: 1 }}>
                 <Text style={st.recentHost} numberOfLines={1}>{displayHost(r.origin)}</Text>
                 {!!r.title && <Text style={st.recentTitle} numberOfLines={1}>{r.title}</Text>}
               </View>
-              <Pressable onPress={() => onForget(r.origin)} hitSlop={10} accessibilityLabel={`Forget ${displayHost(r.origin)}`}>
+              <Tappable feedback="ghost" onPress={() => onForget(r.origin)} hitSlop={10} accessibilityLabel={`Forget ${displayHost(r.origin)}`}>
                 <XIcon size={12} color={colors.muted} />
-              </Pressable>
+              </Tappable>
               <ChevronRightIcon size={14} color={colors.muted} />
-            </Pressable>
+            </Tappable>
           ))
         )}
       </View>
@@ -630,12 +634,15 @@ function StartPage({ recents, onOpen, onForget }: {
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   wrap: { flex: 1, backgroundColor: colors.bg },
 
+  // This screen is flush in App's shell (see `flush` there) so the WebView gets
+  // the full display width. The chrome around it therefore carries the gutter
+  // and the status-bar inset itself.
   bar: {
     flexDirection: "row", alignItems: "center", gap: 8,
-    paddingHorizontal: spacing.screen, paddingTop: 8, paddingBottom: 8,
+    paddingHorizontal: spacing.screen, paddingTop: TOP_INSET + 8, paddingBottom: 8,
   },
   barBtn: { padding: 4 },
   urlBox: {
@@ -648,11 +655,15 @@ const st = StyleSheet.create({
   urlInput: { flex: 1, color: colors.textPrimary, fontSize: ts.small, padding: 0 },
 
   web: { flex: 1, backgroundColor: colors.bg },
-  spinner: { position: "absolute", top: 52, alignSelf: "center", zIndex: 2 },
+  // Just below the address bar, which now carries the status-bar inset itself.
+  spinner: { position: "absolute", top: TOP_INSET + 52, alignSelf: "center", zIndex: 2 },
 
+  // Pinned to the bottom of a flush screen, so it clears the gesture bar on its
+  // own; without that its text and disconnect button sit behind the system bar.
   connBar: {
     flexDirection: "row", alignItems: "center", gap: 8,
-    paddingHorizontal: spacing.screen, paddingVertical: 9,
+    paddingHorizontal: spacing.screen,
+    paddingTop: 9, paddingBottom: 9 + BOTTOM_INSET,
     borderTopWidth: 1, borderTopColor: colors.border,
     backgroundColor: colors.surface2,
   },
@@ -675,4 +686,4 @@ const st = StyleSheet.create({
   },
   recentHost: { color: colors.textPrimary, fontSize: ts.body },
   recentTitle: { color: colors.muted, fontSize: ts.small, marginTop: 2 },
-});
+}));

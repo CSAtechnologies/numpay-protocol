@@ -3,7 +3,7 @@
 // one it falls back to a brand-tinted tile with the name's initial. The picker
 // is the same 30-emoji pack the extension offers.
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { colors, radius, type as ts } from "./theme";
+import { colors, radius, type as ts, themedStyles } from "./theme";
 
 export const PRESET_EMOJIS = [
   "💎", "🦊", "🐉", "🦁", "🌙", "⚡",
@@ -29,6 +29,14 @@ export function WalletAvatar({
     );
   }
   // Initial fallback: brand tile when active, muted when not.
+  //
+  // The initial used to be white on BOTH tiles. That works on the brand fill,
+  // but the inactive tile is `surface4`, which is a pale lilac in light theme
+  // (#d2c9ff) — white on it measures 1.55:1, so every non-active wallet in the
+  // account switcher showed an initial that was very nearly invisible. Another
+  // value that was safe while the product was dark-only (dark surface4 is
+  // #2a2450) and broke when light became the default. The label now follows its
+  // own tile: white on brand, body text on the muted one.
   return (
     <View
       style={{
@@ -37,7 +45,13 @@ export function WalletAvatar({
         backgroundColor: active ? colors.brand : colors.surface4,
       }}
     >
-      <Text style={{ color: "#fff", fontWeight: "700", fontSize: size * 0.42 }}>
+      <Text
+        style={{
+          color: active ? colors.onBrand : colors.textSecondary,
+          fontWeight: "700",
+          fontSize: size * 0.42,
+        }}
+      >
         {(name || "?").charAt(0).toUpperCase()}
       </Text>
     </View>
@@ -83,7 +97,7 @@ export function EmojiPicker({
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   sheet: {
     backgroundColor: colors.card,
     borderWidth: 1, borderColor: colors.border,
@@ -108,4 +122,4 @@ const st = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
   },
   closeText: { color: colors.textPrimary, fontSize: ts.body, fontWeight: "500" },
-});
+}));

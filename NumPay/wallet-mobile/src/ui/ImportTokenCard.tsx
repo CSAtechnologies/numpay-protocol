@@ -7,10 +7,10 @@
 // from a pasted string gives the user nothing to check the address against;
 // showing symbol, name, decimals and the holding first lets them notice they
 // pasted the wrong contract before it is saved.
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
-import { colors, radius, type as ts } from "./theme";
+import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { colors, radius, type as ts, themedStyles } from "./theme";
 import { AssetIcon, ChainBadge } from "./coins";
-import { Card } from "./components";
+import { Card, Tappable } from "./components";
 
 export interface ImportPreview {
   symbol: string;
@@ -87,12 +87,12 @@ export function ImportTokenCard({
         </View>
         <Text style={st.addr} numberOfLines={2}>{token.address}</Text>
         <View style={st.btnRow}>
-          <Pressable onPress={onCancel} style={[st.btn, st.btnGhost]}>
+          <Tappable feedback="row" onPress={onCancel} style={[st.btn, st.btnGhost]}>
             <Text style={st.btnGhostText}>Cancel</Text>
-          </Pressable>
-          <Pressable onPress={onAdd} style={[st.btn, st.btnBrand]}>
+          </Tappable>
+          <Tappable feedback="row" onPress={onAdd} style={[st.btn, st.btnBrand]}>
             <Text style={st.btnBrandText}>Add token</Text>
-          </Pressable>
+          </Tappable>
         </View>
       </Card>
     );
@@ -106,27 +106,27 @@ export function ImportTokenCard({
       </Text>
       <Text style={st.addr} numberOfLines={2}>{address}</Text>
       {!!error && <Text style={st.err}>{error}</Text>}
-      <Pressable onPress={onFetch} style={[st.btn, st.btnBrand, { marginTop: 4 }]}>
+      <Tappable feedback="row" onPress={onFetch} style={[st.btn, st.btnBrand, { marginTop: 4 }]}>
         <Text style={st.btnBrandText}>Look up token</Text>
-      </Pressable>
+      </Tappable>
     </Card>
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   card: { padding: 14, marginBottom: 12 },
   loadingRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   previewHead: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
   sym: { color: colors.textPrimary, fontSize: ts.body, fontWeight: "700" },
   sub: { color: colors.muted, fontSize: ts.small },
-  balance: { color: colors.success, fontSize: ts.small, fontWeight: "600", marginTop: 2 },
+  balance: { color: colors.successText, fontSize: ts.small, fontWeight: "600", marginTop: 2 },
   hint: { color: colors.textSecondary, fontSize: ts.small, lineHeight: 17 },
   strong: { color: colors.textPrimary, fontWeight: "700" },
   addr: {
     color: colors.muted, fontSize: 10.5, fontFamily: "monospace",
     marginTop: 8, marginBottom: 10,
   },
-  err: { color: colors.danger, fontSize: ts.small, marginBottom: 8 },
+  err: { color: colors.dangerText, fontSize: ts.small, marginBottom: 8 },
   btnRow: { flexDirection: "row", gap: 8 },
   btn: {
     flex: 1, paddingVertical: 10, borderRadius: radius.button,
@@ -136,4 +136,4 @@ const st = StyleSheet.create({
   btnBrandText: { color: colors.onBrand, fontSize: ts.small, fontWeight: "700" },
   btnGhost: { backgroundColor: colors.surface3 },
   btnGhostText: { color: colors.textSecondary, fontSize: ts.small, fontWeight: "700" },
-});
+}));

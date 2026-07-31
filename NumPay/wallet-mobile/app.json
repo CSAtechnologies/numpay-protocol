@@ -2,11 +2,11 @@
   "expo": {
     "name": "NumPay",
     "slug": "wallet-mobile",
-    "version": "1.0.0",
+    "version": "1.02",
     "scheme": "numpay",
     "orientation": "portrait",
     "icon": "./assets/numpay-icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true
     },
@@ -18,7 +18,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.anonymous.walletmobile",
-      "versionCode": 2,
+      "versionCode": 4,
       "intentFilters": [
         {
           "action": "VIEW",
@@ -49,7 +49,12 @@
         {
           "backgroundColor": "#faf9ff",
           "image": "./assets/numpay-mark.png",
-          "imageWidth": 150
+          "imageWidth": 150,
+          "dark": {
+            "backgroundColor": "#0a0912",
+            "image": "./assets/numpay-mark.png",
+            "imageWidth": 150
+          }
         }
       ],
       "./plugins/withAndroidRelease"

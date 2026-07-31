@@ -4,9 +4,10 @@
 // error shudder after a wrong PIN. Purely presentational — the caller owns the
 // PIN string lifecycle and never sees it persisted.
 import { useEffect, useRef, useState } from "react";
-import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
+import { Animated, Text, View } from "react-native";
 import Svg, { Path } from "react-native-svg";
-import { colors } from "./theme";
+import { Tappable } from "./components";
+import { colors, themedStyles } from "./theme";
 
 // Fingerprint glyph for the biometrics key (lucide "fingerprint", trimmed).
 function FingerprintIcon({ size = 24, color = colors.muted }: { size?: number; color?: string }) {
@@ -26,6 +27,10 @@ function FingerprintIcon({ size = 24, color = colors.muted }: { size?: number; c
 }
 
 const PIN_LENGTH = 6;
+
+/** Shared by the key's own fill and by the Tappable that clips its ripple, so
+ *  the two cannot drift apart and leave the ripple square. */
+const KEY_RADIUS = 16;
 
 export function PinPad({
   onComplete,
@@ -94,41 +99,57 @@ export function PinPad({
         ))}
         {/* Bottom row: biometrics (optional) · 0 · backspace */}
         {showBiometrics ? (
-          <Pressable
+          <Tappable
             onPress={() => onBiometrics?.()}
             disabled={disabled}
-            style={({ pressed }) => [st.key, pressed && !disabled && st.keyPressed]}
+            feedback="tile"
+            borderRadius={KEY_RADIUS}
+            accessibilityLabel="Unlock with biometrics"
+            style={st.key}
           >
             <FingerprintIcon size={26} />
-          </Pressable>
+          </Tappable>
         ) : (
           <View style={st.key} />
         )}
         <Key label="0" onPress={() => press("0")} disabled={disabled} />
-        <Key label="⌫" glyph onPress={backspace} disabled={disabled} />
+        <Key label="⌫" a11yLabel="Delete" glyph onPress={backspace} disabled={disabled} />
       </View>
     </View>
   );
 }
 
-function Key({ label, onPress, disabled, glyph }: {
+function Key({ label, a11yLabel, onPress, disabled, glyph }: {
   label: string;
+  /** Spoken name, where the visible label is a glyph a screen reader cannot
+   *  pronounce ("⌫"). Digits read correctly as themselves. */
+  a11yLabel?: string;
   onPress: () => void;
   disabled?: boolean;
   glyph?: boolean;
 }) {
   return (
-    <Pressable
+    // Was a bare Pressable with its own `pressed` style, which is how it escaped
+    // the press-feedback pass: `backgroundColor: colors.card` measured 1.05:1
+    // against the light page and 1.12:1 against the dark one, so tapping a key
+    // produced nothing visible in EITHER theme. On the one screen the user
+    // touches every single time they open the wallet. Going through Tappable
+    // gives it the same tint, ripple and press-scale as the rest of the app, and
+    // the scale reads even where a tint on a fill-less key cannot.
+    <Tappable
       onPress={onPress}
       disabled={disabled}
-      style={({ pressed }) => [st.key, pressed && !disabled && st.keyPressed]}
+      feedback="tile"
+      borderRadius={KEY_RADIUS}
+      accessibilityLabel={a11yLabel ?? label}
+      style={st.key}
     >
       <Text style={[st.keyText, glyph && st.keyGlyph]}>{label}</Text>
-    </Pressable>
+    </Tappable>
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   dots: {
     flexDirection: "row",
     justifyContent: "center",
@@ -152,13 +173,16 @@ const st = StyleSheet.create({
     rowGap: 12,
   },
   key: {
+    // `width` hoists to Tappable's animated wrapper (it is a box prop);
+    // `aspectRatio` deliberately does NOT, so the Pressable itself is the
+    // aspect-sized box and the touch target fills the whole key rather than
+    // shrinking to the height of the digit.
     width: "31%",
     aspectRatio: 1.7,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 16,
+    borderRadius: KEY_RADIUS,
   },
-  keyPressed: { backgroundColor: colors.card },
   keyText: { color: colors.textPrimary, fontSize: 26, fontWeight: "500" },
   keyGlyph: { fontSize: 22, color: colors.muted },
-});
+}));

@@ -22,7 +22,7 @@ import {
   PanResponder, Pressable, ScrollView, StyleSheet, Text, View,
   type StyleProp, type ViewStyle,
 } from "react-native";
-import { colors, radius, SHEET_BOTTOM_INSET, spacing, type as ts } from "./theme";
+import { colors, radius, SHEET_BOTTOM_INSET, spacing, type as ts, themedStyles } from "./theme";
 import { noticeTone, type NoticeTone } from "./notice";
 
 const SCREEN_H = Dimensions.get("window").height;
@@ -293,7 +293,7 @@ export function SheetPanel({ children, style }: {
   return <View style={[st.panel, style]}>{children}</View>;
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   root: { flex: 1, justifyContent: "flex-end" },
   sheet: {
     backgroundColor: colors.sheet,
@@ -379,4 +379,4 @@ const st = StyleSheet.create({
     flexShrink: 1,
     textAlign: "right",
   },
-});
+}));

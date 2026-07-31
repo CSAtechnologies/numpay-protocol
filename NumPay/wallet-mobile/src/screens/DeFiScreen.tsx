@@ -10,8 +10,8 @@
 // chain-agnostic rather than naming a chain that means nothing here.
 import { useEffect, useMemo, useState } from "react";
 import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { colors, radius, type as ts } from "../ui/theme";
-import { Card, ScreenHeader } from "../ui/components";
+import { colors, radius, type as ts, themedStyles } from "../ui/theme";
+import { Card, ScreenHeader, Tappable } from "../ui/components";
 import { ExternalLinkIcon, ShieldIcon, TrendingUpIcon } from "../ui/icons";
 import { LogoCoin } from "../ui/coins";
 
@@ -121,7 +121,7 @@ export function DeFiScreen({ onBack }: { onBack: () => void }) {
         {/* Tabs */}
         <Card style={sx.tabBar}>
           {(["earn", "lend", "stake"] as Tab[]).map((t) => (
-            <Pressable
+            <Tappable feedback="ghost"
               key={t}
               onPress={() => setTab(t)}
               style={[sx.tab, tab === t && sx.tabActive]}
@@ -129,7 +129,7 @@ export function DeFiScreen({ onBack }: { onBack: () => void }) {
               <Text style={[sx.tabLabel, tab === t && sx.tabLabelActive]}>
                 {t[0].toUpperCase() + t.slice(1)}
               </Text>
-            </Pressable>
+            </Tappable>
           ))}
         </Card>
 
@@ -181,7 +181,7 @@ export function DeFiScreen({ onBack }: { onBack: () => void }) {
   );
 }
 
-const sx = StyleSheet.create({
+const sx = themedStyles((colors) => ({
   sub: { color: colors.muted, fontSize: ts.row, marginTop: 2, marginBottom: 14 },
 
   tabBar: { flexDirection: "row", padding: 4, marginBottom: 14 },
@@ -203,9 +203,9 @@ const sx = StyleSheet.create({
   name: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "600" },
   type: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
   apyLine: { flexDirection: "row", alignItems: "center", gap: 4 },
-  apy: { color: colors.success, fontSize: ts.row, fontWeight: "700" },
+  apy: { color: colors.successText, fontSize: ts.row, fontWeight: "700" },
   tvl: { color: colors.muted, fontSize: ts.label, marginTop: 1 },
 
   note: { flexDirection: "row", gap: 8, padding: 12, marginTop: 12, alignItems: "flex-start" },
   noteText: { color: colors.muted, fontSize: ts.small, flex: 1, lineHeight: 16 },
-});
+}));

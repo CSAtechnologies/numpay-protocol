@@ -21,7 +21,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import {
   VaultError, getStatus, verifyBiometrics, verifyPin,
 } from "../vault/mobileVault";
-import { colors, type as ts } from "./theme";
+import { colors, type as ts, themedStyles } from "./theme";
 import { Sheet } from "./Sheet";
 import { Notice } from "./components";
 import { ShieldIcon } from "./icons";
@@ -161,7 +161,7 @@ export function RevealGate({ open, title, body, onPass, onCancel }: {
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   what: {
     color: colors.muted,
     fontSize: ts.small,
@@ -173,4 +173,4 @@ const st = StyleSheet.create({
   err: { color: colors.dangerText, fontSize: ts.body, textAlign: "center", fontWeight: "600" },
   cancel: { alignSelf: "center", paddingVertical: 10, paddingHorizontal: 24 },
   cancelText: { color: colors.muted, fontSize: ts.body, fontWeight: "600" },
-});
+}));

@@ -4,11 +4,11 @@
 // on-chain history merge (core txHistory fetchers) and pending speed-up/cancel
 // follow in a later slice; this one makes every mobile send show up instantly.
 import { useCallback, useEffect, useState } from "react";
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Linking, ScrollView, StyleSheet, Text, View } from "react-native";
 import { loadTxLog, loggedToRecords } from "@numpay/core/txLog";
 import { kindOf, type TxKind, type TxRecord } from "@numpay/core/txHistory";
-import { colors, radius, type as ts } from "../ui/theme";
-import { EmptyState, ScreenHeader, SkeletonRow } from "../ui/components";
+import { colors, radius, type as ts, themedStyles } from "../ui/theme";
+import { EmptyState, ScreenHeader, SkeletonRow, Tappable } from "../ui/components";
 import { ActivityIcon, ExternalLinkIcon, RefreshIcon, TxKindGlyph } from "../ui/icons";
 import { AssetIcon } from "../ui/coins";
 
@@ -31,12 +31,37 @@ function timeAgo(ms: number): string {
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-const KIND_META: Record<TxKind, { label: string; color: string }> = {
-  send:    { label: "Send",    color: "#ef4444" },
-  receive: { label: "Receive", color: "#22c55e" },
-  swap:    { label: "Swap",    color: "#7c6df0" },
-  bridge:  { label: "Bridge",  color: "#3b82f6" },
+const KIND_LABEL: Record<TxKind, string> = {
+  send: "Send", receive: "Receive", swap: "Swap", bridge: "Bridge",
 };
+
+/**
+ * The kind's two colours, resolved at RENDER time so a theme switch reaches
+ * them. This used to be a module-level table of four raw hex values, ported 1:1
+ * from the extension's TxRow — which was written when the product was dark-only.
+ * Measured against the light page (#faf9ff), which is now the default theme, all
+ * four failed AA as 14px semibold type:
+ *
+ *   send    #ef4444  3.59:1
+ *   receive #22c55e  2.18:1   <- the worst contrast in the app
+ *   swap    #7c6df0  3.78:1
+ *   bridge  #3b82f6  3.51:1
+ *
+ * So the two jobs are split, the same way the palette already splits
+ * danger/dangerText. `fill` paints the corner badge, which is a disc carrying a
+ * white glyph and wants the saturated tone. `text` paints the kind label and the
+ * signed amount, and steps down to the type tone that clears 4.5:1 in both
+ * themes.
+ */
+function kindMeta(kind: TxKind): { label: string; fill: string; text: string } {
+  const label = KIND_LABEL[kind];
+  switch (kind) {
+    case "send":    return { label, fill: colors.danger,  text: colors.dangerText };
+    case "receive": return { label, fill: colors.success, text: colors.successText };
+    case "swap":    return { label, fill: colors.brand,   text: colors.brand2 };
+    case "bridge":  return { label, fill: colors.info,    text: colors.infoText };
+  }
+}
 
 // RN port of components/TxRow.tsx (extension). Same information hierarchy:
 // kind-coloured label + pending/failed chip, counterparty or from→to subtitle,
@@ -47,7 +72,7 @@ export function TxRow({ tx, showChain = true, size = 36 }: {
   size?: number;
 }) {
   const kind = kindOf(tx);
-  const meta = KIND_META[kind];
+  const meta = kindMeta(kind);
   const pending = tx.status === "pending";
   const failed = tx.status === "failed";
 
@@ -55,10 +80,13 @@ export function TxRow({ tx, showChain = true, size = 36 }: {
     ? { symbol: tx.toSymbol, logo: tx.toLogo, chainId: tx.toChainId ?? tx.chainId, address: tx.toAssetAddr }
     : { symbol: tx.symbol, logo: tx.logo, chainId: tx.chainId, address: tx.assetAddr };
 
+  // A swap's amount is what LANDED, so it is signed and coloured like a receive
+  // even though the row's kind is swap. A bridge moves value without changing
+  // it, so it stays neutral.
   const amount =
-    kind === "send"      ? { text: `-${tx.value} ${tx.symbol}`, color: "#ef4444" }
-    : kind === "receive" ? { text: `+${tx.value} ${tx.symbol}`, color: "#22c55e" }
-    : kind === "swap"    ? { text: `+${tx.toValue ?? ""} ${tx.toSymbol ?? ""}`.trim(), color: "#22c55e" }
+    kind === "send"      ? { text: `-${tx.value} ${tx.symbol}`, color: colors.dangerText }
+    : kind === "receive" ? { text: `+${tx.value} ${tx.symbol}`, color: colors.successText }
+    : kind === "swap"    ? { text: `+${tx.toValue ?? ""} ${tx.toSymbol ?? ""}`.trim(), color: colors.successText }
     : /* bridge */         { text: `${tx.value} ${tx.symbol}`, color: colors.textPrimary };
 
   const subtitle =
@@ -71,7 +99,7 @@ export function TxRow({ tx, showChain = true, size = 36 }: {
   const badge = Math.max(14, Math.round(size * 0.44));
 
   return (
-    <Pressable
+    <Tappable feedback="row"
       style={st.row}
       onPress={() => { if (tx.explorerUrl) Linking.openURL(tx.explorerUrl).catch(() => {}); }}
     >
@@ -81,7 +109,7 @@ export function TxRow({ tx, showChain = true, size = 36 }: {
           chainId={face.chainId} address={face.address} size={size}
         />
         <View style={[st.kindBadge, {
-          backgroundColor: meta.color,
+          backgroundColor: meta.fill,
           width: badge, height: badge, borderRadius: badge / 2,
         }]}>
           <TxKindGlyph kind={kind} size={Math.round(badge * 0.56)} />
@@ -90,7 +118,7 @@ export function TxRow({ tx, showChain = true, size = 36 }: {
 
       <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-          <Text style={{ color: meta.color, fontSize: ts.row, fontWeight: "600" }}>{meta.label}</Text>
+          <Text style={{ color: meta.text, fontSize: ts.row, fontWeight: "600" }}>{meta.label}</Text>
           {pending && (
             <View style={st.chipRow}>
               <View style={st.pendingDot} />
@@ -117,7 +145,7 @@ export function TxRow({ tx, showChain = true, size = 36 }: {
       <Text style={[st.amount, { color: amount.color }]} numberOfLines={1}>
         {amount.text}
       </Text>
-    </Pressable>
+    </Tappable>
   );
 }
 
@@ -150,7 +178,7 @@ export function ActivityScreen({ owner, onBack }: { owner: string; onBack: () =>
           <View style={st.scopeDot} />
           <Text style={st.scopeText}>All Assets</Text>
         </View>
-        <Pressable
+        <Tappable feedback="row"
           hitSlop={8}
           disabled={refreshing}
           onPress={() => { void load(); }}
@@ -158,7 +186,7 @@ export function ActivityScreen({ owner, onBack }: { owner: string; onBack: () =>
           accessibilityLabel="Refresh activity"
         >
           <RefreshIcon size={13} color={colors.muted} />
-        </Pressable>
+        </Tappable>
       </View>
 
       <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
@@ -183,7 +211,7 @@ export function ActivityScreen({ owner, onBack }: { owner: string; onBack: () =>
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   row: {
     flexDirection: "row",
     alignItems: "center",
@@ -199,7 +227,7 @@ const st = StyleSheet.create({
   chipRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   pendingDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.caution },
   pendingChip: { color: colors.caution, fontSize: 10, fontWeight: "500" },
-  failedChip: { color: colors.danger, fontSize: 10, fontWeight: "500" },
+  failedChip: { color: colors.dangerText, fontSize: 10, fontWeight: "500" },
   sub: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
   subMissing: { fontStyle: "italic", opacity: 0.6 },
   // The extension tints the chain name with the brand so it reads as a scope
@@ -219,4 +247,4 @@ const st = StyleSheet.create({
   scopeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.brand2 },
   scopeText: { color: colors.muted, fontSize: 11, fontWeight: "500" },
   scopeBtn: { padding: 6, borderRadius: radius.iconBtn },
-});
+}));

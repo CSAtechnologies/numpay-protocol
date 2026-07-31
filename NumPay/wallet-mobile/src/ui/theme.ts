@@ -3,12 +3,29 @@
 // truth for every mobile screen: use these, never ad-hoc hex values, so the
 // phone app and the extension read as the same product.
 //
-// Both themes are defined; `activeTheme` picks the one the app ships with.
-// Every screen reads `colors`, so switching themes is this one line and no
-// screen edits. It is NOT a live in-app toggle: the 17 StyleSheet.create
-// calls run once at module load, so a runtime switch would need all of them
-// rebuilt per render. There is no theme toggle in mobile Settings today, so
-// that refactor is deliberately not done here.
+// Both themes are defined and the switch between them is LIVE (Settings ->
+// Theme). Two mechanisms carry that, and a screen has to use the right one:
+//
+//   1. Values read during render (`colors.brand` on an icon prop, `gradients`)
+//      come from the exported `colors` / `gradients` objects, which are
+//      MUTATED IN PLACE on a theme change. The binding never moves, so every
+//      existing call site keeps working and just picks up new values on the
+//      next render.
+//   2. Values baked into a StyleSheet cannot be mutated after the fact, so
+//      sheets are declared with `themedStyles((colors) => ({ ... }))` instead
+//      of `StyleSheet.create({ ... })`. That builds and caches one real sheet
+//      PER THEME, lazily, and hands back a proxy that resolves to whichever
+//      one is active at the moment a style is read.
+//
+// The re-render itself comes from `useThemeState()` in App, which subscribes
+// to the store below. Nothing else needs to subscribe: no component in the
+// tree is memoised, so a root re-render reaches all of them.
+import {
+  Appearance, StyleSheet,
+  type ImageStyle, type TextStyle, type ViewStyle,
+} from "react-native";
+import { useSyncExternalStore } from "react";
+import { getItem, setItem } from "@numpay/core/storage";
 
 export type ThemeName = "light" | "dark";
 
@@ -59,6 +76,12 @@ export interface Palette {
   dangerLine: string;
   successText: string;
   successLine: string;
+  /** Informational blue. The palette had no blue at all, so the one thing that
+   *  needs one (a bridge, as distinct from a swap) reached for a raw #3b82f6
+   *  that measured 3.51:1 on the light page. `info` is the fill/badge tone,
+   *  `infoText` the type tone, same split as danger/success above. */
+  info: string;
+  infoText: string;
   /** Brand-toned notice (the neutral "for your information" panel). */
   brandLine: string;
   /** Bottom-sheet fill and its grab handle. */
@@ -78,6 +101,24 @@ export interface Palette {
   coinRing: string;
   /** Text on top of a brand-gradient fill. White in both themes. */
   onBrand: string;
+  /**
+   * Ink for a glyph sitting on a SATURATED ACCENT disc (the tx-kind badges),
+   * as opposed to on the brand ramp, which `onBrand` covers.
+   *
+   * These were white, inherited from the extension's dark-only days. Measured
+   * against the four accent fills the badges actually use, white is weak nearly
+   * everywhere and fails outright on the greens:
+   *
+   *            light           dark
+   *   danger   3.76:1          2.77:1
+   *   success  2.54:1          1.92:1   <- a white arrow on a bright green disc
+   *   brand    3.96:1          3.96:1
+   *   info     5.17:1          3.68:1
+   *
+   * Dark ink clears 3:1 on all eight, and 4.7:1 on seven of them. A badge is
+   * small, so its glyph needs more contrast than a large fill would, not less.
+   */
+  onAccent: string;
   /** Full-screen scrim behind a modal or result overlay. */
   scrim: string;
 }
@@ -117,6 +158,8 @@ const dark: Palette = {
   dangerLine: "rgba(248, 113, 113, 0.24)",
   successText: "#34d399",
   successLine: "rgba(52, 211, 153, 0.24)",
+  info: "#3b82f6",
+  infoText: "#60a5fa", // 7.79:1 on the page, 6.95:1 on a card
   brandLine: "rgba(124, 109, 240, 0.26)",
   // A sheet sits ON the scrim, so it steps one surface above the page rather
   // than matching it — that edge is what separates it from the dimmed content.
@@ -130,6 +173,9 @@ const dark: Palette = {
   dangerBtn: "#5b1f2b",
   coinRing: "rgba(255, 255, 255, 0.18)",
   onBrand: "#ffffff",
+  // The page itself. Dark theme's accents are LIGHTENED, so the ink that reads
+  // on them is the darkest thing in the palette.
+  onAccent: "#0a0912",
   scrim: "rgba(0, 0, 0, 0.6)",
 };
 
@@ -178,6 +224,10 @@ const light: Palette = {
   dangerLine: "rgba(239, 68, 68, 0.22)",
   successText: "#047857",
   successLine: "rgba(16, 185, 129, 0.22)",
+  // #3b82f6 is the badge FILL (it carries a white glyph, not type). As text on
+  // the near-white page it measured 3.51:1, so type steps down two stops.
+  info: "#2563eb",
+  infoText: "#1d4ed8", // 6.40:1 on the page, 6.70:1 on a card
   brandLine: "rgba(124, 109, 240, 0.22)",
   // Pure white against the off-white page (#faf9ff), so the sheet edge is
   // legible without a heavy border.
@@ -193,15 +243,19 @@ const light: Palette = {
   dangerBtn: "#dc2626",
   coinRing: "rgba(18, 16, 30, 0.10)",
   onBrand: "#ffffff",
+  onAccent: "#12101e", // textPrimary: the accents are mid-tones here, not lightened
   scrim: "rgba(0, 0, 0, 0.45)",
 };
 
 export const palettes: Record<ThemeName, Palette> = { light, dark };
 
-/** The theme the app ships with. */
-export const activeTheme: ThemeName = "light";
-
-export const colors: Palette = palettes[activeTheme];
+/**
+ * The live palette. Deliberately a MUTABLE copy rather than a reference to
+ * `palettes[x]`: a theme change rewrites this object's fields in place so the
+ * ~540 existing `colors.foo` reads across the app keep working untouched.
+ * Never re-export it as `palettes.light` or the mutation target moves.
+ */
+export const colors: Palette = { ...light };
 
 // Border radii from the component classes: glass-card 16, buttons/inputs 14,
 // m-hero 20, icon-btn 10, pills fully round.
@@ -224,23 +278,193 @@ export const radius = {
  *  is the one place the inset is defined instead of guessed per sheet. */
 export const SHEET_BOTTOM_INSET = 28;
 
-// Type scale as used across the popup (px values map 1:1 to RN dp).
+/**
+ * Clearance the app leaves for the status bar. Android is edge-to-edge from
+ * Expo 54 on, so content draws behind the system bars and something has to put
+ * it back; with no safe-area library this is a measured-once guess rather than
+ * a real inset.
+ *
+ * It belongs here because THREE surfaces need the same number and used to each
+ * hardcode it: the screen shell, the full-screen dApp approval sheet, and the
+ * re-lock overlay. A screen that opts out of the shell's padding (the dApp
+ * browser, whose page owns the full width) applies it to its own top chrome.
+ */
+export const TOP_INSET = 56;
+
+/** Clearance for the gesture/navigation bar, for chrome pinned to the bottom of
+ *  a screen that runs flush to the display edge. Same guess as above. */
+export const BOTTOM_INSET = 20;
+
+/**
+ * Type scale.
+ *
+ * These started as the popup's px values copied 1:1. That was right for brand
+ * consistency and wrong for the device: the extension is a ~360x600 panel the
+ * user reads at desk distance, so it packs type tight because it has no room.
+ * A phone is held further away, has more room, and is read one-handed in worse
+ * light. Shipping the popup's density on it is most of why the app read as
+ * cramped and hard.
+ *
+ * So the scale is now tuned for the phone. Bumps are deliberately modest, one
+ * step each: `small` carries 73 call sites and `row` 29, several of them on
+ * dense screens (Swap) where a large jump would start wrapping labels that
+ * currently fit. This is the conservative pass, not the ceiling. If a screen
+ * still reads tight after on-device review, raise it there rather than pushing
+ * these numbers until something overflows.
+ *
+ * `hero`/`h1`/`sub` have no call sites (the portfolio total and the token price
+ * pass an explicit size to GradientNumber). They are kept as the named rungs of
+ * the scale so a future screen reaches for a token instead of a literal.
+ */
 export const type = {
-  hero: 26, // .m-number
-  h1: 22,
-  h2: 18,
-  body: 14,
-  row: 13, // token/activity rows
-  sub: 11.5, // .number-sub / .pill
-  small: 11,
-  label: 10, // .section-label / .nh-label
+  hero: 32, // .m-number
+  h1: 24,
+  h2: 19,
+  body: 15,
+  row: 14, // token/activity rows
+  sub: 12.5, // .number-sub / .pill
+  small: 12,
+  label: 10.5, // .section-label / .nh-label
 } as const;
 
 export const spacing = {
   screen: 20,
   cardPad: 18, // .m-hero padding
   gap: 8,
+  /** Vertical rhythm between stacked rows. A touch row needs more air than the
+   *  popup's list gave it, and a consistent value here stops each screen
+   *  inventing its own margin. */
+  row: 12,
 } as const;
+
+/**
+ * Motion.
+ *
+ * One vocabulary for every animation in the app, so screens, sheets and press
+ * states agree on how fast the product moves. Durations are short on purpose:
+ * the difference between "responsive" and "sluggish" on a wallet is roughly the
+ * 200ms mark, and anything the user triggers deliberately (a tap) must resolve
+ * inside it.
+ *
+ * `spring` is the Sheet's hand-tuned curve, promoted here because it is the one
+ * piece of motion in the app that already felt physical and everything else
+ * should match it.
+ */
+export const motion = {
+  /** Press-state feedback. Must be near-instant or it reads as lag. */
+  press: 90,
+  /** Screen enter, toast in, anything that carries content. */
+  screen: 260,
+  /** Screen/overlay exit. Always faster than the enter: leaving should not
+   *  cost the user time. */
+  exit: 190,
+  /** Distance a screen travels on enter. Small: a long slide reads as a
+   *  slideshow, a short one reads as depth. */
+  slide: 22,
+  /** Sheet spring, shared with anything else that should settle rather than
+   *  stop. Damped enough not to bounce (a bouncy wallet reads as a toy). */
+  spring: { damping: 26, stiffness: 260, mass: 0.9 },
+} as const;
+
+/**
+ * Elevation.
+ *
+ * The popup had no depth because a browser panel IS the top layer, so nothing
+ * inside it needed to float. On a phone the same flat treatment left every card
+ * reading as a rectangle drawn on the page, which is the other half of the
+ * "rigid" problem.
+ *
+ * Shadows are tuned per theme rather than shared. A dark theme hides a black
+ * shadow, so it needs opacity to register; a light theme shows it as grey
+ * smudge, so it needs far less. The light values follow the extension's own
+ * light `.floating-nav` (0.08), which already solved this once.
+ */
+function makeElevation(isLight: boolean, p: Palette) {
+  // A black shadow is nearly invisible on a dark surface, so the dark theme
+  // needs several times the opacity to register at all. One multiplier keeps
+  // the four levels below in proportion instead of hand-tuning eight numbers.
+  const scale = isLight ? 1 : 5;
+  return {
+    /** Resting card. Barely there: enough to lift off the page, not enough to
+     *  read as a popover. */
+    card: {
+      shadowColor: "#000",
+      shadowOpacity: 0.05 * scale,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 3 },
+      elevation: 2,
+    },
+    /** A card the user is pressing, or one that owns the screen's attention. */
+    raised: {
+      shadowColor: "#000",
+      shadowOpacity: 0.08 * scale,
+      shadowRadius: 16,
+      shadowOffset: { width: 0, height: 6 },
+      elevation: 6,
+    },
+    /** Floating chrome: the bottom nav, a toast. */
+    floating: {
+      shadowColor: "#000",
+      shadowOpacity: 0.1 * scale,
+      shadowRadius: 18,
+      shadowOffset: { width: 0, height: 8 },
+      elevation: 12,
+    },
+    /** Brand-tinted glow under a primary action, rather than a neutral drop. */
+    brand: {
+      shadowColor: p.brand,
+      shadowOpacity: isLight ? 0.32 : 0.5,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 6 },
+      elevation: 8,
+    },
+  };
+}
+
+export type Elevation = ReturnType<typeof makeElevation>;
+
+const elevationFor: Record<ThemeName, Elevation> = {
+  light: makeElevation(true, light),
+  dark: makeElevation(false, dark),
+};
+
+/** Live elevation, mutated in place on a theme change like `colors`. Its four
+ *  levels are replaced as whole objects, so a style that spreads one picks the
+ *  new values up on the next render. */
+export const elevation: Elevation = { ...elevationFor.light };
+
+/**
+ * Press feedback values, so every tappable surface in the app dims and settles
+ * by the same amount. Before this, 61 of 83 Pressables had no pressed style at
+ * all: a tap produced nothing until the screen changed, which is the single
+ * biggest reason the app felt unresponsive.
+ */
+function makePress(isLight: boolean) {
+  return {
+    /** Scale for a button or tile. Subtle: 0.98 reads as a press, 0.94 as a wobble. */
+    scale: 0.97,
+    /** Overlay wash for a row, which should tint rather than shrink. */
+    rowTint: isLight
+      ? "rgba(124, 109, 240, 0.07)"
+      : "rgba(255, 255, 255, 0.05)",
+    /** Android ripple, matched to the row tint. */
+    ripple: isLight
+      ? "rgba(124, 109, 240, 0.13)"
+      : "rgba(255, 255, 255, 0.09)",
+    /** Dim for a surface that cannot tint (an image, a gradient fill). */
+    opacity: 0.82,
+  };
+}
+
+export type Press = ReturnType<typeof makePress>;
+
+const pressFor: Record<ThemeName, Press> = {
+  light: makePress(true),
+  dark: makePress(false),
+};
+
+/** Live press feedback, mutated in place on a theme change like `colors`. */
+export const press: Press = { ...pressFor.light };
 
 // Gradient stops from the extension's premium classes, verbatim:
 // .logo-mark / .btn-primary-premium share the brand ramp; .m-number is the
@@ -278,5 +502,171 @@ const lightGradients: Gradients = {
   ambientB: { color: "#a394ff", opacity: 0.06 },
 };
 
-export const gradients: Gradients =
-  activeTheme === "light" ? lightGradients : darkGradients;
+const gradientsFor: Record<ThemeName, Gradients> = {
+  light: lightGradients,
+  dark: darkGradients,
+};
+
+/** Live gradients. Mutated in place on a theme change, same as `colors`. */
+export const gradients: Gradients = { ...lightGradients };
+
+// ── Theme store ──────────────────────────────────────────────────────────────
+// Small hand-rolled store rather than a context, because the values above are
+// read from module scope (StyleSheet factories, plain helpers) as well as from
+// components, and a context cannot reach the first kind.
+
+/** What the user picked. "system" tracks the OS appearance as it changes. */
+export type ThemePref = ThemeName | "system";
+
+/** Same storage key the extension uses for its own light/dark choice. The two
+ *  stores are separate (MMKV here, localStorage there), so the extra "system"
+ *  value cannot leak into a build that does not understand it. */
+const THEME_KEY = "numpay_theme";
+
+/** Follow the phone out of the box. Requires `userInterfaceStyle: "automatic"`
+ *  in app.json, otherwise Expo pins the OS scheme to light and this resolves to
+ *  light forever. */
+export const DEFAULT_THEME_PREF: ThemePref = "system";
+
+let pref: ThemePref = DEFAULT_THEME_PREF;
+let active: ThemeName = "light";
+
+function resolvePref(p: ThemePref): ThemeName {
+  if (p !== "system") return p;
+  return Appearance.getColorScheme() === "dark" ? "dark" : "light";
+}
+
+const listeners = new Set<() => void>();
+
+/** Copy of the set, so a listener that unsubscribes mid-notify cannot skip the
+ *  next one in iteration order. */
+function emit(): void {
+  for (const fn of [...listeners]) fn();
+}
+
+/** Repaint the live token objects. Returns whether anything actually changed,
+ *  so a no-op switch (dark -> system on a dark phone) skips the re-render. */
+function applyTheme(next: ThemeName): boolean {
+  if (next === active) return false;
+  active = next;
+  // Every live token object gets repainted here. Anything theme-dependent added
+  // above must be added to this list too, or it silently keeps light values.
+  Object.assign(colors, palettes[next]);
+  Object.assign(gradients, gradientsFor[next]);
+  Object.assign(elevation, elevationFor[next]);
+  Object.assign(press, pressFor[next]);
+  return true;
+}
+
+/** The theme currently painted. Use this, not the old `activeTheme` const, for
+ *  anything read at RENDER time (a StyleSheet factory gets it as an argument). */
+export function getTheme(): ThemeName {
+  return active;
+}
+
+export function getThemePref(): ThemePref {
+  return pref;
+}
+
+export function setThemePref(next: ThemePref): void {
+  const prefChanged = next !== pref;
+  pref = next;
+  const painted = applyTheme(resolvePref(next));
+  void setItem(THEME_KEY, next).catch(() => {});
+  // Emit on a pref-only change too: Settings has to move its checkmark even
+  // when the resolved theme is unchanged.
+  if (prefChanged || painted) emit();
+}
+
+export function subscribeTheme(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => { listeners.delete(fn); };
+}
+
+// The OS flipped to night mode. Only relevant while the user is on "system".
+Appearance.addChangeListener(() => {
+  if (pref !== "system") return;
+  if (applyTheme(resolvePref(pref))) emit();
+});
+
+/**
+ * Resolves once the saved preference has been read and applied. App awaits this
+ * before hiding the splash, so a dark-theme user never sees a light first paint.
+ *
+ * Kicked off at module load, which is safe because index.ts evaluates
+ * platform/init (the MMKV backend) before it ever reaches App.
+ */
+export const themeReady: Promise<void> = (async () => {
+  let saved: string | null = null;
+  try {
+    saved = await getItem(THEME_KEY);
+  } catch { /* storage unavailable: keep the default */ }
+  if (saved === "light" || saved === "dark" || saved === "system") pref = saved;
+  if (applyTheme(resolvePref(pref))) emit();
+})();
+
+/** Snapshot for useSyncExternalStore. Encodes BOTH values so a pref-only change
+ *  still counts as a change; a string compares by value, so no memo needed. */
+function snapshot(): string {
+  return `${pref}|${active}`;
+}
+
+export interface ThemeState {
+  /** What the user picked, including "system". */
+  pref: ThemePref;
+  /** What that resolves to right now. */
+  theme: ThemeName;
+  setPref: (p: ThemePref) => void;
+}
+
+export function useThemeState(): ThemeState {
+  const snap = useSyncExternalStore(subscribeTheme, snapshot, snapshot);
+  const [p, t] = snap.split("|") as [ThemePref, ThemeName];
+  return { pref: p, theme: t, setPref: setThemePref };
+}
+
+// ── Themed stylesheets ───────────────────────────────────────────────────────
+
+// Mirrors react-native's own (unexported) StyleSheet.NamedStyles, so the
+// constraint below behaves exactly like StyleSheet.create's.
+type NamedStyles<T> = { [P in keyof T]: ViewStyle | TextStyle | ImageStyle };
+/** Stand-in for the `any` in RN's constraint: an index signature over styles. */
+interface AnyStyles { [name: string]: ViewStyle | TextStyle | ImageStyle }
+
+/**
+ * Drop-in replacement for `StyleSheet.create` that is theme-aware.
+ *
+ *   const st = themedStyles((colors) => ({ card: { backgroundColor: colors.card } }));
+ *
+ * The factory runs at most once per theme and its result goes through the real
+ * `StyleSheet.create`, so the registered-sheet behaviour is unchanged. What
+ * comes back is a proxy: reading `st.card` resolves against whichever theme is
+ * active at that instant, which is render time.
+ *
+ * The factory's first parameter deliberately shadows the imported `colors`, so
+ * an existing sheet body needs no edits beyond its first and last line.
+ */
+export function themedStyles<T extends NamedStyles<T> | NamedStyles<AnyStyles>>(
+  // Plain `T`, not `T & NamedStyles<...>`: an intersection here is an inference
+  // dead end (T collapses to unknown and every `st.foo` stops type-checking).
+  // The intersection RN's own create() wants is applied at the call below.
+  factory: (colors: Palette, theme: ThemeName) => T,
+): T {
+  const cache = {} as Record<ThemeName, T>;
+  const sheet = (): T =>
+    (cache[active] ??= StyleSheet.create(
+      factory(palettes[active], active) as T & NamedStyles<AnyStyles>,
+    ));
+  return new Proxy({} as T, {
+    get: (_t, key) => sheet()[key as keyof T],
+    has: (_t, key) => key in (sheet() as object),
+    ownKeys: () => Reflect.ownKeys(sheet() as object),
+    getOwnPropertyDescriptor: (_t, key) => {
+      const d = Object.getOwnPropertyDescriptor(sheet() as object, key);
+      // Proxy invariant: a descriptor may only be reported for a key the TARGET
+      // has, unless it is configurable. The target is always `{}`, so it never
+      // does. Without this, `{...st}` throws.
+      return d && { ...d, configurable: true };
+    },
+  }) as T;
+}

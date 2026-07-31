@@ -14,7 +14,7 @@ import {
 } from "@numpay/core/icons/urls";
 import { NETWORKS } from "@numpay/core/networks";
 import { getTokenLogo } from "@numpay/core/logoCache";
-import { colors } from "./theme";
+import { colors, themedStyles } from "./theme";
 
 // Module-level memo of logo URLs that have failed to load, shared across every
 // coin instance, so identical inputs converge on the same source (same reason
@@ -185,10 +185,10 @@ export function ChainBadge({
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   coin: {
     borderRadius: 999,
     overflow: "hidden",
     flexShrink: 0,
   },
-});
+}));

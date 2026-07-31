@@ -22,7 +22,7 @@ import {
   ActivityIndicator, Animated, Easing, Linking, Pressable, StyleSheet, Text, View,
 } from "react-native";
 import Svg, { Circle, Defs, LinearGradient, Path, Stop } from "react-native-svg";
-import { colors } from "./theme";
+import { colors, themedStyles } from "./theme";
 import { Btn } from "./components";
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
@@ -264,7 +264,7 @@ export function TxResultOverlay({
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   scrim: {
     position: "absolute",
     top: 0, left: 0, right: 0, bottom: 0,
@@ -310,4 +310,4 @@ const st = StyleSheet.create({
   errBody: { marginTop: 8, fontSize: 12, color: colors.textSecondary, lineHeight: 17, textAlign: "center" },
   pendingSub: { marginTop: 6, fontSize: 12, color: colors.muted },
   hashLink: { marginTop: 12, fontSize: 11, color: colors.brand2 },
-});
+}));

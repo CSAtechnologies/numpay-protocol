@@ -10,7 +10,7 @@
 // expired the caller's onSessionExpired surfaces the re-auth overlay, exactly
 // like Send/Swap.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
+import { ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import { ethers } from "ethers";
 import {
   isValidBPAN, formatBPAN, BPAN_EVM_KEY, getBPANContract,
@@ -24,8 +24,8 @@ import { getItem, setItem } from "@numpay/core/storage";
 import { explorerTxUrl } from "@numpay/core/txLog";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import type { MobileWalletState } from "../wallet/useMobileWallet";
-import { colors, radius, type as ts } from "../ui/theme";
-import { Notice, Btn, Card, Field, ScreenHeader } from "../ui/components";
+import { colors, radius, type as ts, themedStyles } from "../ui/theme";
+import { Notice, Btn, Card, Field, ScreenHeader, Tappable } from "../ui/components";
 import { CheckIcon } from "../ui/icons";
 import { ChainIcon } from "../ui/coins";
 
@@ -144,9 +144,9 @@ export function BPANScreen({ w, onBack, onSessionExpired }: {
       {/* Tabs */}
       <View style={st.tabs}>
         {TABS.map((t) => (
-          <Pressable key={t.id} onPress={() => setTab(t.id)} style={[st.tab, tab === t.id && st.tabOn]}>
+          <Tappable feedback="row" key={t.id} onPress={() => setTab(t.id)} style={[st.tab, tab === t.id && st.tabOn]}>
             <Text style={[st.tabText, tab === t.id && st.tabTextOn]}>{t.label}</Text>
-          </Pressable>
+          </Tappable>
         ))}
       </View>
 
@@ -220,12 +220,12 @@ function BPANCard({ number, walletAddress }: { number: string; walletAddress: st
           <Text style={st.cardNumber}>{formatBPAN(number)}</Text>
           {isOwner && <Text style={st.ownerBadge}>Owner</Text>}
         </View>
-        <Pressable onPress={() => { Share.share({ message: number }).catch(() => {}); }} style={st.cardAction} hitSlop={6}>
+        <Tappable feedback="tile" onPress={() => { Share.share({ message: number }).catch(() => {}); }} style={st.cardAction} hitSlop={6}>
           <Text style={st.cardActionText}>Share</Text>
-        </Pressable>
-        <Pressable onPress={() => setExpanded((v) => !v)} style={st.cardAction} hitSlop={6}>
+        </Tappable>
+        <Tappable feedback="tile" onPress={() => setExpanded((v) => !v)} style={st.cardAction} hitSlop={6}>
           <Text style={st.cardActionText}>{expanded ? "Hide" : "Details"}</Text>
-        </Pressable>
+        </Tappable>
       </View>
 
       {expanded && (
@@ -243,9 +243,9 @@ function BPANCard({ number, walletAddress }: { number: string; walletAddress: st
             <Text style={st.dim}>No mappings set yet.</Text>
           )}
           {!loading && (
-            <Pressable onPress={() => void loadDetail()} style={{ marginTop: 8 }}>
+            <Tappable feedback="ghost" onPress={() => void loadDetail()} style={{ marginTop: 8 }}>
               <Text style={st.link}>Refresh</Text>
-            </Pressable>
+            </Tappable>
           )}
         </View>
       )}
@@ -366,13 +366,13 @@ function RegisterSection({ owned, requireMnemonic, onRegistered, onGoMapping }: 
           onChangeText={(v) => { setNumber(v.replace(/\D/g, "").slice(0, 11)); setAvailable(null); setError(""); }}
           style={{ flex: 1 }}
         />
-        <Pressable
+        <Tappable feedback="row"
           onPress={() => void checkAvailability()}
           disabled={checking || number.length !== 11}
           style={[st.checkBtn, (checking || number.length !== 11) && { opacity: 0.4 }]}
         >
           <Text style={st.checkBtnText}>{checking ? "…" : "Check"}</Text>
-        </Pressable>
+        </Tappable>
       </View>
 
       {available === true && (
@@ -571,9 +571,9 @@ function MappingSection({ w, owned, requireMnemonic }: {
       {owned.length > 1 ? (
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
           {owned.map((n) => (
-            <Pressable key={n} onPress={() => setNumber(n)} style={[st.bpanChip, number === n && st.bpanChipOn]}>
+            <Tappable feedback="row" key={n} onPress={() => setNumber(n)} style={[st.bpanChip, number === n && st.bpanChipOn]}>
               <Text style={[st.bpanChipText, number === n && st.bpanChipTextOn]}>{formatBPAN(n)}</Text>
-            </Pressable>
+            </Tappable>
           ))}
         </View>
       ) : (
@@ -659,7 +659,7 @@ function ChainToggle({ label, sublabel, chainId, on, badge, onPress }: {
   label: string; sublabel?: string; chainId: string; on: boolean; badge?: string; onPress: () => void;
 }) {
   return (
-    <Pressable onPress={onPress} style={[st.toggleRow, on && st.toggleRowOn]}>
+    <Tappable feedback="tile" onPress={onPress} style={[st.toggleRow, on && st.toggleRowOn]}>
       <View style={[st.checkbox, on && st.checkboxOn]}>{on && <CheckIcon size={11} color="#fff" />}</View>
       <ChainIcon chainId={chainId} size={18} />
       <View style={{ flex: 1 }}>
@@ -669,7 +669,7 @@ function ChainToggle({ label, sublabel, chainId, on, badge, onPress }: {
       {!!badge && (
         <Text style={[st.badge, badge === "mapped" ? st.badgeMapped : st.badgeTx]}>{badge}</Text>
       )}
-    </Pressable>
+    </Tappable>
   );
 }
 
@@ -691,9 +691,9 @@ function AddressField({ label, value, auto, onChange, mapped }: {
           style={{ flex: 1, fontFamily: "monospace", fontSize: 12 }}
         />
         {!!auto && (
-          <Pressable onPress={() => onChange(auto)} style={st.mineBtn}>
+          <Tappable feedback="tile" onPress={() => onChange(auto)} style={st.mineBtn}>
             <Text style={st.mineBtnText}>Mine</Text>
-          </Pressable>
+          </Tappable>
         )}
       </View>
     </View>
@@ -702,13 +702,13 @@ function AddressField({ label, value, auto, onChange, mapped }: {
 
 function TxSuccessRow({ chain, hash }: { chain: string; hash: string }) {
   return (
-    <Pressable onPress={() => { Share.share({ message: explorerTxUrl("ethereum", hash) }).catch(() => {}); }}>
+    <Tappable feedback="ghost" onPress={() => { Share.share({ message: explorerTxUrl("ethereum", hash) }).catch(() => {}); }}>
       <Card style={st.txRow}>
         <View style={st.txCheck}><CheckIcon size={9} color={colors.success} /></View>
         <Text style={st.txChain} numberOfLines={1}>{chain}</Text>
         <Text style={st.txHash} numberOfLines={1}>{hash.slice(0, 12)}…{hash.slice(-6)}</Text>
       </Card>
-    </Pressable>
+    </Tappable>
   );
 }
 
@@ -775,14 +775,17 @@ function Lookup() {
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   subRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 12, paddingHorizontal: 2 },
   greenDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.success },
   subText: { color: colors.muted, fontSize: ts.small },
   tabs: { flexDirection: "row", gap: 4, marginBottom: 14, padding: 4, backgroundColor: colors.surface2, borderRadius: radius.button },
   tab: { flex: 1, paddingVertical: 8, borderRadius: radius.tile, alignItems: "center" },
   tabOn: { backgroundColor: colors.brand },
-  tabText: { color: colors.muted, fontSize: ts.small, fontWeight: "600" },
+  // textSecondary, not muted: this label sits on the surface2 tab track, where
+  // muted measures 4.18:1 in light. Matches bpanChipText, which is the same
+  // quiet-label-on-surface2 job further down.
+  tabText: { color: colors.textSecondary, fontSize: ts.small, fontWeight: "600" },
   tabTextOn: { color: "#fff" },
   dim: { color: colors.muted, fontSize: ts.small, paddingVertical: 8 },
   emptyTitle: { color: colors.textPrimary, fontSize: ts.body, fontWeight: "600", marginBottom: 6 },
@@ -791,7 +794,7 @@ const st = StyleSheet.create({
   hashTile: { width: 38, height: 38, borderRadius: radius.tile, backgroundColor: colors.brand, alignItems: "center", justifyContent: "center" },
   hashGlyph: { color: "#fff", fontSize: 15, fontWeight: "700" },
   cardNumber: { color: colors.textPrimary, fontSize: 15, fontWeight: "700", fontVariant: ["tabular-nums"], letterSpacing: 0.5 },
-  ownerBadge: { alignSelf: "flex-start", color: colors.success, fontSize: 9.5, fontWeight: "600", marginTop: 2 },
+  ownerBadge: { alignSelf: "flex-start", color: colors.successText, fontSize: 9.5, fontWeight: "600", marginTop: 2 },
   cardAction: { paddingHorizontal: 8, paddingVertical: 6 },
   cardActionText: { color: colors.brand2, fontSize: ts.small, fontWeight: "600" },
   cardBody: { paddingHorizontal: 12, paddingBottom: 12, paddingTop: 4, borderTopWidth: 1, borderTopColor: colors.border },
@@ -800,9 +803,9 @@ const st = StyleSheet.create({
   mapChain: { color: colors.brand2, fontSize: ts.small, fontWeight: "600", width: 96 },
   mapAddr: { color: colors.textSecondary, fontSize: ts.small, flex: 1, fontVariant: ["tabular-nums"] },
   link: { color: colors.brand2, fontSize: ts.small, fontWeight: "600" },
-  error: { color: colors.danger, fontSize: ts.small },
+  error: { color: colors.dangerText, fontSize: ts.small },
   availableRow: { flexDirection: "row", alignItems: "center", gap: 5 },
-  available: { color: colors.success, fontSize: ts.small, fontWeight: "600" },
+  available: { color: colors.successText, fontSize: ts.small, fontWeight: "600" },
   feeLine: { color: colors.brand2, fontSize: ts.small, fontWeight: "600", marginTop: 8 },
   ownerAddr: { color: colors.textPrimary, fontSize: ts.small, marginTop: 4 },
   ownedPill: { backgroundColor: colors.brandTint, borderRadius: radius.tile, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 12, paddingVertical: 8, alignSelf: "flex-start" },
@@ -825,7 +828,7 @@ const st = StyleSheet.create({
   toggleLabel: { color: colors.textPrimary, fontSize: ts.small, fontWeight: "600" },
   toggleSub: { color: colors.muted, fontSize: ts.label, marginTop: 1 },
   badge: { fontSize: 9, fontWeight: "600", paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.pill, overflow: "hidden" },
-  badgeMapped: { color: colors.success, backgroundColor: colors.successTint },
+  badgeMapped: { color: colors.successText, backgroundColor: colors.successTint },
   badgeTx: { color: colors.brand2, backgroundColor: colors.brandTint },
   addrLabel: { color: colors.textSecondary, fontSize: ts.label, fontWeight: "500" },
   mineBtn: { paddingHorizontal: 12, justifyContent: "center", borderRadius: radius.button, backgroundColor: colors.brandTint, borderWidth: 1, borderColor: colors.border },
@@ -836,4 +839,4 @@ const st = StyleSheet.create({
   txCheck: { width: 16, height: 16, borderRadius: 8, backgroundColor: colors.successTint, alignItems: "center", justifyContent: "center" },
   txChain: { color: colors.textSecondary, fontSize: ts.small, fontWeight: "600", width: 88 },
   txHash: { color: colors.brand2, fontSize: ts.small, flex: 1, fontVariant: ["tabular-nums"] },
-});
+}));

@@ -7,7 +7,9 @@
 // core can route (23 incl. Solana) is offered here, not a hand-kept list.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ethers } from "ethers";
-import { BackHandler, Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  BackHandler, Keyboard, ScrollView, StyleSheet, Text, View,
+} from "react-native";
 import { NETWORKS } from "@numpay/core/networks";
 import { getUsdPrice } from "@numpay/core/currency";
 import {
@@ -24,8 +26,8 @@ import { bridgeTokens, canBridge, fetchBridgeRoutes } from "../wallet/bridge";
 import { buildChainTokenList, buildSolanaTokenList } from "../wallet/tokenList";
 import { explorerTxUrl } from "../wallet/send";
 import type { MobileWalletState } from "../wallet/useMobileWallet";
-import { colors, radius, type as ts } from "../ui/theme";
-import { Notice, Btn, Chip, Card, Field, IconBtn, ScreenHeader, SectionLabel } from "../ui/components";
+import { colors, radius, type as ts, themedStyles } from "../ui/theme";
+import { Notice, Btn, Chip, Card, Field, IconBtn, ScreenHeader, SectionLabel, Tappable } from "../ui/components";
 import { Sheet, SheetActions, SheetPanel, SheetRow } from "../ui/Sheet";
 import { useCurrencyPref, formatFiatLine } from "../ui/currency";
 import { AssetIcon, ChainBadge, ChainIcon, LogoCoin } from "../ui/coins";
@@ -473,7 +475,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
       const bal = balOf(t);
       const usd = bal * price(t);
       return (
-        <Pressable
+        <Tappable feedback="row"
           key={`${t.chainId}:${t.address ?? "native"}`}
           onPress={() => selectToken(t)}
           style={st.tokenRow}
@@ -498,7 +500,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
               )}
             </View>
           )}
-        </Pressable>
+        </Tappable>
       );
     };
     const crossPick = picking === "to" && pickerChain !== chainId;
@@ -540,9 +542,9 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
             style={st.searchField}
           />
           {search.length > 0 && (
-            <Pressable onPress={resetSearch} hitSlop={8} accessibilityLabel="Clear search">
+            <Tappable feedback="ghost" onPress={resetSearch} hitSlop={8} accessibilityLabel="Clear search">
               <XIcon size={12} color={colors.muted} />
-            </Pressable>
+            </Tappable>
           )}
         </View>
         {crossPick && (
@@ -621,7 +623,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
         {/* SELL */}
         <SectionLabel text={isBridge ? `Sell on ${chainLabel(chainId)}` : "Sell"} style={{ marginTop: 10 } as object} />
         <Card style={st.sideCard}>
-          <Pressable onPress={() => { setPickerChain(chainId); setPicking("from"); }} style={st.tokenBtn}>
+          <Tappable feedback="tile" onPress={() => { setPickerChain(chainId); setPicking("from"); }} style={st.tokenBtn}>
             {fromToken && (
               <View style={{ width: 28, height: 28 }}>
                 <AssetIcon symbol={fromToken.symbol} logo={fromToken.logo} chainId={chainId} address={fromToken.address} size={28} />
@@ -633,7 +635,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
               <Text style={st.tokenBtnChain}>{chainLabel(chainId)}</Text>
             </View>
             <ChevronDownIcon size={12} color={colors.muted} />
-          </Pressable>
+          </Tappable>
           <View style={{ flex: 1 }}>
             <Field
               placeholder="0.0"
@@ -655,9 +657,9 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
         {(parseFloat(fromToken?.balance || "0") || 0) > 0 && (
           <View style={st.presetRow}>
             {[{ l: "25%", p: 0.25 }, { l: "50%", p: 0.5 }, { l: "75%", p: 0.75 }, { l: "MAX", p: 1 }].map(({ l, p }) => (
-              <Pressable key={l} onPress={() => { void applyPreset(p); }} style={st.presetBtn}>
+              <Tappable feedback="tile" key={l} onPress={() => { void applyPreset(p); }} style={st.presetBtn}>
                 <Text style={st.presetText}>{l}</Text>
-              </Pressable>
+              </Tappable>
             ))}
           </View>
         )}
@@ -667,7 +669,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
             "BRIDGE" pill the moment the pair spans two chains. It is the cue
             that tells the user a cross-chain pick changed what this screen
             will do, without ever leaving the screen. */}
-        <Pressable onPress={flip} style={[st.flipBtn, isBridge && st.flipBtnBridge]}>
+        <Tappable feedback="tile" onPress={flip} style={[st.flipBtn, isBridge && st.flipBtnBridge]}>
           {isBridge ? (
             <>
               <LayersIcon size={12} color={colors.brand2} />
@@ -676,12 +678,12 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
           ) : (
             <SwapIcon size={14} color={colors.muted} />
           )}
-        </Pressable>
+        </Tappable>
 
         {/* BUY */}
         <SectionLabel text={isBridge ? `Buy on ${chainLabel(toChainId)}` : "Buy"} />
         <Card style={st.sideCard}>
-          <Pressable onPress={() => { setPickerChain(toChainId); setPicking("to"); }} style={st.tokenBtn}>
+          <Tappable feedback="tile" onPress={() => { setPickerChain(toChainId); setPicking("to"); }} style={st.tokenBtn}>
             {toToken && (
               <View style={{ width: 28, height: 28 }}>
                 <AssetIcon symbol={toToken.symbol} logo={toToken.logo} chainId={toChainId} address={toToken.address} size={28} />
@@ -693,7 +695,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
               <Text style={st.tokenBtnChain}>{chainLabel(toChainId)}</Text>
             </View>
             <ChevronDownIcon size={12} color={colors.muted} />
-          </Pressable>
+          </Tappable>
           <View style={{ flex: 1, alignItems: "flex-end", paddingRight: 4 }}>
             <Text style={st.receiveText}>{hasRoute ? receiveAmt : quoting ? "…" : "0"}</Text>
             {buyUsd > 0 && <Text style={st.subText}>≈ {formatFiatLine(buyUsd, cur.code, cur.currency, w.rates)}</Text>}
@@ -709,7 +711,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
               const logo = bridgeLogo(r);
               const mins = bridgeMinutes(r);
               return (
-                <Pressable key={r.id} onPress={() => setSelRoute(i)} style={[st.routeRow, i === selRoute && st.routeSel]}>
+                <Tappable feedback="row" key={r.id} onPress={() => setSelRoute(i)} style={[st.routeRow, i === selRoute && st.routeSel]}>
                   {/* The bridge's own mark. LI.FI does not always send one, and
                       an anonymous row is worse than a generic layers disc. */}
                   {logo
@@ -729,7 +731,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
                   <View style={{ alignItems: "flex-end" }}>
                     <Text style={st.routeAmt}>{bridgeReceive(r, toToken)} {toToken?.symbol}</Text>
                   </View>
-                </Pressable>
+                </Tappable>
               );
             })}
           </View>
@@ -738,7 +740,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
           <View style={{ marginTop: 10 }}>
             <SectionLabel text="Routes" />
             {routes.map((r, i) => (
-              <Pressable key={r.provider} onPress={() => setSelRoute(i)} style={[st.routeRow, i === selRoute && st.routeSel]}>
+              <Tappable feedback="row" key={r.provider} onPress={() => setSelRoute(i)} style={[st.routeRow, i === selRoute && st.routeSel]}>
                 {/* Same row shape as a bridge route, so the aggregator is named
                     and pictured on both sides of the mode switch. */}
                 {r.logo
@@ -754,7 +756,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
                 <View style={{ alignItems: "flex-end" }}>
                   <Text style={st.routeAmt}>{r.destAmount} {toToken?.symbol}</Text>
                 </View>
-              </Pressable>
+              </Tappable>
             ))}
           </View>
         )}
@@ -849,7 +851,7 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   sideCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -961,4 +963,4 @@ const st = StyleSheet.create({
   tokenSym: { color: colors.textPrimary, fontSize: ts.row, fontWeight: "600" },
   tokenSub: { color: colors.muted, fontSize: ts.small, marginTop: 1 },
   tokenBal: { color: colors.textPrimary, fontSize: ts.row, fontVariant: ["tabular-nums"] },
-});
+}));

@@ -18,7 +18,7 @@ import type { ReactNode } from "react";
 import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import { NETWORKS } from "@numpay/core/networks";
 import type { DappRequestPreview, RiskFlag } from "@numpay/core/dapp";
-import { colors, radius, spacing, type as ts } from "./theme";
+import { colors, radius, spacing, type as ts, TOP_INSET, themedStyles } from "./theme";
 import { Notice, Btn, Card, SectionLabel } from "./components";
 
 /** A preview that passed validation. */
@@ -298,14 +298,20 @@ export function DappSheetActions({ onReject, onConfirm, confirmLabel, busy }: {
   );
 }
 
-export const dappSheetStyles = StyleSheet.create({
-  // Opaque, full-screen, over every app screen — but UNDER the re-lock overlay
+export const dappSheetStyles = themedStyles((colors) => ({
+  // Opaque, full-screen, over every app screen, but UNDER the re-lock overlay
   // (zIndex 10 in App.tsx).
+  //
+  // "Full-screen" only holds if this is mounted where top: 0 means the top of
+  // the display: as a sibling of App's padded shell (WalletConnect), or inside
+  // a screen that runs flush (the dApp browser). Nested in a padded parent it
+  // is laid out against that parent's padding box and the insets below stack on
+  // top of it, which is how this surface ended up 112dp from the top.
   overlay: {
     position: "absolute",
     top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: colors.bg,
-    paddingTop: 56,
+    paddingTop: TOP_INSET,
     paddingHorizontal: spacing.screen,
     paddingBottom: 24,
     zIndex: 5,
@@ -334,9 +340,14 @@ export const dappSheetStyles = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 9,
     marginBottom: 8,
   },
+  // Was raw #f59e0b at 0.4/0.10 while the text above it already used
+  // `colors.caution`: the retone converted the type and left the panel behind,
+  // so a warned risk row wore a hotter, more saturated edge than any other
+  // caution surface in the app, and in dark theme it did not track the theme at
+  // all. The tone's own tint/line are what the rest of the app draws with.
   riskRowWarn: {
-    borderColor: "rgba(245, 158, 11, 0.4)",
-    backgroundColor: "rgba(245, 158, 11, 0.10)",
+    borderColor: colors.cautionLine,
+    backgroundColor: colors.cautionTint,
   },
   riskText: { color: colors.textSecondary, fontSize: 12, lineHeight: 17 },
 
@@ -344,7 +355,7 @@ export const dappSheetStyles = StyleSheet.create({
   rawData: { color: colors.textSecondary, fontFamily: "monospace", fontSize: 10.5, lineHeight: 15 },
 
   btnRow: { flexDirection: "row", gap: 8, alignItems: "center" },
-  err: { color: colors.danger, fontSize: ts.body, marginTop: 8 },
-});
+  err: { color: colors.dangerText, fontSize: ts.body, marginTop: 8 },
+}));
 
 const st = dappSheetStyles;

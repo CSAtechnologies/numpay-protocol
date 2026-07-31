@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Animated, Easing, StyleSheet, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { colors, radius, type as ts } from "./theme";
+import { colors, radius, type as ts, themedStyles } from "./theme";
 import { Btn } from "./components";
 
 export function QrScanner({ title, hint, onScan, onCancel }: {
@@ -96,7 +96,7 @@ export function QrScanner({ title, hint, onScan, onCancel }: {
   );
 }
 
-const st = StyleSheet.create({
+const st = themedStyles((colors) => ({
   box: {
     flex: 1,
     borderRadius: radius.card,
@@ -125,4 +125,4 @@ const st = StyleSheet.create({
   deniedText: { color: "#fff", fontSize: ts.row, textAlign: "center", lineHeight: 20 },
   hint: { color: colors.muted, fontSize: ts.small, lineHeight: 17, marginTop: 10, marginBottom: 4 },
   srOnly: { height: 0 },
-});
+}));
