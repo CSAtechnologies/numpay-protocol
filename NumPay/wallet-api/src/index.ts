@@ -7,6 +7,7 @@
  */
 
 import { handleAppVersion } from "./appVersion";
+import { handleDownload } from "./download";
 import { handlePrices } from "./prices";
 import { handleTokens } from "./tokens";
 
@@ -72,9 +73,17 @@ async function rateLimited(request: Request, env: Env, installId: string | null)
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method !== "GET") return error(405, "method_not_allowed");
-    if (!originAllowed(request, env)) return error(403, "forbidden_origin");
 
     const { pathname } = new URL(request.url);
+
+    // Downloads are checked BEFORE the Origin allow-list and outside /v1/, so
+    // they carry no install ID and no origin. A download link has to work from
+    // a browser address bar, a QR scan and a messaging app, none of which send
+    // a wallet's headers. It redirects to storage and never serves bytes.
+    const download = handleDownload(pathname);
+    if (download !== null) return download;
+
+    if (!originAllowed(request, env)) return error(403, "forbidden_origin");
 
     // Health carries no install ID and only counts against the IP bucket.
     if (pathname === "/v1/health") {
