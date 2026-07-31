@@ -52,7 +52,11 @@ export type Severity = "none" | "recommended" | "critical";
  *                it still cannot block use of the wallet.
  */
 const ANDROID = {
-  latest: 5,
+  // 6 is the first build that contains the update check itself. Builds 1-5
+  // cannot be reached by this endpoint at all: they have no client for it, so
+  // whatever is set here is invisible to them. They can only be updated by
+  // being told out of band.
+  latest: 6,
   minSupported: 1,
   severity: "none" as Severity,
 };

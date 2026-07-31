@@ -21,6 +21,42 @@ const { withProjectBuildGradle, withAppBuildGradle } = require("expo/config-plug
 
 const STAGING_MARKER = "// numpay:cmake-staging";
 const SIGNING_MARKER = "// numpay:release-signing";
+const SPLITS_MARKER = "// numpay:abi-splits";
+
+// Per-ABI APKs for distribution. OPT-IN via -PnumpaySplitAbi=true, because
+// enabling it unconditionally would also apply to debug builds and break the
+// emulator flow, which asks for x86_64 via -PreactNativeArchitectures and is
+// not in the include list below.
+//
+// x86/x86_64 are deliberately absent from `include`: they are emulator
+// architectures, and shipping them to users is ~35 MB of a download that no
+// phone will ever execute. The emulator keeps getting them through the normal
+// (unsplit) debug path.
+//
+// universalApk stays on as the fallback for anyone who cannot tell which file
+// they need, which on a website is a real fraction of people. Play would have
+// picked for them; a download page cannot.
+//
+// NOTE, and this one matters: NO versionCodeOverride. The usual ABI-splits
+// recipe multiplies the versionCode per architecture (1000000 + abi offset),
+// which is right for Play and WRONG here, because /v1/app-version compares one
+// integer against the installed build. Offset codes would make an arm64 user
+// look like build 2000006 against a `latest` of 6 and silence their update
+// notice forever. All split APKs share one versionCode on purpose.
+const SPLITS_BLOCK = `
+    ${SPLITS_MARKER} - see plugins/withAndroidRelease.js
+    splits {
+        abi {
+            // ASSIGNMENT, not the method form. Current AGP exposes \`enable\` as
+            // a property on AbiSplitOptions, so \`enable true\` fails
+            // configuration with "Could not find method enable()".
+            enable = (findProperty("numpaySplitAbi") ?: "false").toString() == "true"
+            reset()
+            include "arm64-v8a", "armeabi-v7a"
+            universalApk true
+        }
+    }
+`;
 
 // CMake mangles each object file's ABSOLUTE source path into its FILENAME.
 // Under this repo's real path the staging dir is already ~192 chars, and a
@@ -118,4 +154,24 @@ const withReleaseSigning = (config) =>
     return cfg;
   });
 
-module.exports = (config) => withReleaseSigning(withStagingDir(config));
+const withAbiSplits = (config) =>
+  withAppBuildGradle(config, (cfg) => {
+    if (cfg.modResults.language !== "groovy") {
+      throw new Error("withAndroidRelease: expected a groovy app build.gradle");
+    }
+    let src = cfg.modResults.contents;
+    if (src.includes(SPLITS_MARKER)) return cfg;
+
+    // Anchored on defaultConfig so the block lands INSIDE android { }.
+    const anchor = /(\n\s*defaultConfig\s*\{)/;
+    if (!anchor.test(src)) {
+      throw new Error("withAndroidRelease: could not find defaultConfig to anchor ABI splits to");
+    }
+    src = src.replace(anchor, `\n${SPLITS_BLOCK}$1`);
+
+    cfg.modResults.contents = src;
+    return cfg;
+  });
+
+module.exports = (config) =>
+  withAbiSplits(withReleaseSigning(withStagingDir(config)));
