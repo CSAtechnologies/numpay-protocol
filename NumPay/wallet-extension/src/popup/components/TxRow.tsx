@@ -26,16 +26,38 @@ function timeAgo(ms: number): string {
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-const KIND_META: Record<TxKind, { label: string; color: string }> = {
-  send:    { label: "Send",    color: "#ef4444" },
-  receive: { label: "Receive", color: "#22c55e" },
-  swap:    { label: "Swap",    color: "#7c6df0" },
-  bridge:  { label: "Bridge",  color: "#3b82f6" },
+/**
+ * The kind's two colours.
+ *
+ * This was one table of four raw hex values used for BOTH the corner badge and
+ * the label text. They were chosen when the popup was dark-only, and measured
+ * against the light theme's page (#faf9ff) all four fail WCAG AA as 13px
+ * semibold type:
+ *
+ *   send    #ef4444  3.59:1
+ *   receive #22c55e  2.18:1   <- the worst contrast in the popup
+ *   swap    #7c6df0  3.78:1
+ *   bridge  #3b82f6  3.51:1
+ *
+ * So the two jobs are split. `fill` paints the badge disc, which carries a
+ * glyph rather than words and keeps the saturated tone. `text` paints the kind
+ * label and the signed amount, and uses the tone's TEXT variant, which clears
+ * 5.2:1 in both themes. Every value is a CSS variable so the theme switch
+ * reaches it. Kept in step with wallet-mobile/src/screens/ActivityScreen.tsx.
+ */
+const KIND_META: Record<TxKind, { label: string; fill: string; text: string }> = {
+  send:    { label: "Send",    fill: "var(--danger)",  text: "var(--danger-text)" },
+  receive: { label: "Receive", fill: "var(--success)", text: "var(--success-text)" },
+  swap:    { label: "Swap",    fill: "var(--brand)",   text: "var(--brand-2)" },
+  bridge:  { label: "Bridge",  fill: "var(--info)",    text: "var(--info-text)" },
 };
 
-// Small white glyph inside the corner badge, one per kind.
+// Small glyph inside the corner badge, one per kind. The stroke was #fff, which
+// is safe on a dark theme's mid-tone discs and not on the lightened ones: on
+// the receive badge's green fill it measures 2.54:1 in light and 1.92:1 in
+// dark. --on-accent is the palette's ink for this surface.
 function KindGlyph({ kind }: { kind: TxKind }) {
-  const p = { width: 9, height: 9, viewBox: "0 0 24 24", fill: "none", stroke: "#fff", strokeWidth: 3, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  const p = { width: 9, height: 9, viewBox: "0 0 24 24", fill: "none", stroke: "var(--on-accent)", strokeWidth: 3, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
   if (kind === "send")    return <svg {...p}><line x1="7" y1="17" x2="17" y2="7" /><polyline points="8 7 17 7 17 16" /></svg>;
   if (kind === "receive") return <svg {...p}><line x1="17" y1="7" x2="7" y2="17" /><polyline points="16 17 7 17 7 8" /></svg>;
   if (kind === "swap")    return <svg {...p}><polyline points="17 2 21 6 17 10" /><path d="M3 6h18" /><polyline points="7 22 3 18 7 14" /><path d="M21 18H3" /></svg>;
@@ -73,12 +95,14 @@ export default function TxRow({
     ? { symbol: tx.toSymbol, logo: tx.toLogo, chainId: tx.toChainId ?? tx.chainId, address: tx.toAssetAddr }
     : { symbol: tx.symbol, logo: tx.logo, chainId: tx.chainId, address: tx.assetAddr };
 
-  // Amount shown on the right, and its colour.
+  // Amount shown on the right, and its colour. A swap's amount is what LANDED,
+  // so it is signed and coloured like a receive even though the row's kind is
+  // swap. A bridge moves value without changing it, so it stays neutral.
   const amount =
-    kind === "send"    ? { text: `-${tx.value} ${tx.symbol}`, color: "#ef4444" }
-    : kind === "receive" ? { text: `+${tx.value} ${tx.symbol}`, color: "#22c55e" }
-    : kind === "swap"    ? { text: `+${tx.toValue ?? ""} ${tx.toSymbol ?? ""}`.trim(), color: "#22c55e" }
-    : /* bridge */         { text: `${tx.value} ${tx.symbol}`, color: "var(--text)" };
+    kind === "send"    ? { text: `-${tx.value} ${tx.symbol}`, color: "var(--danger-text)" }
+    : kind === "receive" ? { text: `+${tx.value} ${tx.symbol}`, color: "var(--success-text)" }
+    : kind === "swap"    ? { text: `+${tx.toValue ?? ""} ${tx.toSymbol ?? ""}`.trim(), color: "var(--success-text)" }
+    : /* bridge */         { text: `${tx.value} ${tx.symbol}`, color: "var(--text-primary)" };
 
   // Second line: counterparty for transfers, from→to for swap/bridge.
   const subtitle =
@@ -109,7 +133,7 @@ export default function TxRow({
               style={{
                 position: "absolute", right: -2, bottom: -2,
                 width: badge, height: badge, borderRadius: "50%",
-                background: meta.color,
+                background: meta.fill,
                 display: "flex", alignItems: "center", justifyContent: "center",
                 boxShadow: "0 0 0 2px var(--bg)",
               }}
@@ -121,7 +145,7 @@ export default function TxRow({
           {/* Label + subtitle */}
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <p className="text-[13px] font-semibold" style={{ color: meta.color }}>{meta.label}</p>
+              <p className="text-[13px] font-semibold" style={{ color: meta.text }}>{meta.label}</p>
               {pending && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-medium text-amber">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber animate-pulse" />Pending

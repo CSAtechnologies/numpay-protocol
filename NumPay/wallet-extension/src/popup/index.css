@@ -26,6 +26,21 @@
   --success:    #34d399;
   --danger:     #f87171;
   --amber:      #fbbf24;
+  /* Tone TEXT variants. --success/--danger above are tuned as icon and badge
+     fills; as small type they are too light against the light theme's page, so
+     anything that colours words reaches for these instead. Identical to the
+     fills in dark, where the fills already sit well clear of the background.
+     Ported from wallet-mobile/src/ui/theme.ts, which measured them. */
+  --success-text: #34d399;
+  --danger-text:  #f87171;
+  /* There was no blue in the palette at all, so the one thing that needs one
+     (a bridge, as distinct from a swap) used a raw #3b82f6. */
+  --info:       #3b82f6;
+  --info-text:  #60a5fa;
+  /* Ink for a glyph on a saturated accent disc (the tx-kind badges). These were
+     white, which is safe on a dark theme's mid-tone fills and fails on the
+     lightened ones: white on --success measures 1.92:1 here. */
+  --on-accent:  #0a0912;
 }
 
 [data-theme="light"] {
@@ -50,6 +65,13 @@
   --success:    #10b981;
   --danger:     #ef4444;
   --amber:      #f59e0b;
+  /* Both fills fail badly as small type on this page: --success measures
+     2.54:1 and --danger 3.76:1. These clear 5.2:1. */
+  --success-text: #047857;
+  --danger-text:  #c81e1e;
+  --info:       #2563eb;
+  --info-text:  #1d4ed8;
+  --on-accent:  #12101e;
 }
 
 /* ─── Base ───────────────────────────────────────────────────── */

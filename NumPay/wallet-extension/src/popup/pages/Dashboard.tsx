@@ -1073,7 +1073,12 @@ export default function Dashboard({ onLock }: Props) {
                   borderRadius: 11,
                   background: "var(--card)",
                   border: "1px solid var(--border)",
-                  color: "var(--text)",
+                  // --text has never been a defined token (the palette spells it
+                  // --text-primary). It resolved to an invalid substitution, so
+                  // the label fell back to whatever it inherited; harmless here
+                  // only because Tailwind's preflight sets color:inherit on
+                  // buttons. Naming the real token makes it deliberate.
+                  color: "var(--text-primary)",
                   cursor: "pointer",
                   fontFamily: "inherit",
                   transition: "border-color 150ms ease, background 150ms ease",
