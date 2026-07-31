@@ -18,7 +18,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.anonymous.walletmobile",
-      "versionCode": 4,
+      "versionCode": 5,
       "intentFilters": [
         {
           "action": "VIEW",
