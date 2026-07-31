@@ -17,10 +17,13 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 import { LinearGradient } from "expo-linear-gradient";
 import { usePreventScreenCapture } from "expo-screen-capture";
 import {
-  AccessibilityInfo, Animated, BackHandler, Easing, PanResponder, Pressable,
-  RefreshControl, ScrollView, StyleSheet, Switch, Text, View,
+  AccessibilityInfo, Animated, BackHandler, Easing, Linking, PanResponder,
+  Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View,
   type StyleProp, type ViewStyle,
 } from "react-native";
+import {
+  checkForUpdate, dismissUpdate, DOWNLOAD_URL, UPDATE_COPY, type UpdateState,
+} from "./src/update/appUpdate";
 
 import { createWallet, importFromMnemonic } from "@numpay/core/wallet";
 import { formatBPAN } from "@numpay/core/bpan";
@@ -1067,6 +1070,15 @@ function Dashboard(p: {
   const [showNetworks, setShowNetworks] = useState(false);
   const [showDust, setShowDust] = useState(false);
   const [bpanCopied, setBpanCopied] = useState(false);
+  // Checked once when the dashboard mounts, never on a timer. Resolves null on
+  // any failure, so a proxy outage shows nothing rather than claiming the
+  // wallet is stale.
+  const [update, setUpdate] = useState<UpdateState | null>(null);
+  useEffect(() => {
+    let live = true;
+    void checkForUpdate().then((u) => { if (live) setUpdate(u); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
   const rows = filter ? w.rows.filter((r) => r.chainId === filter) : w.rows;
   const dust = filter ? w.dustRows.filter((r) => r.chainId === filter) : w.dustRows;
   const filterName = filter ? (chainNameOf(filter) ?? filter) : "All Assets";
@@ -1267,6 +1279,42 @@ function Dashboard(p: {
             </View>
           </View>
         </HeroSection>
+
+        {/* Update notice. Below the hero rather than over it: the balance is
+            what the user opened the app to see, and nothing advisory should
+            push it off screen. Absent unless there is genuinely a newer build,
+            and it never blocks anything below it. */}
+        {update && (
+          <Notice
+            tone={update.severity === "critical" ? "danger" : "info"}
+            title={UPDATE_COPY[update.severity === "critical" ? "critical" : "recommended"].title}
+            body={UPDATE_COPY[update.severity === "critical" ? "critical" : "recommended"].body}
+            style={{ marginHorizontal: spacing.screen, marginTop: 12 }}
+          >
+            <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+              <Tappable
+                feedback="tile"
+                borderRadius={radius.pill}
+                style={st.updateBtn}
+                onPress={() => { void Linking.openURL(DOWNLOAD_URL); }}
+                accessibilityLabel="Open the NumPay download page"
+              >
+                <Text style={st.updateBtnText}>Get the update</Text>
+              </Tappable>
+              <Tappable
+                feedback="ghost"
+                borderRadius={radius.pill}
+                style={st.updateDismiss}
+                onPress={() => { setUpdate(null); void dismissUpdate(update.latest); }}
+                accessibilityLabel="Dismiss the update notice"
+              >
+                <Text style={st.updateDismissText}>
+                  {update.severity === "critical" ? "Not now" : "Dismiss"}
+                </Text>
+              </Tappable>
+            </View>
+          </Notice>
+        )}
 
         {/* ── Assets section ── */}
         <View style={st.assetsSection}>
@@ -1764,6 +1812,18 @@ const st = themedStyles((colors) => ({
     marginBottom: 4,
   },
   headBtn: { padding: 6, borderRadius: radius.iconBtn },
+
+  // Update notice actions. "Get the update" is a filled brand pill; dismiss is
+  // deliberately quiet chrome, because the choice being offered is not
+  // symmetrical and styling it as if it were invites a reflex tap.
+  updateBtn: {
+    paddingVertical: 8, paddingHorizontal: 14,
+    borderRadius: radius.pill,
+    backgroundColor: colors.brand,
+  },
+  updateBtnText: { color: colors.onBrand, fontSize: ts.sub, fontWeight: "700" },
+  updateDismiss: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: radius.pill },
+  updateDismissText: { color: colors.muted, fontSize: ts.sub, fontWeight: "600" },
 
   tokenRow: {
     flexDirection: "row", alignItems: "center",

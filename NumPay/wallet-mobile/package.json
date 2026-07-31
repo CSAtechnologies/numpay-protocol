@@ -42,7 +42,7 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "test": "node test/wc-sessions.mjs && node test/notify-diff.mjs && node test/qr-payload.mjs && node test/token-import.mjs && node test/token-pricing.mjs && node test/asset-visibility.mjs && node test/balance-cache.mjs && node test/token-removal.mjs && node test/injected-sync.mjs && node test/browser-origin.mjs && node test/browser-router.mjs && node test/theme-switch.mjs && node test/palette-contrast.mjs && node test/token-usage.mjs && node test/attempt-policy.mjs",
+    "test": "node test/wc-sessions.mjs && node test/notify-diff.mjs && node test/qr-payload.mjs && node test/token-import.mjs && node test/token-pricing.mjs && node test/asset-visibility.mjs && node test/balance-cache.mjs && node test/token-removal.mjs && node test/injected-sync.mjs && node test/browser-origin.mjs && node test/browser-router.mjs && node test/theme-switch.mjs && node test/palette-contrast.mjs && node test/token-usage.mjs && node test/attempt-policy.mjs && node test/app-update.mjs",
     "gen:injected": "node scripts/gen-injected.mjs",
     "start": "expo start",
     "android": "expo run:android",

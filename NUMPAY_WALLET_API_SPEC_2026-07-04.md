@@ -1,9 +1,10 @@
 # NumPay Wallet API (Proxy) Specification
 
-**Status:** v1.1 (2026-07-06). Steps 1-3 built, deployed, live-verified
+**Status:** v1.2 (2026-07-31). Steps 1-3 built, deployed, live-verified
 (worker at numpay-wallet-api.numpay.workers.dev, repo NumPay/wallet-api).
 Amended: token-meta/token-market dropped from v1 scope (see section 4) after
 build-time findings; original step 4 removed from the build plan.
+v1.2 adds `/v1/app-version` (see the amendment in section 4).
 **Owner:** NumPay
 **Decision gate:** build and deploy BEFORE any public launch. This is the single
 component standing between "works for us" and "breaks at 500 users".
@@ -66,6 +67,32 @@ All responses JSON, gzip, `Cache-Control` mirroring the internal TTL.
 Explicitly NOT proxied in v1: native balance RPC reads (keyless public RPCs,
 already distributed), transaction broadcast (goes straight to the chain), and
 WebSocket subscriptions (client-side, see section 8).
+
+**Amendment (2026-07-31): `/v1/app-version` added.** The wallet ships as a
+sideloaded APK, so there is no store to tell anyone a security fix exists.
+This is the only server-driven surface in the product, and it is scoped so
+that being compromised is boring:
+
+- It returns `{"android":{"latest":<int>,"minSupported":<int>,"severity":
+  "none"|"recommended"|"critical"}}`. **No URL and no text, ever.** Every word
+  the user reads and the download location they are sent to are compile-time
+  constants in the app. A worker that could send a URL could send every
+  wallet holder "critical security update, download here" pointing at an
+  attacker's APK, wearing NumPay's credibility.
+- The values are a CONSTANT IN SOURCE, not KV, so changing them is a reviewed
+  commit and a `wrangler deploy` rather than an API call. A leaked token
+  cannot flip a "critical" banner on for every user.
+- It is ADVISORY ONLY. There is no kill switch and no forced update: a
+  non-custodial wallet a server can brick is one that can be used to separate
+  somebody from their funds, by compromise or by a typo.
+- The client fails open. `apiGet` resolves null on every failure and null
+  means no banner, so an outage can never imply "you are out of date".
+- No new phone-home surface: mobile is already proxy-only and calls this
+  worker for prices and tokens.
+
+Served from a constant, so it takes no upstream quota. Cached an hour at the
+edge. Covered by `wallet-mobile/test/app-update.mjs` (27 assertions, most of
+them about payloads that must NOT produce a banner).
 
 **Amendment (2026-07-06): `/v1/token-meta` and `/v1/token-market` dropped
 from v1.** Build-time findings turned both into liabilities, by this spec's

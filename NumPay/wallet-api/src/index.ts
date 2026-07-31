@@ -6,10 +6,11 @@
  * pairs an address with an IP (spec section 6).
  */
 
+import { handleAppVersion } from "./appVersion";
 import { handlePrices } from "./prices";
 import { handleTokens } from "./tokens";
 
-const VERSION = "0.3.2";
+const VERSION = "0.4.0";
 
 /** Local shape of the Workers rate-limit binding (fixed-window counter). */
 interface RateLimiter {
@@ -89,6 +90,8 @@ export default {
         upstreams: {
           prices: "live",
           tokens: "live",
+          // Served from a constant in this worker, not an upstream.
+          "app-version": "static",
         },
       });
     }
@@ -102,6 +105,8 @@ export default {
     if (await rateLimited(request, env, installId)) {
       return error(429, "rate_limited", { "Retry-After": "30" });
     }
+
+    if (pathname === "/v1/app-version") return handleAppVersion();
 
     if (pathname === "/v1/prices") return handlePrices(env, ctx);
 

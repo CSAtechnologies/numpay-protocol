@@ -659,11 +659,15 @@ export interface NoticeProps {
   icon?: ReactNode;
   /** Compact variant: no icon tile, tighter padding. For dense screens. */
   dense?: boolean;
+  /** Actions belonging to the notice, rendered under everything else. Use it
+   *  only for what resolves THIS notice: a notice that grows unrelated controls
+   *  stops reading as one thing the user can dispose of. */
+  children?: ReactNode;
   style?: StyleProp<ViewStyle>;
 }
 
 export function Notice({
-  title, body, hint, tone = "danger", figures, safe, icon, dense, style,
+  title, body, hint, tone = "danger", figures, safe, icon, dense, children, style,
 }: NoticeProps) {
   const t = noticeTone(tone);
   return (
@@ -713,6 +717,7 @@ export function Notice({
           <Text style={st.safeText}>Nothing was sent. Your funds are safe.</Text>
         </View>
       )}
+      {children}
     </View>
   );
 }
