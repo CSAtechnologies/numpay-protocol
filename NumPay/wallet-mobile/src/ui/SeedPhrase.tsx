@@ -13,9 +13,16 @@
  * the shoulder-surfing case: opening the page should not be the same act as
  * putting the phrase on screen. RN has no blur without a native dependency, so
  * the mask is an opaque panel rather than a frosted one.
+ *
+ * FLAG_SECURE (plan §3.2) is applied HERE rather than on the three screens that
+ * show a phrase. The guard belongs with the secret: every current caller gets it
+ * without having to remember, and so does the next one. While this component is
+ * mounted, Android blocks screenshots, screen recording, and the recents
+ * thumbnail for the whole window.
  */
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
+import { usePreventScreenCapture } from "expo-screen-capture";
 import { colors, radius, type as ts, themedStyles } from "./theme";
 import { EyeOffIcon } from "./icons";
 
@@ -29,6 +36,12 @@ export function SeedPhraseGrid({
   footer?: ReactNode;
   style?: StyleProp<ViewStyle>;
 }) {
+  // Held while a phrase is on screen, released on unmount. The key must be
+  // per-INSTANCE: expo-screen-capture keeps a set of keys and re-allows capture
+  // when it empties, so two grids sharing one key would have the first to
+  // unmount drop the flag while the second is still showing words.
+  usePreventScreenCapture(`numpay-seed-${useId()}`);
+
   const [hidden, setHidden] = useState(covered);
   const words = phrase.trim().split(/\s+/).filter(Boolean);
 

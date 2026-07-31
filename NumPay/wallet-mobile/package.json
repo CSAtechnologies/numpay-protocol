@@ -15,10 +15,12 @@
     "expo-background-fetch": "~57.0.2",
     "expo-camera": "~57.0.1",
     "expo-clipboard": "~57.0.1",
+    "expo-device": "~57.0.1",
     "expo-linear-gradient": "~57.0.0",
     "expo-linking": "~57.0.2",
     "expo-local-authentication": "~57.0.0",
     "expo-notifications": "~57.0.3",
+    "expo-screen-capture": "~57.0.1",
     "expo-secure-store": "~57.0.0",
     "expo-splash-screen": "~57.0.4",
     "expo-status-bar": "~57.0.0",
@@ -40,7 +42,7 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "test": "node test/wc-sessions.mjs && node test/notify-diff.mjs && node test/qr-payload.mjs && node test/token-import.mjs && node test/token-pricing.mjs && node test/asset-visibility.mjs && node test/balance-cache.mjs && node test/token-removal.mjs && node test/injected-sync.mjs && node test/browser-origin.mjs && node test/browser-router.mjs && node test/theme-switch.mjs && node test/palette-contrast.mjs && node test/token-usage.mjs",
+    "test": "node test/wc-sessions.mjs && node test/notify-diff.mjs && node test/qr-payload.mjs && node test/token-import.mjs && node test/token-pricing.mjs && node test/asset-visibility.mjs && node test/balance-cache.mjs && node test/token-removal.mjs && node test/injected-sync.mjs && node test/browser-origin.mjs && node test/browser-router.mjs && node test/theme-switch.mjs && node test/palette-contrast.mjs && node test/token-usage.mjs && node test/attempt-policy.mjs",
     "gen:injected": "node scripts/gen-injected.mjs",
     "start": "expo start",
     "android": "expo run:android",

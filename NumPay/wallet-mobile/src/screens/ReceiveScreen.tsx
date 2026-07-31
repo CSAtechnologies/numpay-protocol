@@ -7,7 +7,7 @@
 import { useMemo, useState } from "react";
 import { Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import qrcode from "qrcode-generator";
-import * as Clipboard from "expo-clipboard";
+import { copyEphemeral } from "../platform/clipboard";
 import { LinearGradient } from "expo-linear-gradient";
 import { NETWORKS } from "@numpay/core/networks";
 import type { NonEvmAddressMap } from "@numpay/core/chains";
@@ -111,7 +111,7 @@ export function ReceiveScreen({ addrs, onBack }: { addrs: ReceiveAddrs; onBack: 
   async function handleCopy() {
     if (!address) return;
     try {
-      await Clipboard.setStringAsync(address);
+      await copyEphemeral(address);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard unavailable: the Share button still works */ }

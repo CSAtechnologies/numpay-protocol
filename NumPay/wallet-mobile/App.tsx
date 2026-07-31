@@ -15,7 +15,7 @@ import {
 // which animates the logo in itself. No separate JS splash (no double reveal).
 SplashScreen.preventAutoHideAsync().catch(() => {});
 import { LinearGradient } from "expo-linear-gradient";
-import * as Clipboard from "expo-clipboard";
+import { usePreventScreenCapture } from "expo-screen-capture";
 import {
   AccessibilityInfo, Animated, BackHandler, Easing, PanResponder, Pressable,
   RefreshControl, ScrollView, StyleSheet, Switch, Text, View,
@@ -34,6 +34,10 @@ import {
 import { runSpike, type SpikeResult } from "./spike/runSpike";
 import { runDevnetTx } from "./spike/devnetTx";
 import { useMobileWallet, type AssetRow, type MobileWalletState } from "./src/wallet/useMobileWallet";
+import { copyEphemeral } from "./src/platform/clipboard";
+import {
+  checkDeviceIntegrity, integrityWarning, shouldWarn, type DeviceIntegrity,
+} from "./src/platform/deviceIntegrity";
 import {
   colors, motion, radius, type as ts, spacing, themeReady, themedStyles, TOP_INSET,
   useThemeState,
@@ -55,7 +59,7 @@ import { SettingsScreen } from "./src/screens/SettingsScreen";
 import {
   ArrowUpRightIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon,
   CopyIcon, EyeOffIcon, GlobeIcon, HashIcon, LockIcon, PlusIcon,
-  ReceiveIcon, RefreshIcon, ScanIcon, SwapIcon, TrendingUpIcon, WalletIcon,
+  ReceiveIcon, RefreshIcon, ScanIcon, ShieldIcon, SwapIcon, TrendingUpIcon, WalletIcon,
 } from "./src/ui/icons";
 import { AssetIcon, ChainBadge, ChainIcon } from "./src/ui/coins";
 import { ReceiveScreen, type ReceiveAddrs } from "./src/screens/ReceiveScreen";
@@ -431,11 +435,17 @@ function AppInner() {
       await after();
     } catch (e) {
       if (e instanceof VaultError) {
+        // "wiped" is terminal: the vault is already gone, so the message has to
+        // explain what happened rather than invite another attempt. Refreshing
+        // status below drops the app to onboarding, where the phrase gets it back.
         setError(
-          e.code === "locked" || (e.code === "wrong-pin" && e.lockUntil)
-            ? "Too many attempts."
-            : `Wrong PIN (${e.failedAttempts} failed).`
+          e.code === "wiped"
+            ? e.message
+            : e.code === "locked" || (e.code === "wrong-pin" && e.lockUntil)
+              ? "Too many attempts."
+              : `Wrong PIN (${e.failedAttempts} failed).`
         );
+        if (e.code === "wiped") await clearReceiveWatch();
       } else setError(String(e));
       setStatus(await getStatus());
     }
@@ -752,9 +762,24 @@ function AuthHeader() {
 }
 
 function Onboard(p: { onCreate: () => void; onImport: () => void }) {
+  // Root warning belongs HERE above all: this screen is the last moment before
+  // keys exist on the device, so it is the only point where the warning can
+  // still change what the user does. Settings repeats it as a standing status.
+  const [integrity, setIntegrity] = useState<DeviceIntegrity | null>(null);
+  useEffect(() => { void checkDeviceIntegrity().then(setIntegrity); }, []);
+
   return (
     <View>
       <Text style={st.h2}>Set up your wallet</Text>
+      {shouldWarn(integrity) && integrity && (
+        <Notice
+          tone="danger"
+          title="Rooted device"
+          body={integrityWarning(integrity)}
+          icon={<ShieldIcon size={15} color={colors.dangerText} />}
+          style={{ marginBottom: 12 }}
+        />
+      )}
       <Btn label="Create new wallet" onPress={p.onCreate} />
       <Btn label="Import recovery phrase" onPress={p.onImport} variant="secondary" />
     </View>
@@ -763,6 +788,9 @@ function Onboard(p: { onCreate: () => void; onImport: () => void }) {
 
 function Import(p: { error: string; onBack: () => void; onSubmit: (phrase: string) => void }) {
   const [phrase, setPhrase] = useState("");
+  // A phrase being TYPED is as sensitive as one being shown, and this is the one
+  // secret screen with no SeedPhraseGrid to carry the flag for it.
+  usePreventScreenCapture("numpay-import-phrase");
   return (
     <View>
       <Text style={st.h2}>Import wallet</Text>
@@ -849,7 +877,12 @@ function PinSetup(p: {
 }
 
 function Locked(p: {
-  status: { biometricsEnabled: boolean; lockUntil: number; failedAttempts: number };
+  status: {
+    biometricsEnabled: boolean;
+    lockUntil: number;
+    failedAttempts: number;
+    attemptsBeforeWipe: number | null;
+  };
   now: number;
   error: string;
   onPin: (pin: string) => void;
@@ -863,9 +896,23 @@ function Locked(p: {
     errRef.current = p.error;
   }, [p.error]);
   const lockedFor = Math.max(0, Math.ceil((p.status.lockUntil - p.now) / 1000));
+  // Only once it is actually close. Armed-but-untouched (10 of 10 left) is a
+  // setting, not a warning, and putting a self-destruct countdown on the lock
+  // screen every single morning would train the user to stop reading it.
+  const wipeLeft = p.status.attemptsBeforeWipe;
+  const showWipeCountdown = wipeLeft !== null && p.status.failedAttempts > 0;
   return (
     <View>
       <Text style={[st.h2, { textAlign: "center" }]}>Welcome back</Text>
+      {showWipeCountdown && (
+        <Notice
+          tone="danger"
+          title={wipeLeft === 1 ? "1 attempt left" : `${wipeLeft} attempts left`}
+          body="You turned on erase-after-10-failures. When the count runs out this phone's copy of the wallet is deleted, and only your recovery phrase can bring it back."
+          icon={<ShieldIcon size={15} color={colors.dangerText} />}
+          style={{ marginTop: 10, marginBottom: 2 }}
+        />
+      )}
       {lockedFor > 0 ? (
         // Danger, not caution: this one really is blocking the user.
         <Notice
@@ -1028,7 +1075,7 @@ function Dashboard(p: {
   const copyBpan = async () => {
     if (!w.bpan) return;
     try {
-      await Clipboard.setStringAsync(w.bpan);
+      await copyEphemeral(w.bpan);
       setBpanCopied(true);
       setTimeout(() => setBpanCopied(false), 2000);
     } catch { /* clipboard unavailable; the BPAN screen still shows the number */ }

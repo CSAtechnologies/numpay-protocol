@@ -4,16 +4,22 @@
 // and the danger zone. The version row is the hidden developer-tools entry.
 import { useCallback, useEffect, useState } from "react";
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import * as Clipboard from "expo-clipboard";
 import {
   listWallets, renameWallet, removeWallet, getActiveMnemonic, setWalletAvatar,
+  isWipeOnFailEnabled, setWipeOnFail, WIPE_AFTER_ATTEMPTS,
   type WalletMeta,
 } from "../vault/mobileVault";
 import { CURRENCIES } from "@numpay/core/currency";
 import {
   colors, type as ts, themedStyles, useThemeState, type ThemePref,
 } from "../ui/theme";
-import { Notice, Btn, Card, Field, ScreenHeader, SectionLabel, Tappable } from "../ui/components";
+import {
+  clearIfUnchanged, copyEphemeral, SECRET_CLIPBOARD_TTL_MS, ttlSeconds,
+} from "../platform/clipboard";
+import {
+  checkDeviceIntegrity, integrityWarning, shouldWarn, type DeviceIntegrity,
+} from "../platform/deviceIntegrity";
+import { Notice, Btn, Card, Field, ScreenHeader, SectionLabel, Tappable, Toggle } from "../ui/components";
 import { ConfirmSheet } from "../ui/Sheet";
 import { SeedPhraseGrid } from "../ui/SeedPhrase";
 import { toast } from "../ui/Toast";
@@ -90,13 +96,16 @@ function CurrencyMark({ flag, symbol, size = 20 }: {
   return <Text style={[st.curSymMark, { width: size + 6 }]}>{symbol ?? "¤"}</Text>;
 }
 
-function Row({ label, hint, onPress, danger, right, icon }: {
+function Row({ label, hint, onPress, danger, right, icon, control }: {
   label: string;
   hint?: string;
   onPress?: () => void;
   danger?: boolean;
   right?: string;
   icon?: React.ReactNode;
+  /** Trailing control (a Toggle). Replaces the chevron: a row that owns a
+   *  switch is not a row that navigates anywhere. */
+  control?: React.ReactNode;
 }) {
   return (
     <Pressable
@@ -110,7 +119,8 @@ function Row({ label, hint, onPress, danger, right, icon }: {
         {!!hint && <Text style={st.rowHint}>{hint}</Text>}
       </View>
       {!!right && <Text style={st.rowRight}>{right}</Text>}
-      {onPress && <ChevronRightIcon size={14} color={colors.muted2} />}
+      {control}
+      {onPress && !control && <ChevronRightIcon size={14} color={colors.muted2} />}
     </Pressable>
   );
 }
@@ -135,6 +145,10 @@ export function SettingsScreen({
   // Re-auth gate in front of the reveal (extension parity — see RevealGate).
   const [revealGate, setRevealGate] = useState(false);
   const [confirmWipe, setConfirmWipe] = useState(false);
+  /** Wipe-after-N: the armed flag, and the confirm sheet shown before arming. */
+  const [wipeOnFail, setWipeOnFailState] = useState(false);
+  const [confirmArmWipe, setConfirmArmWipe] = useState(false);
+  const [integrity, setIntegrity] = useState<DeviceIntegrity | null>(null);
   /** Wallet queued for removal, held while its confirm sheet is open. */
   const [confirmRemove, setConfirmRemove] = useState<WalletMeta | null>(null);
   /** Seconds left before a revealed phrase hides itself. */
@@ -152,12 +166,27 @@ export function SettingsScreen({
   const reload = useCallback(() => { listWallets().then(setWallets).catch(() => {}); }, []);
   useEffect(() => { reload(); }, [reload, activeWalletId]);
 
+  useEffect(() => {
+    void isWipeOnFailEnabled().then(setWipeOnFailState);
+    void checkDeviceIntegrity().then(setIntegrity);
+  }, []);
+
+  // Arming is gated behind a confirm; DISARMING is not. Removing a way to lose
+  // the wallet should never be the harder of the two directions.
+  const applyWipeOnFail = async (on: boolean) => {
+    if (on) { setConfirmArmWipe(true); return; }
+    await setWipeOnFail(false);
+    setWipeOnFailState(false);
+    toast.info("Erase-on-failure off", "Wrong PINs will only trigger the lockout delays.");
+  };
+
   // A revealed phrase auto-hides after 30 s, like the extension's. The words
   // stay in component state only for that window; nothing persists them.
   // The countdown is SHOWN, not just enforced. A phrase that vanishes without
   // warning while it is being copied down is its own small disaster.
   useEffect(() => {
     if (!revealed) { setRevealLeft(0); return; }
+    const words = revealed;
     const until = Date.now() + REVEAL_AUTO_HIDE_MS;
     setRevealLeft(Math.ceil(REVEAL_AUTO_HIDE_MS / 1000));
     // Once a second, and derived from `until` rather than counted down, so a
@@ -169,7 +198,13 @@ export function SettingsScreen({
       setRevealLeft(left);
       if (left === 0) setRevealed(null);
     }, 1000);
-    return () => clearInterval(tick);
+    return () => {
+      clearInterval(tick);
+      // Taking the words off the screen takes them off the clipboard too, so
+      // "Hide now" and the auto-hide both mean the phrase is actually gone.
+      // No-op unless the user copied, and never touches a later copy.
+      void clearIfUnchanged(words);
+    };
   }, [revealed]);
 
   // Switching the active wallet while a phrase is on screen would re-render the
@@ -274,6 +309,44 @@ export function SettingsScreen({
           />
           <View style={st.hairline} />
           <Row
+            label={`Erase after ${WIPE_AFTER_ATTEMPTS} wrong PINs`}
+            hint={
+              wipeOnFail
+                ? "On. This phone's copy is deleted when the count runs out."
+                : "Off. Wrong PINs only trigger the lockout delays."
+            }
+            icon={<ShieldIcon size={15} color={wipeOnFail ? colors.dangerText : colors.muted} />}
+            control={
+              <Toggle
+                value={wipeOnFail}
+                onValueChange={(on) => { void applyWipeOnFail(on); }}
+                label={`Erase the wallet after ${WIPE_AFTER_ATTEMPTS} wrong PIN attempts`}
+              />
+            }
+          />
+          <View style={st.hairline} />
+          <Row
+            label="Device integrity"
+            hint={
+              integrity === null
+                ? "Checking…"
+                : integrity.unknown
+                  ? "Could not be checked on this device."
+                  : integrity.rooted
+                    ? integrity.isEmulator
+                      ? "Root detected (emulator, where this is expected)."
+                      : "Root detected. Your keys cannot be protected here."
+                    : "No root detected by the standard checks."
+            }
+            icon={
+              <ShieldIcon
+                size={15}
+                color={shouldWarn(integrity) ? colors.dangerText : colors.muted}
+              />
+            }
+          />
+          <View style={st.hairline} />
+          <Row
             label="Reveal recovery phrase"
             hint="Show the active wallet's 12/24 words. Never share them."
             icon={<ShieldIcon size={15} color={colors.caution} />}
@@ -287,6 +360,15 @@ export function SettingsScreen({
             }}
           />
         </Card>
+        {shouldWarn(integrity) && integrity && (
+          <Notice
+            tone="danger"
+            title="Rooted device"
+            body={integrityWarning(integrity)}
+            icon={<ShieldIcon size={15} color={colors.dangerText} />}
+            style={{ marginTop: 10 }}
+          />
+        )}
         {!!revealed && (
           <View style={{ marginTop: 10 }}>
             <Notice
@@ -311,10 +393,10 @@ export function SettingsScreen({
                     hitSlop={8}
                     style={({ pressed }) => [st.copyBtn, pressed && { opacity: 0.6 }]}
                     onPress={() => {
-                      void Clipboard.setStringAsync(revealed);
+                      void copyEphemeral(revealed, SECRET_CLIPBOARD_TTL_MS);
                       toast.warn(
                         "Phrase copied",
-                        "Your clipboard is readable by other apps. Paste it where you need it, then copy something else.",
+                        `Your clipboard is readable by other apps. NumPay clears it in ${ttlSeconds(SECRET_CLIPBOARD_TTL_MS)}s, so paste it now.`,
                       );
                     }}
                   >
@@ -532,6 +614,28 @@ export function SettingsScreen({
         confirmLabel="Remove everything"
         onClose={() => setConfirmWipe(false)}
         onConfirm={() => { setConfirmWipe(false); onWipe(); }}
+      />
+
+      {/* Arming a self-destruct is itself a destructive act, so it gets the same
+          treatment as the wipe above. The body leads with the failure mode the
+          user is signing up for, not with the benefit. */}
+      <ConfirmSheet
+        open={confirmArmWipe}
+        tone="danger"
+        icon={<ShieldIcon size={21} color={colors.dangerText} />}
+        title={`Erase this wallet after ${WIPE_AFTER_ATTEMPTS} wrong PINs?`}
+        body={`Forgetting your own PIN would delete this phone's copy of every wallet in it. Only your recovery phrase brings them back, and nobody can restore it for you. The lockout delays (30s, 5 min, 30 min) still apply on the way there, and the lock screen shows the count once it starts.`}
+        confirmLabel="Turn it on"
+        onClose={() => setConfirmArmWipe(false)}
+        onConfirm={async () => {
+          setConfirmArmWipe(false);
+          await setWipeOnFail(true);
+          setWipeOnFailState(true);
+          toast.warn(
+            "Erase-on-failure on",
+            `${WIPE_AFTER_ATTEMPTS} wrong PINs will delete this phone's copy. Make sure your recovery phrase is written down.`,
+          );
+        }}
       />
     </View>
   );

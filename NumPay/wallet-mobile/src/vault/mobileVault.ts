@@ -32,6 +32,10 @@ import { gcm } from "@noble/ciphers/aes.js";
 import argon2 from "react-native-argon2";
 import { importFromMnemonic } from "@numpay/core/wallet";
 import {
+  attemptsBeforeWipe, isLockedOut, nextFailureState, FRESH,
+  type AttemptState,
+} from "./attemptPolicy";
+import {
   getItem, setItem, removeItem,
   getSession, setSession, removeSession,
 } from "@numpay/core/storage";
@@ -43,6 +47,10 @@ const BIO_ENABLED_FLAG = "numpay_bio_enabled";
 const SS_PIN_WRAP = "numpay_dk_pin";
 const SS_BIO_KEY = "numpay_dk_bio";
 const SS_ATTEMPTS = "numpay_pin_attempts";
+// Wipe-after-N opt-in. In SecureStore rather than the plain KV store for the
+// same reason the counter is: the flag is only worth anything if turning it OFF
+// needs the device, not a rooted file write.
+const SS_WIPE_ON_FAIL = "numpay_wipe_on_fail";
 // In-memory session. Multi-wallet: the whole decrypted payload AND the data key
 // live here while unlocked, so switching/adding/removing wallets re-encrypts the
 // blob without a re-PIN. The data key in RAM is no more sensitive than the
@@ -58,8 +66,10 @@ const SESSION_ACTIVITY = "numpay_lastActivity";
 // The spike cross-checks native output against @noble byte-for-byte.
 const ARGON2_PARAMS = { m: 19_456, t: 2, p: 1 } as const;
 
-const FREE_ATTEMPTS = 5;
-const BACKOFF_MS = [30_000, 300_000, 1_800_000] as const; // 30 s / 5 min / 30 min
+// The lockout ladder and the self-destruct threshold live in attemptPolicy.ts
+// as pure arithmetic so they can be unit-tested; this module owns only their
+// persistence and the side effects.
+export { WIPE_AFTER_ATTEMPTS } from "./attemptPolicy";
 
 export const AUTO_LOCK_MINUTES = 15; // same behavior as the extension
 
@@ -69,7 +79,9 @@ export type VaultErrorCode =
   | "locked"
   | "no-biometrics"
   | "bio-failed"
-  | "corrupt";
+  | "corrupt"
+  /** Wipe-after-N fired: this attempt destroyed the vault. Terminal. */
+  | "wiped";
 
 export class VaultError extends Error {
   constructor(
@@ -107,7 +119,6 @@ function deriveEvm(mnemonic: string): string {
 interface VaultPayloadV1 { v: 1; mnemonic: string; createdAt: number }
 interface VaultPayload { v: 2; wallets: WalletEntry[]; activeId: string }
 interface PinWrap { salt: string; iv: string; wrapped: string } // all base64
-interface AttemptState { fails: number; lockUntil: number }
 // What the in-memory session holds while unlocked.
 interface Unlocked { dataKey: string; payload: VaultPayload } // dataKey base64
 
@@ -171,11 +182,65 @@ async function readAttempts(): Promise<AttemptState> {
     const raw = await SecureStore.getItemAsync(SS_ATTEMPTS);
     if (raw) return JSON.parse(raw) as AttemptState;
   } catch { /* treat as fresh */ }
-  return { fails: 0, lockUntil: 0 };
+  return FRESH;
 }
 
 async function writeAttempts(s: AttemptState): Promise<void> {
   await SecureStore.setItemAsync(SS_ATTEMPTS, JSON.stringify(s));
+}
+
+/**
+ * Records one wrong PIN: advances the counter, opens the next backoff window,
+ * and destroys the vault if the user armed wipe-after-N and this attempt hit the
+ * threshold.
+ *
+ * Shared by unlockWithPin and verifyPin ON PURPOSE. Those two are the only PIN
+ * oracles in the app and they already share the counter; if only one of them
+ * could trigger the wipe, the other would be the obvious place to do the
+ * guessing. One function means the two cannot drift apart later either.
+ *
+ * @throws VaultError "wiped" when the vault was destroyed. Callers must not
+ *         continue as if a wrong PIN had merely been rejected: there is nothing
+ *         left to unlock.
+ */
+async function bumpFailure(prev: AttemptState, now: number): Promise<AttemptState> {
+  const { next, wipe } = nextFailureState(prev, now, await isWipeOnFailEnabled());
+
+  if (wipe) {
+    // Order matters: wipe first, then report, and never persist `next`.
+    // wipeVault clears the counter and every key wrap, so a crash between the
+    // two leaves no vault and no stale lockout rather than a vault carrying a
+    // tripped counter.
+    await wipeVault();
+    throw new VaultError(
+      "wiped",
+      `Wallet erased after ${next.fails} wrong PIN attempts. Restore it with your recovery phrase.`,
+      undefined,
+      next.fails,
+    );
+  }
+
+  await writeAttempts(next);
+  return next;
+}
+
+/** Whether the user armed wipe-after-N. Default (and read failure) is OFF. */
+export async function isWipeOnFailEnabled(): Promise<boolean> {
+  try {
+    return (await SecureStore.getItemAsync(SS_WIPE_ON_FAIL)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Arms or disarms wipe-after-N. Turning it ON also clears the failure counter:
+ * enabling a self-destruct should not inherit a count the user accumulated
+ * before the rule existed, which could otherwise put them one typo from a wipe.
+ */
+export async function setWipeOnFail(on: boolean): Promise<void> {
+  await SecureStore.setItemAsync(SS_WIPE_ON_FAIL, on ? "1" : "0");
+  if (on) await writeAttempts(FRESH);
 }
 
 async function decryptVaultBlob(dataKey: Uint8Array): Promise<VaultPayload> {
@@ -238,22 +303,33 @@ export interface VaultStatus {
   biometricsEnabled: boolean; // this vault stored a biometric-released key copy
   failedAttempts: number;
   lockUntil: number; // 0 = not locked out
+  /** Wipe-after-N is armed. */
+  wipeOnFail: boolean;
+  /**
+   * Wrong PINs left before the wipe fires, or null when it is disarmed. The lock
+   * screen SHOWS this once it starts counting: a destructive countdown the user
+   * cannot see is a trap, not a security feature.
+   */
+  attemptsBeforeWipe: number | null;
 }
 
 export async function getStatus(): Promise<VaultStatus> {
-  const [exists, hw, enrolled, attempts, bioFlag] = await Promise.all([
+  const [exists, hw, enrolled, attempts, bioFlag, wipeOnFail] = await Promise.all([
     vaultExists(),
     LocalAuthentication.hasHardwareAsync(),
     LocalAuthentication.isEnrolledAsync(),
     readAttempts(),
     getItem(BIO_ENABLED_FLAG),
+    isWipeOnFailEnabled(),
   ]);
   return {
     exists,
     biometricsAvailable: hw && enrolled,
     biometricsEnabled: bioFlag === "1",
     failedAttempts: attempts.fails,
-    lockUntil: attempts.lockUntil > Date.now() ? attempts.lockUntil : 0,
+    lockUntil: isLockedOut(attempts, Date.now()) ? attempts.lockUntil : 0,
+    wipeOnFail,
+    attemptsBeforeWipe: attemptsBeforeWipe(attempts, wipeOnFail),
   };
 }
 
@@ -297,14 +373,14 @@ export async function createVault(
   }
   await setItem(BIO_ENABLED_FLAG, bioStored ? "1" : "0");
 
-  await writeAttempts({ fails: 0, lockUntil: 0 });
+  await writeAttempts(FRESH);
   await openSession(dataKey, payload);
 }
 
 export async function unlockWithPin(pin: string): Promise<string> {
   const attempts = await readAttempts();
   const now = Date.now();
-  if (attempts.lockUntil > now) {
+  if (isLockedOut(attempts, now)) {
     throw new VaultError(
       "locked",
       "Too many attempts. Try again later.",
@@ -322,15 +398,13 @@ export async function unlockWithPin(pin: string): Promise<string> {
   try {
     dataKey = gcm(pinKey, unb64(wrap.iv)).decrypt(unb64(wrap.wrapped));
   } catch {
-    const fails = attempts.fails + 1;
-    const over = fails - FREE_ATTEMPTS;
-    const lockUntil =
-      over >= 0 ? now + BACKOFF_MS[Math.min(over, BACKOFF_MS.length - 1)] : 0;
-    await writeAttempts({ fails, lockUntil });
-    throw new VaultError("wrong-pin", "Wrong PIN.", lockUntil || undefined, fails);
+    // Throws "wiped" instead of returning when this attempt tripped the
+    // self-destruct.
+    const next = await bumpFailure(attempts, now);
+    throw new VaultError("wrong-pin", "Wrong PIN.", next.lockUntil || undefined, next.fails);
   }
 
-  await writeAttempts({ fails: 0, lockUntil: 0 });
+  await writeAttempts(FRESH);
   const payload = await decryptVaultBlob(dataKey);
   await openSession(dataKey, payload);
   return activeMnemonic(payload);
@@ -352,7 +426,7 @@ export async function unlockWithBiometrics(): Promise<string> {
 
   const dataKey = unb64(dataKeyB64);
   const payload = await decryptVaultBlob(dataKey);
-  await writeAttempts({ fails: 0, lockUntil: 0 });
+  await writeAttempts(FRESH);
   await openSession(dataKey, payload);
   return activeMnemonic(payload);
 }
@@ -501,7 +575,7 @@ export async function getActiveMnemonic(): Promise<string | null> {
 export async function verifyPin(pin: string): Promise<boolean> {
   const attempts = await readAttempts();
   const now = Date.now();
-  if (attempts.lockUntil > now) {
+  if (isLockedOut(attempts, now)) {
     throw new VaultError(
       "locked",
       "Too many attempts. Try again later.",
@@ -518,15 +592,14 @@ export async function verifyPin(pin: string): Promise<boolean> {
   try {
     gcm(pinKey, unb64(wrap.iv)).decrypt(unb64(wrap.wrapped));
   } catch {
-    const fails = attempts.fails + 1;
-    const over = fails - FREE_ATTEMPTS;
-    const lockUntil =
-      over >= 0 ? now + BACKOFF_MS[Math.min(over, BACKOFF_MS.length - 1)] : 0;
-    await writeAttempts({ fails, lockUntil });
+    // A wrong PIN is a `false` return, as before. A wrong PIN that tripped
+    // wipe-after-N THROWS "wiped": returning false there would leave the caller
+    // showing "wrong PIN, try again" over a vault that no longer exists.
+    await bumpFailure(attempts, now);
     return false;
   }
 
-  await writeAttempts({ fails: 0, lockUntil: 0 });
+  await writeAttempts(FRESH);
   return true;
 }
 
@@ -557,6 +630,10 @@ export async function wipeVault(): Promise<void> {
   await removeItem(BIO_ENABLED_FLAG);
   await SecureStore.deleteItemAsync(SS_PIN_WRAP);
   await SecureStore.deleteItemAsync(SS_ATTEMPTS);
+  // The self-destruct setting goes with the vault it was armed for. A restored
+  // wallet starts from documented defaults instead of inheriting a rule the user
+  // set months ago and would meet again by surprise, one forgotten PIN later.
+  await SecureStore.deleteItemAsync(SS_WIPE_ON_FAIL);
   try {
     await SecureStore.deleteItemAsync(SS_BIO_KEY);
   } catch { /* entry may not exist or may be auth-gated; nothing to keep either way */ }
