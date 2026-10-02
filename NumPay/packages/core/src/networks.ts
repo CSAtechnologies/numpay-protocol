@@ -1,13 +1,12 @@
 import { ALCHEMY_KEY } from "./env";
+import { BPAN_DEPLOYMENT } from "./bpanDeployment";
+export { BPAN_DEPLOYMENT, bpanOwnershipKey } from "./bpanDeployment";
 // Chain logos ship inside the extension (public/chain-logos, keyed by network
 // id) so every icon paints instantly with no CDN round-trip.
 import { chainLogoAsset as logoOf } from "./icons/assets";
 
-// ── BPAN Registry (Ethereum mainnet ONLY) ─────────────────────────────────────
-// All chain mappings are stored here. Always query mainnet, regardless of
-// which network the user is currently on.
-export const BPAN_MAINNET_CONTRACT = "0xdB5206e06a7509b9181F0594752CD42cbD7eD371"; // V2
-export const BPAN_SEPOLIA_CONTRACT  = "0xF2C65Bc0e54b5694c13d7c5E5Accf6DD93d7267a"; // V2
+// Canonical BPAN deployment, shared by extension and mobile.
+export const BPAN_MAINNET_CONTRACT = BPAN_DEPLOYMENT.contract;
 
 // Alchemy endpoint when a key is injected (extension), verified keyless public
 // RPC otherwise (mobile ships proxy-only with no bundled provider keys; native
@@ -18,34 +17,9 @@ const alchemyOr = (alchemySubdomain: string, keylessUrl: string) =>
     ? `https://${alchemySubdomain}.g.alchemy.com/v2/${ALCHEMY_KEY}`
     : keylessUrl;
 
-export const BPAN_MAINNET_RPC = alchemyOr("eth-mainnet", "https://ethereum-rpc.publicnode.com");
-
-// Independent Ethereum-mainnet read endpoints used to cross-check a BPAN
-// resolution before it becomes a payment destination (TRUST-1). A single
-// compromised or malicious RPC must not be able to silently redirect funds, so
-// a funds-determining mapping is only trusted at "high" confidence when at
-// least two of these independent providers return the same address. The primary
-// is the configured Alchemy endpoint; the others are public full nodes verified
-// to serve the `finalized` block tag from an extension origin (eth.drpc.org is
-// covered by the existing *.drpc.org host permission; ethereum-rpc.publicnode.com
-// is added explicitly to the manifest). rpc.flashbots.net was dropped: it 403s
-// eth_call from extension egress IPs, which silently degraded the quorum to two.
-// Keyless clients cannot reuse BPAN_MAINNET_RPC here: it already resolves to
-// publicnode, and one provider answering twice must not count as two quorum
-// votes. rpc.mevblocker.io serves `finalized` in lockstep with the others
-// (verified 2026-07-11) and keeps the keyless quorum at three independent
-// providers. Extension list is unchanged (its hosts are in the manifest).
-export const BPAN_MAINNET_READ_RPCS: string[] = ALCHEMY_KEY
-  ? [
-      BPAN_MAINNET_RPC,
-      "https://eth.drpc.org",
-      "https://ethereum-rpc.publicnode.com",
-    ]
-  : [
-      "https://ethereum-rpc.publicnode.com",
-      "https://eth.drpc.org",
-      "https://rpc.mevblocker.io",
-    ];
+export const BPAN_MAINNET_RPC = BPAN_DEPLOYMENT.rpc;
+// Each endpoint represents an independent provider, including keyless mobile.
+export const BPAN_MAINNET_READ_RPCS: readonly string[] = BPAN_DEPLOYMENT.readRpcs;
 
 export interface Network {
   id: string;
@@ -56,7 +30,7 @@ export interface Network {
   decimals: number;
   explorer: string;
   logo: string;
-  // bpanContract only set on Ethereum + Sepolia for direct contract interaction
+  // Only a deployed Base registry exposes BPAN writes.
   bpanContract?: string;
 }
 
@@ -68,7 +42,6 @@ export const NETWORKS: Record<string, Network> = {
     symbol: "ETH", decimals: 18,
     explorer: "https://etherscan.io",
     logo: logoOf("ethereum"),
-    bpanContract: BPAN_MAINNET_CONTRACT,
   },
   polygon: {
     id: "polygon", name: "Polygon", chainId: 137,
@@ -101,6 +74,7 @@ export const NETWORKS: Record<string, Network> = {
     symbol: "ETH", decimals: 18,
     explorer: "https://basescan.org",
     logo: logoOf("base"),
+    bpanContract: BPAN_DEPLOYMENT.deployed ? BPAN_MAINNET_CONTRACT : undefined,
   },
   avalanche: {
     id: "avalanche", name: "Avalanche", chainId: 43114,
@@ -238,7 +212,6 @@ export const NETWORKS: Record<string, Network> = {
     symbol: "ETH", decimals: 18,
     explorer: "https://sepolia.etherscan.io",
     logo: logoOf("ethereum"),
-    bpanContract: BPAN_SEPOLIA_CONTRACT,
   },
 };
 
@@ -262,7 +235,7 @@ export function bpanChainName(networkId: string): string {
   return overrides[networkId] ?? networkId;
 }
 
-// All chains supported for BPAN wallet mappings stored on Ethereum mainnet.
+// All chains supported for BPAN wallet mappings stored on the canonical BPAN registry.
 // EVM chains use the network ID as chain name. Non-EVM use their own IDs.
 // Ordered by how commonly the coins are used (popular L1s first), so the Send
 // and BPAN chain pickers lead with the chains people actually reach for and the

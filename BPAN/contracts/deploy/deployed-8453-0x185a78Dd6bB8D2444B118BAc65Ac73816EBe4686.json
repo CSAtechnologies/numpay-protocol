@@ -1,0 +1,24 @@
+{
+  "address": "0x185a78Dd6bB8D2444B118BAc65Ac73816EBe4686",
+  "chainId": 8453,
+  "network": "base",
+  "contractName": "BANPRegistryBase",
+  "version": "base-1",
+  "startBlock": 50998047,
+  "blockHash": "0xc2c06643279cd8c14d666f30eed9dc51a3c49f44e015ffef5824d6de37c189b7",
+  "transactionHash": "0xdc9967606ed5dfb4a51a73c5c89168281afe19003a4c0de8a6e50ec0ed253696",
+  "registrationFeeWei": "0",
+  "deployer": "0x616Fb832c3208c5dA5Dc1575F87F537132152FCd",
+  "owner": "0x616Fb832c3208c5dA5Dc1575F87F537132152FCd",
+  "gasUsed": "2526631",
+  "effectiveGasPriceWei": "6000000",
+  "l1FeeWei": "60002356173",
+  "finalized": true,
+  "verifiedAt": "2026-09-07T13:05:10.457Z",
+  "verifiedProviders": [
+    "https://mainnet.base.org",
+    "https://base.drpc.org"
+  ],
+  "runtimeCodeHash": "0xa00bc5051c838d21bc76846df8d55dacf1683283390f579024f50d07d0468fda",
+  "sourceVerification": "https://repo.sourcify.dev/8453/0x185a78Dd6bB8D2444B118BAc65Ac73816EBe4686"
+}

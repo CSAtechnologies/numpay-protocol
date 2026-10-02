@@ -7,6 +7,7 @@ import { useEffect, useRef } from "react";
 import { Animated, View } from "react-native";
 import Svg, { Rect, Path, Mask, G } from "react-native-svg";
 import { colors } from "./theme";
+import { useReducedMotion } from "./useReducedMotion";
 
 const NP_PURPLE = "#786EE9";
 const N_BODY = "M23.22 22.93 L35.14 22.93 L66.37 53.79 L66.56 23.12 L76.4 23.12 L76.4 62.68 L60.88 62.68 L33.63 35.62 L33.44 62.3 L23.22 62.3 Z";
@@ -59,9 +60,16 @@ export function NumPayAnimatedLogo({ size = 88 }: { size?: number }) {
   // Non-native values for SVG-attr animations (draw + foot).
   const draw = useRef(new Animated.Value(0)).current;
   const foot = useRef(new Animated.Value(0)).current;
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
-    Animated.parallel([
+    if (reduceMotion) {
+      form.setValue(1);
+      draw.setValue(1);
+      foot.setValue(1);
+      return;
+    }
+    const animation = Animated.parallel([
       Animated.timing(form, {
         toValue: 1, duration: 550, useNativeDriver: true,
       }),
@@ -73,8 +81,10 @@ export function NumPayAnimatedLogo({ size = 88 }: { size?: number }) {
         Animated.delay(1500),
         Animated.timing(foot, { toValue: 1, duration: 620, useNativeDriver: false }),
       ]),
-    ]).start();
-  }, []);
+    ]);
+    animation.start();
+    return () => animation.stop();
+  }, [draw, foot, form, reduceMotion]);
 
   const scale = form.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0.2, 1.06, 1] });
   const rotate = form.interpolate({ inputRange: [0, 0.6, 1], outputRange: ["-10deg", "3deg", "0deg"] });

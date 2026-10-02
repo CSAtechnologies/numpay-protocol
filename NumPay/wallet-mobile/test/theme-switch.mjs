@@ -132,7 +132,7 @@ check("elevation repaints for dark",
   `dark needs a heavier shadow, got ${T.elevation.card.shadowOpacity}`);
 check("press repaints for dark", T.press.rowTint.startsWith("rgba(255"),
   `got ${T.press.rowTint}`);
-check("gradients repaint for dark", T.gradients.number[0] === "#ffffff",
+check("gradients repaint for dark", T.gradients.number[0] === T.palettes.dark.textPrimary,
   `got ${T.gradients.number[0]}`);
 
 T.setThemePref("light");

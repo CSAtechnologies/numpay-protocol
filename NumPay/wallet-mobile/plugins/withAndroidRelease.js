@@ -17,11 +17,39 @@
 // android/keystore.properties, which is gitignored, and the keystore itself
 // lives outside the repo entirely.
 
-const { withProjectBuildGradle, withAppBuildGradle } = require("expo/config-plugins");
+const fs = require("fs");
+const path = require("path");
+const {
+  withProjectBuildGradle,
+  withAppBuildGradle,
+  withDangerousMod,
+} = require("expo/config-plugins");
 
 const STAGING_MARKER = "// numpay:cmake-staging";
 const SIGNING_MARKER = "// numpay:release-signing";
 const SPLITS_MARKER = "// numpay:abi-splits";
+const DEBUG_NETWORK_CONFIG = "numpay_debug_network_security_config";
+
+// Development clients on managed workstations may sit behind a locally
+// installed HTTPS inspection CA. Android does not trust user-installed CAs for
+// apps by default, so otherwise every RPC and chart request fails even though
+// the same URL works on the host. This source-set-only policy is merged into
+// debuggable builds; release builds never reference it and retain Android's
+// normal system-only trust policy.
+const DEBUG_NETWORK_XML = `<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>
+`;
 
 // Per-ABI APKs for distribution. OPT-IN via -PnumpaySplitAbi=true, because
 // enabling it unconditionally would also apply to debug builds and break the
@@ -65,13 +93,29 @@ const SPLITS_BLOCK = `
 // the whole difference between a working arm64 debug build and a failing
 // release one. Junctions do NOT help, because Expo autolinking resolves
 // node_modules through Node's realpath and canonicalizes them away first.
+//
+// CMake also converts the NDK compiler path to its DOS 8.3 form when the SDK
+// lives below a Windows username containing spaces. That turns clang++.exe
+// into CLANG_~1.EXE; Clang then identifies itself as the C driver and omits
+// libc++ from native link commands. Supplying the standard libraries
+// explicitly keeps Expo and Nitro native modules linkable on that setup.
 const STAGING_BLOCK = `
 ${STAGING_MARKER} - see plugins/withAndroidRelease.js
 def numpayNativeStagingRoot = System.getenv("NUMPAY_CMAKE_STAGING") ?: "C:/nx"
+def numpayWindowsHost = System.getProperty("os.name").toLowerCase().contains("windows")
 subprojects { sp ->
   afterEvaluate {
     if (sp.plugins.hasPlugin("com.android.library") || sp.plugins.hasPlugin("com.android.application")) {
       sp.android {
+        if (numpayWindowsHost) {
+          defaultConfig {
+            externalNativeBuild {
+              cmake {
+                arguments "-DCMAKE_CXX_STANDARD_LIBRARIES=-latomic -lm -lc++"
+              }
+            }
+          }
+        }
         externalNativeBuild {
           cmake {
             buildStagingDirectory = new File("\${numpayNativeStagingRoot}/\${sp.name}")
@@ -173,5 +217,28 @@ const withAbiSplits = (config) =>
     return cfg;
   });
 
+const withDebugNetworkTrust = (config) =>
+  withDangerousMod(config, ["android", async (cfg) => {
+    const androidRoot = cfg.modRequest.platformProjectRoot;
+    const debugRoot = path.join(androidRoot, "app", "src", "debug");
+    const manifestPath = path.join(debugRoot, "AndroidManifest.xml");
+    const networkConfigPath = path.join(
+      debugRoot, "res", "xml", `${DEBUG_NETWORK_CONFIG}.xml`,
+    );
+
+    fs.mkdirSync(path.dirname(networkConfigPath), { recursive: true });
+    fs.writeFileSync(networkConfigPath, DEBUG_NETWORK_XML, "utf8");
+
+    let manifest = fs.readFileSync(manifestPath, "utf8");
+    if (!manifest.includes(`@xml/${DEBUG_NETWORK_CONFIG}`)) {
+      manifest = manifest.replace(
+        /<application\b/,
+        `<application android:networkSecurityConfig="@xml/${DEBUG_NETWORK_CONFIG}"`,
+      );
+      fs.writeFileSync(manifestPath, manifest, "utf8");
+    }
+    return cfg;
+  }]);
+
 module.exports = (config) =>
-  withAbiSplits(withReleaseSigning(withStagingDir(config)));
+  withDebugNetworkTrust(withAbiSplits(withReleaseSigning(withStagingDir(config))));

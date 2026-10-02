@@ -1,0 +1,27 @@
+{
+  "verificationId": "c7012247-2243-4155-aa40-ee6d9cd9fbdf",
+  "isJobCompleted": true,
+  "jobStartTime": "2026-09-07T12:53:54Z",
+  "jobFinishTime": "2026-09-07T12:53:55Z",
+  "compilationTime": "801",
+  "externalVerifications": {
+    "etherscan": {
+      "verificationId": "sqquzu53mcta8fqmwc753lgtbpjxqd96ag8a6yspsvwruqbujn",
+      "statusUrl": "https://api.etherscan.io/v2/api?chainid=8453&module=contract&action=checkverifystatus&guid=sqquzu53mcta8fqmwc753lgtbpjxqd96ag8a6yspsvwruqbujn",
+      "explorerUrl": "https://basescan.org//address/0x185a78Dd6bB8D2444B118BAc65Ac73816EBe4686",
+      "contractApiUrl": "https://api.etherscan.io/v2/api?chainid=8453&module=contract&action=getabi&address=0x185a78Dd6bB8D2444B118BAc65Ac73816EBe4686"
+    },
+    "blockscout": {
+      "error": "Explorer verification request failed (429): {\"message\":\"Too many requests. Increase limits now at https://dev.blockscout.com\",\"result\":null,\"status\":\"0\"}"
+    }
+  },
+  "contract": {
+    "match": "exact_match",
+    "creationMatch": "exact_match",
+    "runtimeMatch": "exact_match",
+    "chainId": "8453",
+    "address": "0x185a78Dd6bB8D2444B118BAc65Ac73816EBe4686",
+    "verifiedAt": "2026-09-07T12:53:55Z",
+    "matchId": "47238725"
+  }
+}

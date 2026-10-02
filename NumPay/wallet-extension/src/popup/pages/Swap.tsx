@@ -13,7 +13,7 @@ import { resolveSolanaToken } from "@numpay/core/chains/solana";
 import { getSigner, isLocked } from "@numpay/core/wallet";
 import { getCustomTokens, upsertCustomToken } from "@numpay/core/customTokens";
 import Layout from "../components/Layout";
-import AlertCard from "../components/AlertCard";
+import AlertCard, { InlineNotice } from "../components/AlertCard";
 import TxResultOverlay, { type TxFxStatus } from "../components/TxResultOverlay";
 import {
   SwapIcon, ChevronDownIcon, SettingsIcon, ChainIcon, ChainBadge, AssetIcon,
@@ -46,7 +46,6 @@ function SwapErrorCard({ message, tone, kind = "Swap" }: { message: string; tone
     <AlertCard
       title={e.title} body={e.body} hint={e.hint} tone={tone}
       figures={e.figures ? { ...e.figures, unit: "SOL" } : undefined}
-      safe={e.preSend}
     />
   );
 }
@@ -713,7 +712,7 @@ export default function Swap() {
                   <p className="text-[12px] text-text-secondary font-mono mb-3 break-all">
                     {pickerSearch.slice(0, 10)}…{pickerSearch.slice(-8)}
                   </p>
-                  {importError && <p className="text-[11px] mb-2" style={{ color: "var(--danger)" }}>{importError}</p>}
+                  {importError && <InlineNotice message={importError} className="mb-2" />}
                   <button onClick={handleImport}
                     className="w-full py-2 rounded-xl bg-brand-500 text-white text-[12px] font-semibold hover:bg-brand-600 transition-colors">
                     Fetch Token Info

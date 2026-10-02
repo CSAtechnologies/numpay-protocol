@@ -6,7 +6,7 @@
 // can't render without react-native-svg, so the fallback is the spec's disc +
 // text label; the disc colour and monogram still match the extension's.
 import { useEffect, useState } from "react";
-import { Image, StyleSheet, Text, View, type ViewStyle } from "react-native";
+import { Image, StyleSheet, Text, View, type ImageSourcePropType, type ViewStyle } from "react-native";
 import { SvgUri } from "react-native-svg";
 import {
   tokenIconUrl, chainIconUrl, chainLogoLocal, ETH_L2_CHAINS,
@@ -15,6 +15,7 @@ import {
 import { NETWORKS } from "@numpay/core/networks";
 import { getTokenLogo } from "@numpay/core/logoCache";
 import { colors, themedStyles } from "./theme";
+import { chainAsset, tokenAsset } from "./coinAssets";
 
 // Module-level memo of logo URLs that have failed to load, shared across every
 // coin instance, so identical inputs converge on the same source (same reason
@@ -65,8 +66,15 @@ const isSvgUrl = (u: string) => /\.svg(\?|#|$)/i.test(u);
 
 // ── FramedCoin — house disc + ring, walks candidate logo URLs then the disc ──
 function FramedCoin({
-  sources, spec, size,
-}: { sources: string[]; spec: FallbackCoinSpec; size: number }) {
+  sources, localSource, spec, size,
+}: { sources: string[]; localSource?: ImageSourcePropType; spec: FallbackCoinSpec; size: number }) {
+  if (localSource) {
+    return (
+      <View style={[st.coin, { width: size, height: size, backgroundColor: colors.coinDisc }]}>
+        <Image source={localSource} resizeMode="contain" style={{ width: "100%", height: "100%" }} />
+      </View>
+    );
+  }
   const srcs = sources.filter((s) => s && /^https?:/.test(s));
   const listKey = srcs.join("|");
   const [idx, setIdx] = useState(() => firstViableIdx(srcs));
@@ -136,7 +144,7 @@ export function ChainIcon({
     [chainLogoLocal(chainId) || "", NETWORKS[chainId]?.logo || "", chainIconUrl(chainId) || "", logo || ""]
       .filter(Boolean),
   ));
-  return <FramedCoin sources={sources} spec={chainFallbackSpec(chainId)} size={size} />;
+  return <FramedCoin sources={sources} localSource={chainAsset(chainId)} spec={chainFallbackSpec(chainId)} size={size} />;
 }
 
 // ── TokenIcon — symbol-keyed brand logo, identical for a ticker on any chain ─
@@ -144,7 +152,7 @@ export function TokenIcon({
   symbol, logo, tokenAddress, size = 32,
 }: { symbol: string; logo?: string; chainId?: string; tokenAddress?: string; size?: number }) {
   const sources = [tokenIconUrl(symbol), logo || "", getTokenLogo(tokenAddress) || ""];
-  return <FramedCoin sources={sources} spec={tokenFallbackSpec(symbol)} size={size} />;
+  return <FramedCoin sources={sources} localSource={tokenAsset(symbol)} spec={tokenFallbackSpec(symbol)} size={size} />;
 }
 
 // ── LogoCoin — house framing for a logo we already have the URL for (DeFi

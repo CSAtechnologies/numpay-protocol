@@ -34,6 +34,7 @@ import { AssetIcon, ChainBadge, ChainIcon, LogoCoin } from "../ui/coins";
 import { ChevronDownIcon, LayersIcon, SearchIcon, SettingsIcon, SwapIcon, XIcon } from "../ui/icons";
 import { ImportTokenCard } from "../ui/ImportTokenCard";
 import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
+import { safeActionError } from "../ui/errors";
 
 const QUOTE_DEBOUNCE_MS = 700;
 
@@ -399,7 +400,12 @@ export function SwapScreen({ w, onBack, onSessionExpired, initialChainId, initia
       // pre-swap answer for the next three minutes.
       w.refreshAfterTx();
     } catch (e: any) {
-      setError(e?.message || (isBridge ? "Bridge failed" : "Swap failed"));
+      setError(safeActionError(
+        e,
+        isBridge
+          ? "The bridge could not be submitted. Check Activity before retrying."
+          : "The swap could not be submitted. Refresh the quote and try again.",
+      ));
       setTxFx("error");
     } finally {
       setBusy(false);

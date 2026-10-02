@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Deploy BPAN on Base</title><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
+<body><main>
+<p class="eyebrow">NUMPAY / BASE MAINNET</p><h1>Deploy BPAN</h1>
+<p>A fresh registry with zero registration fee. Each new registration pays only Base network gas.</p>
+<dl><dt>Deployer and contract owner</dt><dd id="sender">0x616Fb832c3208c5dA5Dc1575F87F537132152FCd</dd><dt>Base balance</dt><dd id="balance">Checking...</dd><dt>Estimated maximum deployment fee</dt><dd id="fee">Checking...</dd></dl>
+<label for="wallet">Wallet</label><select id="wallet"><option value="">Detecting wallets...</option></select>
+<button id="connect" disabled>Connect wallet</button>
+<button id="deploy" disabled>Deploy on Base</button>
+<p id="status" role="status" aria-live="polite">Preparing the contract...</p>
+<p id="result" hidden>Transaction submitted. Copy this hash and send it to Codex to verify the deployment and activate BPAN in both wallets.</p><pre id="hash"></pre>
+<p class="note">Approve the contract-creation transaction in your wallet. The transaction sends 0 ETH; the deployment fee pays for gas. Signing stays in your wallet.</p>
+</main></body></html>

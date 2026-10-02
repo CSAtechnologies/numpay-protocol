@@ -7,7 +7,7 @@
 // DexScreener, covers unlisted memecoins by address) with the extension's
 // 3-minute stale-while-revalidate cache semantics.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Linking, ScrollView, StyleSheet, Text, View } from "react-native";
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from "react-native-svg";
 import { NETWORKS } from "@numpay/core/networks";
 import { explorerTxUrl, loadTxLog, loggedToRecords } from "@numpay/core/txLog";
@@ -24,9 +24,8 @@ import {
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import type { AssetRow, MobileWalletState } from "../wallet/useMobileWallet";
 import { colors, radius, type as ts, themedStyles } from "../ui/theme";
-import { LinearGradient } from "expo-linear-gradient";
 import {
-  Notice, Card, EmptyState, GradientNumber, SectionLabel, SkeletonRow,
+  Notice, Btn, Card, EmptyState, GradientNumber, SectionLabel, SkeletonRow,
   Tappable,
 } from "../ui/components";
 import {
@@ -36,6 +35,7 @@ import {
 import { useCurrencyPref, formatFiat } from "../ui/currency";
 import { AssetIcon, ChainBadge } from "../ui/coins";
 import { TxRow } from "./ActivityScreen";
+import { safeActionError } from "../ui/errors";
 
 const RANGES = [
   { label: "1D", days: 1 },
@@ -130,6 +130,8 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
   const [rangeIdx, setRangeIdx] = useState(1); // default 7D
   const [chartPrices, setChartPrices] = useState<[number, number][]>([]);
   const [chartLoading, setChartLoading] = useState(false);
+  const [chartLoadFailed, setChartLoadFailed] = useState(false);
+  const [chartRevision, setChartRevision] = useState(0);
   const [market, setMarket] = useState<MarketData | null>(null);
   const [txs, setTxs] = useState<TxRecord[]>([]);
   const [txLoading, setTxLoading] = useState(false);
@@ -179,23 +181,49 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
 
   // Chart — cache-first per range; never cache an empty series.
   useEffect(() => {
-    if (!src) return;
+    if (!src) {
+      setChartPrices([]);
+      setChartLoading(false);
+      setChartLoadFailed(false);
+      return;
+    }
     let live = true;
     const days = RANGES[rangeIdx].days;
     (async () => {
       const key = `chartcache2_${marketSourceKey(src)}_${days}`;
       const cached = await readCache<[number, number][]>(key, MARKET_TTL);
       if (!live) return;
-      if (cached) { setChartPrices(cached.value); setChartLoading(false); if (cached.fresh) return; }
-      else setChartLoading(true);
-      const p = await loadChart(src, days);
-      if (!live) return;
-      if (p.length >= 2) { setChartPrices(p); writeCache(key, p); }
-      else if (!cached) setChartPrices([]);
-      setChartLoading(false);
+      setChartLoadFailed(false);
+      if (cached) {
+        setChartPrices(cached.value);
+        setChartLoading(false);
+        if (cached.fresh) return;
+      } else {
+        setChartPrices([]);
+        setChartLoading(true);
+      }
+      try {
+        const p = await loadChart(src, days);
+        if (!live) return;
+        if (p.length >= 2) {
+          setChartPrices(p);
+          setChartLoadFailed(false);
+          writeCache(key, p);
+        } else if (!cached) {
+          setChartPrices([]);
+          setChartLoadFailed(true);
+        }
+      } catch {
+        if (live && !cached) {
+          setChartPrices([]);
+          setChartLoadFailed(true);
+        }
+      } finally {
+        if (live) setChartLoading(false);
+      }
     })();
     return () => { live = false; };
-  }, [src, rangeIdx]);
+  }, [src, rangeIdx, chartRevision]);
 
   // On-chain history for this chain narrowed to THIS asset, merged with the
   // wallet's own logged txs (either side of a swap/bridge counts). Mobile is
@@ -242,7 +270,7 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
       });
       w.refreshAfterTx();
     } catch (e: any) {
-      setUnwrapMsg({ ok: false, text: e?.message || "Unwrap failed. Try again." });
+      setUnwrapMsg({ ok: false, text: safeActionError(e, "The unwrap could not be completed. Try again.") });
     } finally {
       setUnwrapping(false);
     }
@@ -257,15 +285,17 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
       {/* Header: back, the asset itself (icon + name + chain), explorer link.
           The extension identifies the page with the token, not a text title. */}
       <View style={st.header}>
-        <Pressable
+        <Tappable
           onPress={onBack}
           hitSlop={10}
+          feedback="ghost"
+          borderRadius={radius.iconBtn}
           accessibilityRole="button"
           accessibilityLabel="Go back"
-          style={({ pressed }) => [st.headerBtn, pressed && { borderColor: colors.borderLight }]}
+          style={st.headerBtn}
         >
           <ArrowLeftIcon size={15} color={colors.muted} />
-        </Pressable>
+        </Tappable>
         <View style={st.headerAsset}>
           <AssetIcon
             symbol={row.symbol} logo={row.logo} chainId={row.chainId}
@@ -277,15 +307,17 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
           </View>
         </View>
         {explorerBase && (
-          <Pressable
+          <Tappable
             hitSlop={10}
             onPress={() => { Linking.openURL(explorerBase).catch(() => {}); }}
+            feedback="ghost"
+            borderRadius={radius.iconBtn}
             accessibilityRole="link"
             accessibilityLabel="View on block explorer"
-            style={({ pressed }) => [st.headerBtn, pressed && { borderColor: colors.borderLight }]}
+            style={st.headerBtn}
           >
             <ExternalLinkIcon size={14} color={colors.muted} />
-          </Pressable>
+          </Tappable>
         )}
       </View>
 
@@ -331,9 +363,18 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
               <View style={st.chartEmpty}>
                 <Text style={st.chartEmptyText}>
                   {chartLoading ? "Loading chart…"
-                    : market ? "Not enough price history yet for a chart"
-                    : "No chart available for this token"}
+                    : !src ? "Price history is unavailable for this asset"
+                    : chartLoadFailed ? "Chart data couldn’t be loaded"
+                    : "Not enough price history yet for a chart"}
                 </Text>
+                {chartLoadFailed && !chartLoading && (
+                  <Btn
+                    label="Retry chart"
+                    variant="secondary"
+                    onPress={() => setChartRevision((value) => value + 1)}
+                    style={{ marginTop: 10 }}
+                  />
+                )}
               </View>
             )}
           </View>
@@ -378,52 +419,50 @@ export function TokenDetailScreen({ w, row, onBack, onSend, onSwap, onReceive, o
         {/* Actions: Send / Swap / Receive (Swap where core can route it).
             Icon + label, Send carrying the brand gradient. */}
         <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
-          <Pressable
+          <Tappable
             onPress={onSend}
-            style={({ pressed }) => [{ flex: 1 }, pressed && { transform: [{ scale: 0.98 }] }]}
+            feedback="tile"
+            borderRadius={radius.button}
+            style={{ flex: 1 }}
           >
-            <LinearGradient
-              colors={["#b5a8ff", "#7c6df0", "#5b4cdb"]}
-              locations={[0, 0.5, 1]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={st.actionBtn}
-            >
-              <SendIcon size={14} color="#fff" />
+            <View style={[st.actionBtn, st.actionBtnPrimary]}>
+              <SendIcon size={14} color={colors.onBrand} />
               <Text style={st.actionLabelOn}>Send</Text>
-            </LinearGradient>
-          </Pressable>
+            </View>
+          </Tappable>
           {canSwap && (
-            <Pressable
+            <Tappable
               onPress={onSwap}
-              style={({ pressed }) => [st.actionBtn, st.actionBtnSecondary, { flex: 1 }, pressed && { borderColor: colors.brand }]}
+              feedback="tile"
+              borderRadius={radius.button}
+              style={[st.actionBtn, st.actionBtnSecondary, { flex: 1 }]}
             >
               <SwapIcon size={14} color={colors.textPrimary} />
               <Text style={st.actionLabel}>Swap</Text>
-            </Pressable>
+            </Tappable>
           )}
-          <Pressable
+          <Tappable
             onPress={onReceive}
-            style={({ pressed }) => [st.actionBtn, st.actionBtnSecondary, { flex: 1 }, pressed && { borderColor: colors.brand }]}
+            feedback="tile"
+            borderRadius={radius.button}
+            style={[st.actionBtn, st.actionBtnSecondary, { flex: 1 }]}
           >
             <ReceiveIcon size={14} color={colors.textPrimary} />
             <Text style={st.actionLabel}>Receive</Text>
-          </Pressable>
+          </Tappable>
         </View>
 
         {isWsol && (
           <View style={{ marginTop: 12 }}>
-            <Pressable
+            <Tappable
               onPress={() => { void handleUnwrap(); }}
               disabled={unwrapping || row.balanceNum <= 0}
-              style={({ pressed }) => [
-                st.actionBtn, st.actionBtnSecondary,
-                (unwrapping || row.balanceNum <= 0) && { opacity: 0.5 },
-                pressed && { borderColor: colors.brand },
-              ]}
+              feedback="tile"
+              borderRadius={radius.button}
+              style={[st.actionBtn, st.actionBtnSecondary]}
             >
               <Text style={st.actionLabel}>{unwrapping ? "Unwrapping…" : "Unwrap to SOL"}</Text>
-            </Pressable>
+            </Tappable>
             {unwrapMsg && (
               // Was four raw rgba values on a green (#22c55e) that is not in the
               // palette at all, with the message itself painted in the base
@@ -575,6 +614,7 @@ const st = themedStyles((colors) => ({
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7,
     paddingVertical: 10, borderRadius: radius.button,
   },
+  actionBtnPrimary: { backgroundColor: colors.action },
   actionBtnSecondary: {
     backgroundColor: colors.surface2,
     borderWidth: 1, borderColor: colors.border,

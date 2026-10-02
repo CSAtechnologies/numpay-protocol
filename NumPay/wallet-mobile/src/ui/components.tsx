@@ -2,19 +2,18 @@
 // (index.css component classes + AlertCard.tsx). Every mobile screen builds
 // from these so the phone app keeps the extension's visual language; only
 // touch sizing differs where noted.
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Animated, Easing, Pressable, StyleSheet, Text, TextInput, View,
-  type StyleProp, type TextInputProps, type ViewStyle,
+  type StyleProp, type TextInputProps, type ViewStyle, type AccessibilityRole, type AccessibilityState,
 } from "react-native";
 import { NumPayMark, NumPayAnimatedLogo } from "./NumPayLogo";
-import { LinearGradient } from "expo-linear-gradient";
 import Svg, {
-  Defs, RadialGradient as SvgRadialGradient, LinearGradient as SvgLinearGradient,
-  Stop, Ellipse, Text as SvgText,
+  Defs, LinearGradient as SvgLinearGradient, Stop, Text as SvgText,
 } from "react-native-svg";
 import type { SendErrorView } from "@numpay/core/sendErrors";
-import { colors, elevation, getTheme, gradients, motion, press, radius, type as ts, themedStyles } from "./theme";
+import { colors, gradients, motion, press, radius, type as ts, themedStyles } from "./theme";
+import { useReducedMotion } from "./useReducedMotion";
 import { noticeTone, type NoticeToneInput } from "./notice";
 import { AlertIcon, ArrowLeftIcon, CheckIcon } from "./icons";
 
@@ -90,7 +89,8 @@ function splitTileStyle(
 
 export function Tappable({
   children, onPress, onLongPress, disabled, feedback = "row", style,
-  hitSlop, borderRadius, accessibilityLabel, accessibilityRole = "button",
+  hitSlop, borderRadius, accessibilityLabel, accessibilityRole = "button", accessibilityState,
+  dimWhenDisabled = true,
 }: {
   children: ReactNode;
   onPress?: () => void;
@@ -105,12 +105,18 @@ export function Tappable({
    *  anything that actually is rounded (a pill, a tile, a card). */
   borderRadius?: number;
   accessibilityLabel?: string;
-  accessibilityRole?: "button" | "link" | "none";
+  accessibilityRole?: AccessibilityRole;
+  accessibilityState?: AccessibilityState;
+  /** Completed/status rows can be non-interactive without looking unavailable. */
+  dimWhenDisabled?: boolean;
 }) {
+  const reduceMotion = useReducedMotion();
   const a = useRef(new Animated.Value(0)).current;
+  useEffect(() => { if (reduceMotion) { a.stopAnimation(); a.setValue(0); } }, [a, reduceMotion]);
   const scale = a.interpolate({ inputRange: [0, 1], outputRange: [1, press.scale] });
 
   const drive = (to: number) => {
+    if (reduceMotion) return;
     Animated.timing(a, {
       toValue: to, duration: motion.press,
       easing: Easing.out(Easing.quad), useNativeDriver: true,
@@ -132,6 +138,7 @@ export function Tappable({
       hitSlop={hitSlop}
       accessibilityRole={accessibilityRole}
       accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ ...accessibilityState, disabled: !!disabled }}
       onPressIn={feedback === "tile" ? () => drive(1) : undefined}
       onPressOut={feedback === "tile" ? () => drive(0) : undefined}
       // Ripple is Android's own press language and costs nothing on iOS, where
@@ -144,7 +151,7 @@ export function Tappable({
       style={({ pressed }) => [
         feedback !== "tile" && borderRadius != null && { borderRadius },
         innerStyle,
-        disabled && { opacity: 0.4 },
+        disabled && dimWhenDisabled && { opacity: 0.4 },
         pressed && !disabled && tint ? { backgroundColor: tint } : null,
       ]}
     >
@@ -181,9 +188,12 @@ export function Btn({
   // version jumps to 0.98 and back in one frame each way, which registers as a
   // flicker; easing it over motion.press makes the button feel depressed and
   // then released. Native driver, so it holds 60fps while JS is busy signing.
+  const reduceMotion = useReducedMotion();
   const a = useRef(new Animated.Value(0)).current;
+  useEffect(() => { if (reduceMotion) { a.stopAnimation(); a.setValue(0); } }, [a, reduceMotion]);
   const scale = a.interpolate({ inputRange: [0, 1], outputRange: [1, press.scale] });
   const drive = (to: number) => {
+    if (reduceMotion) return;
     Animated.timing(a, {
       toValue: to, duration: motion.press,
       easing: Easing.out(Easing.quad), useNativeDriver: true,
@@ -196,30 +206,17 @@ export function Btn({
     onPressOut: () => drive(0),
     accessibilityRole: "button" as const,
     accessibilityLabel: label,
+    accessibilityState: { disabled: !!disabled },
   };
 
   if (variant === "primary") {
-    // .btn-primary-premium: vertical brand gradient, hairline top light,
-    // brand glow. Gradient lives inside the pressable so radius clips it.
     return (
-      // The default top margin lives on this wrapper, NOT on the inner fill, so
-      // a caller passing `marginTop` overrides it instead of stacking on top of
-      // it. (It used to sit on the same node as the caller's style, where the
-      // caller's value simply won.)
       <Animated.View style={[{ marginTop: 12, transform: [{ scale }] }, style]}>
         <Pressable
           {...pressProps}
-          style={[st.btnPremiumShell, disabled && { opacity: 0.4 }]}
+          style={[st.btn, st.btnPrimary, disabled && { opacity: 0.4 }]}
         >
-          <LinearGradient
-            colors={gradients.brand}
-            locations={gradients.brandLocations}
-            start={{ x: 0.5, y: 0 }}
-            end={{ x: 0.5, y: 1 }}
-            style={st.btnPremiumFill}
-          >
-            <Text style={st.btnText}>{label}</Text>
-          </LinearGradient>
+          <Text style={st.btnText}>{label}</Text>
         </Pressable>
       </Animated.View>
     );
@@ -259,41 +256,14 @@ export function LogoMark({ size = 28 }: { size?: number }) {
  * pulse rings behind the mark that draws itself in on mount (NumPayAnimatedLogo).
  */
 export function AnimatedLogo({ size = 88 }: { size?: number }) {
-  const pulse = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1, duration: 2600,
-          easing: Easing.inOut(Easing.ease), useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 0, duration: 2600,
-          easing: Easing.inOut(Easing.ease), useNativeDriver: true,
-        }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [pulse]);
-
-  const ring = size * 1.6;
+  const ring = size * 1.35;
   return (
     <View style={{ width: ring, height: ring, alignItems: "center", justifyContent: "center" }}>
-      <Animated.View
+      <View
         style={{
           position: "absolute",
           width: ring, height: ring, borderRadius: ring / 2,
           backgroundColor: colors.brandTint,
-          opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0.05] }),
-          transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1.05] }) }],
-        }}
-      />
-      <View
-        style={{
-          position: "absolute",
-          width: size * 1.28, height: size * 1.28, borderRadius: (size * 1.28) / 2,
-          borderWidth: 1, borderColor: "rgba(124, 109, 240, 0.3)",
         }}
       />
       <NumPayAnimatedLogo size={size} />
@@ -303,58 +273,79 @@ export function AnimatedLogo({ size = 88 }: { size?: number }) {
 
 // ── Ambient wash (body::before): two soft radial blobs behind everything ─────
 export function AmbientBackground() {
-  return (
-    <Svg
-      pointerEvents="none"
-      style={StyleSheet.absoluteFill}
-      width="100%"
-      height="100%"
-    >
-      <Defs>
-        {/* stopOpacity ramps, not "transparent" color stops: react-native-svg
-            renders the latter with a visible hard edge (seen on-device). */}
-        <SvgRadialGradient id="ambA" cx="50%" cy="50%" r="50%">
-          <Stop offset="0%" stopColor={gradients.ambientA.color} stopOpacity={gradients.ambientA.opacity} />
-          <Stop offset="60%" stopColor={gradients.ambientA.color} stopOpacity={gradients.ambientA.opacity * 0.36} />
-          <Stop offset="100%" stopColor={gradients.ambientA.color} stopOpacity={0} />
-        </SvgRadialGradient>
-        <SvgRadialGradient id="ambB" cx="50%" cy="50%" r="50%">
-          <Stop offset="0%" stopColor={gradients.ambientB.color} stopOpacity={gradients.ambientB.opacity} />
-          <Stop offset="100%" stopColor={gradients.ambientB.color} stopOpacity={0} />
-        </SvgRadialGradient>
-      </Defs>
-      <Ellipse cx="12%" cy="-2%" rx="300" ry="170" fill="url(#ambA)" />
-      <Ellipse cx="100%" cy="16%" rx="230" ry="150" fill="url(#ambB)" />
-    </Svg>
-  );
+  return null;
 }
 
 // ── Gradient numerals (.m-number): white->lilac vertical text gradient ───────
 export function GradientNumber({
   text, size = 26,
 }: { text: string; size?: number }) {
+  const reduceMotion = useReducedMotion();
+  const [shown, setShown] = useState(text);
+  const shownRef = useRef(text);
+  const a = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (shownRef.current === text) return;
+    if (reduceMotion) {
+      shownRef.current = text;
+      setShown(text);
+      a.setValue(1);
+      return;
+    }
+    a.stopAnimation();
+    Animated.timing(a, {
+      toValue: 0,
+      duration: motion.exit,
+      easing: Easing.in(Easing.quad),
+      useNativeDriver: true,
+    }).start(() => {
+      shownRef.current = text;
+      setShown(text);
+      a.setValue(0);
+      Animated.timing(a, {
+        toValue: 1,
+        duration: motion.screen,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    });
+    return () => a.stopAnimation();
+  }, [a, reduceMotion, text]);
+
   // Monospace digits: ~0.62em advance is enough width for the svg canvas.
-  const width = Math.ceil(text.length * size * 0.62) + 4;
+  const width = Math.ceil(shown.length * size * 0.62) + 4;
   const height = Math.ceil(size * 1.25);
   return (
-    <Svg width={width} height={height}>
-      <Defs>
-        <SvgLinearGradient id="numGrad" x1="0" y1="0" x2="0" y2="1">
-          <Stop offset="0%" stopColor={gradients.number[0]} />
-          <Stop offset="100%" stopColor={gradients.number[1]} />
-        </SvgLinearGradient>
-      </Defs>
-      <SvgText
-        x={0}
-        y={size}
-        fill="url(#numGrad)"
-        fontSize={size}
-        fontWeight="700"
-        fontFamily="monospace"
-      >
-        {text}
-      </SvgText>
-    </Svg>
+    <Animated.View
+      accessible
+      accessibilityLabel={shown}
+      style={{
+        opacity: a,
+        transform: [{
+          translateY: a.interpolate({ inputRange: [0, 1], outputRange: [4, 0] }),
+        }],
+      }}
+    >
+      <Svg width={width} height={height} accessible={false}>
+        <Defs>
+          <SvgLinearGradient id="numGrad" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0%" stopColor={gradients.number[0]} />
+            <Stop offset="100%" stopColor={gradients.number[1]} />
+          </SvgLinearGradient>
+        </Defs>
+        <SvgText
+          x={0}
+          y={size}
+          fill="url(#numGrad)"
+          fontSize={size}
+          fontWeight="700"
+          fontFamily="monospace"
+        >
+          {shown}
+        </SvgText>
+      </Svg>
+    </Animated.View>
   );
 }
 
@@ -491,14 +482,7 @@ export function ScreenHeader({ title, subtitle, onBack, right }: {
         <Text style={st.headerTitle} numberOfLines={1}>{title}</Text>
       )}
       {right != null && <View style={{ marginLeft: "auto" }}>{right}</View>}
-      <View style={st.headerRule} pointerEvents="none">
-        <LinearGradient
-          colors={["rgba(139,92,246,0)", "rgba(139,92,246,0.2)", "rgba(139,92,246,0)"]}
-          start={{ x: 0, y: 0.5 }}
-          end={{ x: 1, y: 0.5 }}
-          style={{ flex: 1 }}
-        />
-      </View>
+      <View style={st.headerRule} pointerEvents="none" />
     </View>
   );
 }
@@ -523,43 +507,15 @@ export function IconBtn({ children, onPress, label }: {
   );
 }
 
-// ── Hero section (.hero-section) ─────────────────────────────────────────────
-// The dashboard's gradient header block: a wide brand wash from the top centre,
-// a second cooler wash from the upper left, over a vertical ramp that settles
-// into the page background. Radials are SVG (RN gradients are linear only), and
-// the ramp is a LinearGradient underneath them.
+// ── Hero section ─────────────────────────────────────────────────────────────
+// A neutral dashboard surface. Brand colour is reserved for identity and the
+// committed action instead of washing the whole top half of the screen.
 export function HeroSection({ children, style }: {
   children: ReactNode;
-  /** Callers bleed this past the screen's horizontal padding with negative
-   *  margins, so the wash reaches the edges the way the popup's does. */
   style?: StyleProp<ViewStyle>;
 }) {
-  const light = getTheme() === "light";
   return (
-    <View style={[{ position: "relative" }, style]}>
-      <View style={StyleSheet.absoluteFill} pointerEvents="none">
-        <LinearGradient
-          colors={light
-            ? ["#ede9ff", "#f4f2ff", colors.bg]
-            : ["#13102a", "#0d0b1e", colors.bg]}
-          locations={[0, 0.55, 1]}
-          style={StyleSheet.absoluteFill}
-        />
-        <Svg style={StyleSheet.absoluteFill} width="100%" height="100%">
-          <Defs>
-            <SvgRadialGradient id="heroA" cx="50%" cy="50%" r="50%">
-              <Stop offset="0%" stopColor="#7c6df0" stopOpacity={light ? 0.16 : 0.32} />
-              <Stop offset="55%" stopColor="#7c6df0" stopOpacity={0} />
-            </SvgRadialGradient>
-            <SvgRadialGradient id="heroB" cx="50%" cy="50%" r="50%">
-              <Stop offset="0%" stopColor="#5b4cdb" stopOpacity={light ? 0.08 : 0.2} />
-              <Stop offset="50%" stopColor="#5b4cdb" stopOpacity={0} />
-            </SvgRadialGradient>
-          </Defs>
-          <Ellipse cx="50%" cy="-5%" rx="260" ry="180" fill="url(#heroA)" />
-          <Ellipse cx="5%" cy="15%" rx="140" ry="110" fill="url(#heroB)" />
-        </Svg>
-      </View>
+    <View style={[st.hero, style]}>
       {children}
     </View>
   );
@@ -574,8 +530,11 @@ export function SkeletonBlock({ width, height, radius: r = 4, style }: {
   radius?: number;
   style?: StyleProp<ViewStyle>;
 }) {
+  const reduceMotion = useReducedMotion();
   const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
+    pulse.setValue(0);
+    if (reduceMotion) return;
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
@@ -584,9 +543,10 @@ export function SkeletonBlock({ width, height, radius: r = 4, style }: {
     );
     loop.start();
     return () => loop.stop();
-  }, [pulse]);
+  }, [pulse, reduceMotion]);
   return (
     <Animated.View
+      accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
       style={[
         { width, height, borderRadius: r, backgroundColor: colors.surface3 },
         { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.85, 0.35] }) },
@@ -735,24 +695,9 @@ export function SendErrorCard({ view, style }: { view: SendErrorView; style?: St
 }
 
 const st = themedStyles((colors) => ({
-  btnPremiumShell: {
-    width: "100%",
-    borderRadius: radius.button,
-    borderWidth: 1,
-    borderColor: colors.overlayBorder,
-    overflow: "hidden",
-    ...elevation.brand,
-  },
-  btnPremiumFill: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    paddingVertical: 13,
-    paddingHorizontal: 24,
-  },
   btn: {
     width: "100%",
+    minHeight: 50,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -762,6 +707,7 @@ const st = themedStyles((colors) => ({
     borderRadius: radius.button,
     backgroundColor: colors.brand,
   },
+  btnPrimary: { backgroundColor: colors.action },
   btnSecondary: {
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -836,15 +782,12 @@ const st = themedStyles((colors) => ({
 
   card: {
     backgroundColor: colors.card,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
     borderRadius: radius.card,
-    // The popup gave cards a hairline and nothing else, because inside a
-    // browser panel there is no depth to express: the panel IS the top layer.
-    // On a phone that left every card reading as a rectangle drawn onto the
-    // page. A soft resting shadow is what makes it read as a surface instead.
-    ...elevation.card,
   },
+
+  hero: { position: "relative", backgroundColor: colors.bg },
 
   sectionLabel: {
     fontSize: ts.label,
@@ -857,14 +800,14 @@ const st = themedStyles((colors) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    height: 50,
+    minHeight: 55,
     marginBottom: 6,
     position: "relative",
   },
   headerTitle: {
     color: colors.textPrimary,
-    fontSize: 15,
-    fontWeight: "600",
+    fontSize: ts.h2,
+    fontWeight: "700",
     letterSpacing: -0.2,
     flexShrink: 1,
   },
@@ -873,8 +816,7 @@ const st = themedStyles((colors) => ({
     fontSize: 10,
     marginTop: 1,
   },
-  // The gradient separator under Layout's header bar.
-  headerRule: { position: "absolute", left: 0, right: 0, bottom: 0, height: 1 },
+  headerRule: { display: "none" },
   // Ghost back button: no fill or border until pressed (Layout's hover state).
   ghostBtn: {
     width: 32, height: 32,
@@ -912,20 +854,22 @@ const st = themedStyles((colors) => ({
   },
 
   notice: {
-    borderRadius: radius.card,
-    borderWidth: 1,
-    padding: 14,
+    borderRadius: radius.tile,
+    borderWidth: 0,
+    borderLeftWidth: 3,
+    paddingVertical: 13,
+    paddingHorizontal: 14,
   },
   // The tile reads against the panel's own tint, so it carries only a hairline
   // rather than a second, heavier fill of the same hue.
   noticeIcon: {
-    width: 32, height: 32, borderRadius: 11,
-    borderWidth: 1,
+    width: 30, height: 30, borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
     alignItems: "center", justifyContent: "center", flexShrink: 0,
     backgroundColor: colors.card,
   },
-  noticeTitle: { fontSize: 13, fontWeight: "700", marginBottom: 3, letterSpacing: -0.1 },
-  noticeBody: { color: colors.textSecondary, fontSize: 11.5, lineHeight: 17 },
+  noticeTitle: { fontSize: 13, fontWeight: "700", marginBottom: 4, letterSpacing: -0.1 },
+  noticeBody: { color: colors.textSecondary, fontSize: 12.5, lineHeight: 18 },
 
   figureTile: {
     flex: 1, borderRadius: radius.tile,
@@ -933,11 +877,8 @@ const st = themedStyles((colors) => ({
   },
   hintBox: {
     marginTop: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: radius.tile,
-    backgroundColor: colors.card,
-    borderWidth: 1,
+    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
   safeRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 12 },
   safeText: { color: colors.successText, fontSize: 10.5, fontWeight: "600" },

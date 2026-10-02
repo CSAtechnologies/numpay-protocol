@@ -5,17 +5,17 @@
 // QR stays pure-JS (qrcode-generator); copy is expo-clipboard (native module,
 // ships with the same rebuild cycle as the other expo modules).
 import { useMemo, useState } from "react";
-import { Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
+import { ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import qrcode from "qrcode-generator";
 import { copyEphemeral } from "../platform/clipboard";
-import { LinearGradient } from "expo-linear-gradient";
 import { NETWORKS } from "@numpay/core/networks";
 import type { NonEvmAddressMap } from "@numpay/core/chains";
-import { colors, gradients, radius, type as ts, themedStyles } from "../ui/theme";
+import { colors, radius, type as ts, themedStyles } from "../ui/theme";
 import { Btn, Card, Field, ScreenHeader, Tappable } from "../ui/components";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon } from "../ui/icons";
 import { NumPayMark } from "../ui/NumPayLogo";
 import { ChainIcon } from "../ui/coins";
+import { PayModeSwitch } from "../ui/PayModeSwitch";
 
 export interface ReceiveAddrs { evm: string; nonEvm: NonEvmAddressMap | null }
 
@@ -90,7 +90,7 @@ function QrView({ value }: { value: string }) {
   );
 }
 
-export function ReceiveScreen({ addrs, initialChainId, onBack }: {
+export function ReceiveScreen({ addrs, initialChainId, onBack, onSend }: {
   addrs: ReceiveAddrs;
   /**
    * Chain to open on, when Receive was reached from something that already
@@ -105,6 +105,7 @@ export function ReceiveScreen({ addrs, initialChainId, onBack }: {
    */
   initialChainId?: string;
   onBack: () => void;
+  onSend: () => void;
 }) {
   const [selId, setSelId] = useState(
     initialChainId && ALL_CHAINS.some((c) => c.id === initialChainId)
@@ -138,8 +139,9 @@ export function ReceiveScreen({ addrs, initialChainId, onBack }: {
 
   return (
     <View style={{ flex: 1 }}>
-      <ScreenHeader title="Receive" onBack={onBack} />
+      <ScreenHeader title="Pay" onBack={onBack} />
       <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        <PayModeSwitch mode="receive" onSend={onSend} onReceive={() => {}} />
         <Text style={st.subLine}>
           Receive <Text style={{ color: colors.textPrimary, fontWeight: "600" }}>{sel.symbol} on {sel.name}</Text>
         </Text>
@@ -197,9 +199,12 @@ export function ReceiveScreen({ addrs, initialChainId, onBack }: {
 
         {/* Copy: brand-gradient by default, flipping to a green-tinted
             outline with a check on success — the extension's two states. */}
-        <Pressable
+        <Tappable
           onPress={() => { void handleCopy(); }}
-          style={({ pressed }) => [st.copyShell, pressed && { transform: [{ scale: 0.98 }] }]}
+          feedback="tile"
+          borderRadius={radius.card}
+          style={st.copyShell}
+          accessibilityLabel="Copy address"
         >
           {copied ? (
             <View style={[st.copyFill, st.copyFillDone]}>
@@ -207,18 +212,12 @@ export function ReceiveScreen({ addrs, initialChainId, onBack }: {
               <Text style={[st.copyText, { color: colors.successText }]}>Copied!</Text>
             </View>
           ) : (
-            <LinearGradient
-              colors={gradients.brand}
-              locations={gradients.brandLocations}
-              start={{ x: 0.5, y: 0 }}
-              end={{ x: 0.5, y: 1 }}
-              style={st.copyFill}
-            >
+            <View style={[st.copyFill, st.copyFillReady]}>
               <CopyIcon size={16} color={colors.onBrand} />
               <Text style={[st.copyText, { color: colors.onBrand }]}>Copy Address</Text>
-            </LinearGradient>
+            </View>
           )}
-        </Pressable>
+        </Tappable>
         {/* Android-only: hands the address to the system share sheet. */}
         <Btn
           label="Share address"
@@ -249,6 +248,7 @@ const st = themedStyles((colors) => ({
   copyFillDone: {
     backgroundColor: colors.successTint,
   },
+  copyFillReady: { backgroundColor: colors.action },
   copyText: { fontSize: ts.body, fontWeight: "600" },
 
   chainRow: {

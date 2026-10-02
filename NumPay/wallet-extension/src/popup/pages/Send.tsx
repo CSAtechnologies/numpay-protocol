@@ -86,7 +86,7 @@ function nativeFeeReserve(chainId: string): number {
 // Send flow renders the same titled failure states with the same copy.
 function SendErrorCard({ message }: { message: string }) {
   const e = parseSendError(message);
-  return <AlertCard title={e.title} body={e.body} hint={e.hint} tone={e.tone} safe={e.safe} className="mb-3" />;
+  return <AlertCard title={e.title} body={e.body} hint={e.hint} tone={e.tone} className="mb-3" />;
 }
 
 // Rollups whose posted L2 gas price does NOT include the L1 data fee charged at
@@ -424,13 +424,13 @@ export default function Send() {
             setBpanChangeAck(false);
           }
         } else if (res.pendingFinality) {
-          // The mapping exists at the chain head but has not crossed Ethereum
-          // finality yet (~15 min). Payment destinations only ever resolve
+          // The mapping exists at the chain head but has not crossed Base
+          // finality yet. Payment destinations only ever resolve
           // from finalized state, so name the real situation instead of
           // telling the user to add a mapping they just added.
           setError(
-            `The ${chainInfo.name} mapping for BPAN ${formatBPAN(clean)} was added recently and is ` +
-            `waiting for network confirmation. This takes about 15 minutes. Try again shortly.`
+            `BPAN ${formatBPAN(clean)} is mapped to ${chainInfo.name}, but the change is still ` +
+            `waiting for network confirmation. Payments stay disabled until it finalizes. Try again in a few minutes.`
           );
         } else {
           setError(

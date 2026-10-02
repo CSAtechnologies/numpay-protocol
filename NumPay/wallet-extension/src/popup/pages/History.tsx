@@ -3,6 +3,7 @@ import { useWallet } from "../hooks/useWallet";
 import Layout from "../components/Layout";
 import { ExternalLinkIcon, RefreshIcon, ActivityIcon } from "../components/Icons";
 import TxRow from "../components/TxRow";
+import { InlineNotice } from "../components/AlertCard";
 import { NETWORKS } from "@numpay/core/networks";
 import {
   type TxRecord,
@@ -203,11 +204,7 @@ export default function History() {
           )}
 
           {/* Action error */}
-          {actionError && (
-            <div className="mt-2 px-3 py-2 rounded-xl bg-accent-red/5 border border-accent-red/15">
-              <p className="text-accent-red text-[11px] leading-relaxed">{actionError}</p>
-            </div>
-          )}
+          {actionError && <InlineNotice message={actionError} className="mt-2" />}
 
           {/* Transaction list */}
           {!loading && txs.length > 0 && (

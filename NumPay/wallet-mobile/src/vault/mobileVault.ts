@@ -471,14 +471,44 @@ export interface WalletMeta {
   evmAddress?: string;
 }
 
+/**
+ * Non-secret identity needed to paint the first authenticated frame. Reading
+ * this takes one pass over the RAM-only session and deliberately avoids the
+ * biometric/SecureStore status checks used by getStatus().
+ */
+export interface UnlockedBootstrap {
+  activeWalletId: string;
+  activeWallet: WalletMeta;
+}
+
+function walletMeta(entry: WalletEntry, activeId: string): WalletMeta {
+  return {
+    id: entry.id,
+    name: entry.name,
+    active: entry.id === activeId,
+    createdAt: entry.createdAt,
+    avatar: entry.avatar,
+    evmAddress: entry.evmAddress,
+  };
+}
+
+export async function getUnlockedBootstrap(): Promise<UnlockedBootstrap | null> {
+  const u = await readSession();
+  if (!u) return null;
+  const entry = u.payload.wallets.find((wallet) => wallet.id === u.payload.activeId)
+    ?? u.payload.wallets[0];
+  if (!entry) return null;
+  return {
+    activeWalletId: entry.id,
+    activeWallet: walletMeta(entry, entry.id),
+  };
+}
+
 /** The wallets in the vault (metadata only; no mnemonics), or [] when locked. */
 export async function listWallets(): Promise<WalletMeta[]> {
   const u = await readSession();
   if (!u) return [];
-  return u.payload.wallets.map((w) => ({
-    id: w.id, name: w.name, active: w.id === u.payload.activeId, createdAt: w.createdAt,
-    avatar: w.avatar, evmAddress: w.evmAddress,
-  }));
+  return u.payload.wallets.map((wallet) => walletMeta(wallet, u.payload.activeId));
 }
 
 /** Set (or clear, with "") the active-list emoji avatar for a wallet. */

@@ -51,11 +51,16 @@ export function PinPad({
   onBiometrics?: () => void;
 }) {
   const [pin, setPin] = useState("");
+  // Press events can arrive faster than React commits a render (especially
+  // while the JS thread is deriving wallet state). A ref is the authoritative
+  // sequence so two quick taps never append to the same stale `pin` value.
+  const pinRef = useRef("");
   const shakeX = useRef(new Animated.Value(0)).current;
 
   // Clear + shudder whenever the caller bumps shakeToken.
   useEffect(() => {
     if (shakeToken === 0) return;
+    pinRef.current = "";
     setPin("");
     onChangeLength?.(0);
     Animated.sequence([
@@ -67,8 +72,9 @@ export function PinPad({
   }, [shakeToken]);
 
   function press(digit: string) {
-    if (disabled || pin.length >= PIN_LENGTH) return;
-    const next = pin + digit;
+    if (disabled || pinRef.current.length >= PIN_LENGTH) return;
+    const next = pinRef.current + digit;
+    pinRef.current = next;
     setPin(next);
     onChangeLength?.(next.length);
     if (next.length === PIN_LENGTH) {
@@ -77,8 +83,9 @@ export function PinPad({
     }
   }
   function backspace() {
-    if (disabled || pin.length === 0) return;
-    const next = pin.slice(0, -1);
+    if (disabled || pinRef.current.length === 0) return;
+    const next = pinRef.current.slice(0, -1);
+    pinRef.current = next;
     setPin(next);
     onChangeLength?.(next.length);
   }

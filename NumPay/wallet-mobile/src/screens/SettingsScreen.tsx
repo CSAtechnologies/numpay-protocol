@@ -3,7 +3,7 @@
 // remove, add), Security (lock, reveal recovery phrase), Connections (dApps),
 // and the danger zone. The version row is the hidden developer-tools entry.
 import { useCallback, useEffect, useState } from "react";
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import {
   listWallets, renameWallet, removeWallet, getActiveMnemonic, setWalletAvatar,
   isWipeOnFailEnabled, setWipeOnFail, WIPE_AFTER_ATTEMPTS,
@@ -11,7 +11,7 @@ import {
 } from "../vault/mobileVault";
 import { CURRENCIES } from "@numpay/core/currency";
 import {
-  colors, type as ts, themedStyles, useThemeState, type ThemePref,
+  colors, radius, type as ts, themedStyles, useThemeState, type ThemePref,
 } from "../ui/theme";
 import {
   clearIfUnchanged, copyEphemeral, SECRET_CLIPBOARD_TTL_MS, ttlSeconds,
@@ -108,10 +108,10 @@ function Row({ label, hint, onPress, danger, right, icon, control }: {
   control?: React.ReactNode;
 }) {
   return (
-    <Pressable
+    <Tappable
       onPress={onPress}
-      disabled={!onPress}
-      style={({ pressed }) => [st.row, pressed && onPress && { opacity: 0.7 }]}
+      feedback={onPress ? "row" : "none"}
+      style={st.row}
     >
       {icon && <View style={st.rowIcon}>{icon}</View>}
       <View style={{ flex: 1 }}>
@@ -121,7 +121,7 @@ function Row({ label, hint, onPress, danger, right, icon, control }: {
       {!!right && <Text style={st.rowRight}>{right}</Text>}
       {control}
       {onPress && !control && <ChevronRightIcon size={14} color={colors.muted2} />}
-    </Pressable>
+    </Tappable>
   );
 }
 
@@ -235,7 +235,7 @@ export function SettingsScreen({
       <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
         {/* ── Accounts (multi-wallet) ── */}
         <SectionLabel text="Accounts" style={{ marginTop: 6, marginBottom: 6 } as object} />
-        <Card>
+        <Card style={st.listGroup}>
           {wallets.map((m, i) => (
             <View key={m.id} style={[st.walletRow, i > 0 && st.walletDivider]}>
               {renaming === m.id ? (
@@ -300,7 +300,7 @@ export function SettingsScreen({
 
         {/* ── Security ── */}
         <SectionLabel text="Security" style={{ marginTop: 18, marginBottom: 6 } as object} />
-        <Card>
+        <Card style={st.listGroup}>
           <Row
             label="Lock wallet"
             hint="Requires your PIN or biometrics to reopen"
@@ -389,9 +389,11 @@ export function SettingsScreen({
                     <View style={st.countdownDot} />
                     <Text style={st.countdownText}>Hides in {revealLeft}s</Text>
                   </View>
-                  <Pressable
+                  <Tappable
                     hitSlop={8}
-                    style={({ pressed }) => [st.copyBtn, pressed && { opacity: 0.6 }]}
+                    feedback="ghost"
+                    borderRadius={radius.pill}
+                    style={st.copyBtn}
                     onPress={() => {
                       void copyEphemeral(revealed, SECRET_CLIPBOARD_TTL_MS);
                       toast.warn(
@@ -402,7 +404,7 @@ export function SettingsScreen({
                   >
                     <CopyIcon size={13} color={colors.muted} />
                     <Text style={st.copyText}>Copy</Text>
-                  </Pressable>
+                  </Tappable>
                 </View>
               }
             />
@@ -412,7 +414,7 @@ export function SettingsScreen({
 
         {/* ── Connections ── */}
         <SectionLabel text="Connections" style={{ marginTop: 18, marginBottom: 6 } as object} />
-        <Card>
+        <Card style={st.listGroup}>
           <Row
             label="Connected dApps"
             hint="WalletConnect sessions and pairing"
@@ -423,7 +425,7 @@ export function SettingsScreen({
 
         {/* ── Preferences ── */}
         <SectionLabel text="Preferences" style={{ marginTop: 18, marginBottom: 6 } as object} />
-        <Card>
+        <Card style={st.listGroup}>
           <Row
             label="Manage assets"
             hint="Add custom tokens and EVM networks"
@@ -432,9 +434,10 @@ export function SettingsScreen({
           />
           <View style={st.hairline} />
           {/* Display currency: the flag is an IMAGE, not an emoji (see flagUrl). */}
-          <Pressable
+          <Tappable
             onPress={() => { setShowCurrency((v) => !v); setCurrencySearch(""); }}
-            style={({ pressed }) => [st.row, pressed && { opacity: 0.7 }]}
+            feedback="row"
+            style={st.row}
           >
             <View style={st.rowIcon}>
               <GlobeIcon size={15} color={colors.muted} />
@@ -450,14 +453,15 @@ export function SettingsScreen({
             {showCurrency
               ? <ChevronUpIcon size={14} color={colors.muted2} />
               : <ChevronDownIcon size={14} color={colors.muted2} />}
-          </Pressable>
+          </Tappable>
           <View style={st.hairline} />
           {/* Theme. Same disclosure shape as the currency row above: the picker
               opens as its own card rather than a sheet, so the choice and the
               screen it repaints are visible at the same time. */}
-          <Pressable
+          <Tappable
             onPress={() => setShowTheme((v) => !v)}
-            style={({ pressed }) => [st.row, pressed && { opacity: 0.7 }]}
+            feedback="row"
+            style={st.row}
           >
             <View style={st.rowIcon}>
               {theme.theme === "dark"
@@ -472,18 +476,17 @@ export function SettingsScreen({
             {showTheme
               ? <ChevronUpIcon size={14} color={colors.muted2} />
               : <ChevronDownIcon size={14} color={colors.muted2} />}
-          </Pressable>
+          </Tappable>
         </Card>
         {showTheme && (
           <Card style={{ marginTop: 8 }}>
             {THEME_OPTIONS.map(({ pref, Icon, tint }, i) => {
               const on = theme.pref === pref;
               return (
-                <Pressable
+                <Tappable
                   key={pref}
-                  style={({ pressed }) => [
-                    st.row, i > 0 && st.themeRowDivider, pressed && { opacity: 0.7 },
-                  ]}
+                  feedback="row"
+                  style={[st.row, i > 0 && st.themeRowDivider]}
                   onPress={() => { theme.setPref(pref); setShowTheme(false); }}
                   accessibilityRole="radio"
                   accessibilityState={{ selected: on }}
@@ -498,7 +501,7 @@ export function SettingsScreen({
                     <Text style={st.rowHint}>{THEME_HINT[pref]}</Text>
                   </View>
                   {on && <CheckIcon size={14} color={colors.brand2} />}
-                </Pressable>
+                </Tappable>
               );
             })}
           </Card>
@@ -642,6 +645,13 @@ export function SettingsScreen({
 }
 
 const st = themedStyles((colors) => ({
+  listGroup: {
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.divider,
+    borderRadius: 0,
+  },
   row: {
     flexDirection: "row",
     alignItems: "center",

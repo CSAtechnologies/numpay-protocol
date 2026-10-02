@@ -23,6 +23,7 @@ import {
   subscribeSessionsChanged,
   type SessionInfo,
 } from "../walletconnect/sessions";
+import { safeActionError } from "../ui/errors";
 
 export function WalletConnectScreen({ onBack }: { onBack: () => void }) {
   const configured = hasProjectId();
@@ -57,7 +58,7 @@ export function WalletConnectScreen({ onBack }: { onBack: () => void }) {
       await pair(trimmed);
       setUri("");
     } catch (e) {
-      setError(`Could not connect: ${String((e as Error)?.message ?? e)}`);
+      setError(safeActionError(e, "The connection request could not be completed. Check the site and try again."));
     } finally {
       setBusy(false);
     }

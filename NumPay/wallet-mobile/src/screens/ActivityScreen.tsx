@@ -152,6 +152,7 @@ export function TxRow({ tx, showChain = true, size = 36 }: {
 export function ActivityScreen({ owner, onBack }: { owner: string; onBack: () => void }) {
   const [records, setRecords] = useState<TxRecord[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [filter, setFilter] = useState<"all" | "send" | "receive">("all");
 
   const load = useCallback(async () => {
     if (!owner) { setRecords([]); return; }
@@ -167,17 +168,14 @@ export function ActivityScreen({ owner, onBack }: { owner: string; onBack: () =>
 
   useEffect(() => { void load(); }, [load]);
 
+  const visibleRecords = records?.filter((tx) => filter === "all" || kindOf(tx) === filter) ?? null;
+
   return (
     <View style={{ flex: 1 }}>
-      <ScreenHeader title="Activity" onBack={onBack} />
-
-      {/* Scope + refresh bar (ext parity). Mobile's log is not chain-scoped, so
-          the label is always "All Assets" rather than an active-chain name. */}
-      <View style={st.scopeBar}>
-        <View style={st.chipRow}>
-          <View style={st.scopeDot} />
-          <Text style={st.scopeText}>All Assets</Text>
-        </View>
+      <ScreenHeader
+        title="Activity"
+        onBack={onBack}
+        right={(
         <Tappable feedback="row"
           hitSlop={8}
           disabled={refreshing}
@@ -185,8 +183,31 @@ export function ActivityScreen({ owner, onBack }: { owner: string; onBack: () =>
           style={[st.scopeBtn, refreshing && { opacity: 0.4 }]}
           accessibilityLabel="Refresh activity"
         >
-          <RefreshIcon size={13} color={colors.muted} />
+          <RefreshIcon size={17} color={colors.muted} />
         </Tappable>
+        )}
+      />
+
+      <View style={st.filters} accessibilityRole="tablist">
+        {([
+          ["all", "All"],
+          ["send", "Sent"],
+          ["receive", "Received"],
+        ] as const).map(([id, label]) => {
+          const active = filter === id;
+          return (
+            <Tappable
+              key={id}
+              feedback="row"
+              style={[st.filter, active && st.filterOn]}
+              onPress={() => setFilter(id)}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: active }}
+            >
+              <Text style={[st.filterText, active && st.filterTextOn]}>{label}</Text>
+            </Tappable>
+          );
+        })}
       </View>
 
       <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
@@ -195,14 +216,16 @@ export function ActivityScreen({ owner, onBack }: { owner: string; onBack: () =>
             <SkeletonRow /><SkeletonRow /><SkeletonRow /><SkeletonRow /><SkeletonRow />
           </>
         )}
-        {records !== null && records.length === 0 && (
+        {visibleRecords !== null && visibleRecords.length === 0 && (
           <EmptyState
             icon={<ActivityIcon size={20} color={colors.muted} />}
-            title="No transactions found"
-            hint="Transactions you send from NumPay on this phone show up here instantly."
+            title={filter === "all" ? "No activity yet" : filter === "send" ? "No sent payments" : "No received payments"}
+            hint={filter === "all"
+              ? "Payments, swaps, and bridges will appear here after you use the wallet."
+              : "Choose All to see the rest of your wallet activity."}
           />
         )}
-        {records?.map((tx) => (
+        {visibleRecords?.map((tx) => (
           <TxRow key={`${tx.chainId}-${tx.hash}`} tx={tx} />
         ))}
         <View style={{ height: 24 }} />
@@ -239,12 +262,13 @@ const st = themedStyles((colors) => ({
     fontVariant: ["tabular-nums"], maxWidth: 140, textAlign: "right",
   },
 
-  scopeBar: {
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    paddingTop: 4, paddingBottom: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.divider,
+  filters: { flexDirection: "row", gap: 6, marginBottom: 8 },
+  filter: {
+    minHeight: 44, paddingHorizontal: 14, alignItems: "center", justifyContent: "center",
+    borderRadius: radius.pill,
   },
-  scopeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.brand2 },
-  scopeText: { color: colors.muted, fontSize: 11, fontWeight: "500" },
-  scopeBtn: { padding: 6, borderRadius: radius.iconBtn },
+  filterOn: { backgroundColor: colors.brandTint },
+  filterText: { color: colors.muted, fontSize: ts.small, fontWeight: "600" },
+  filterTextOn: { color: colors.brand2 },
+  scopeBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center", borderRadius: radius.iconBtn },
 }));

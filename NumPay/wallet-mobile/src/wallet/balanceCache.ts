@@ -27,6 +27,7 @@ import type { AssetRow } from "./useMobileWallet";
 const VERSION = 1;
 
 const keyFor = (walletId: string) => `numpay_balance_cache::${walletId}`;
+const summaryKeyFor = (walletId: string) => `numpay_portfolio_summary::${walletId}`;
 
 /** Multi-wallet: a snapshot is only ever read back for the wallet that wrote it. */
 export const walletCacheId = (activeWalletId?: string | null) =>
@@ -41,6 +42,13 @@ export interface BalanceSnapshot {
   tokensByChain: Record<string, AutoToken[]>;
   customBal: Record<string, string>;
   rates: Rates | null;
+  savedAt: number;
+}
+
+interface PortfolioSummary {
+  v: 1;
+  walletId: string;
+  portfolioUsd: number;
   savedAt: number;
 }
 
@@ -78,5 +86,62 @@ export async function saveBalanceSnapshot(
 }
 
 export async function clearBalanceSnapshot(activeWalletId?: string | null): Promise<void> {
-  try { await setItem(keyFor(walletCacheId(activeWalletId)), ""); } catch {}
+  const walletId = walletCacheId(activeWalletId);
+  try {
+    await Promise.all([
+      setItem(keyFor(walletId), ""),
+      setItem(summaryKeyFor(walletId), ""),
+    ]);
+  } catch {}
+}
+
+/**
+ * Persist only the public portfolio total used by the wallet switcher. Keeping
+ * this separate from the larger dashboard snapshot lets the active wallet
+ * update its switcher row whenever prices or balances move, without rewriting
+ * addresses and token metadata a second time.
+ */
+export async function saveWalletPortfolioSummary(
+  activeWalletId: string | null | undefined,
+  portfolioUsd: number,
+): Promise<void> {
+  if (!Number.isFinite(portfolioUsd) || portfolioUsd < 0) return;
+  const walletId = walletCacheId(activeWalletId);
+  try {
+    await setItem(summaryKeyFor(walletId), JSON.stringify({
+      v: 1, walletId, portfolioUsd, savedAt: Date.now(),
+    } satisfies PortfolioSummary));
+  } catch {}
+}
+
+/** Last verified total for an inactive wallet; never decrypts or switches it. */
+export async function loadWalletPortfolioSummary(
+  activeWalletId: string | null | undefined,
+): Promise<number | null> {
+  const walletId = walletCacheId(activeWalletId);
+  try {
+    const raw = await getItem(summaryKeyFor(walletId));
+    if (raw) {
+      const saved = JSON.parse(raw) as PortfolioSummary;
+      if (saved?.v === 1 && saved.walletId === walletId &&
+          Number.isFinite(saved.portfolioUsd) && saved.portfolioUsd >= 0) {
+        return saved.portfolioUsd;
+      }
+    }
+  } catch {}
+
+  // Upgrade fallback: older installs already have per-wallet dashboard
+  // snapshots but no small summary record. Their native/token USD values are
+  // sufficient for the first switcher opening; the next live refresh writes
+  // the exact dashboard total above.
+  const snap = await loadBalanceSnapshot(activeWalletId);
+  if (!snap) return null;
+  const nativeUsd = snap.natives.reduce((sum, row) => sum + (Number.isFinite(row.usdValue) ? row.usdValue : 0), 0);
+  const tokenUsd = Object.values(snap.tokensByChain).flat().reduce((sum, token) => {
+    const balance = Number(token.balance);
+    const price = Number(token.priceUsd ?? 0);
+    return sum + (Number.isFinite(balance) && Number.isFinite(price) ? balance * price : 0);
+  }, 0);
+  const total = nativeUsd + tokenUsd;
+  return Number.isFinite(total) && total >= 0 ? total : null;
 }

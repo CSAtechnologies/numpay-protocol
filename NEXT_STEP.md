@@ -1,5 +1,14 @@
 # NUMPAY: Next Step
 
+> Current mobile UI work: [September 17 resume](NUMPAY_UI_RESUME_2026-09-17.md).
+> The whole-mobile redesign is authorized. Read that note before the older
+> planning material below.
+
+> Historical May planning page. For the September BPAN task, read
+> [Fresh Base BPAN status](NUMPAY_BPAN_BASE_2026-09-06.md). For the latest
+> recorded Android release/distribution state, read
+> [July 31 APK notes](NUMPAY_APK_DISTRIBUTION_2026-07-31.md).
+
 Last updated: 2026-05-22, end of session, mid-Phase-0.
 
 This file is the single page to read on resume. It assumes the reader has read `NUMPAY_CC_KICKOFF.md` and `CHANGELOG.md`.

@@ -4,6 +4,7 @@ import { createWallet, encryptAndSave } from "@numpay/core/wallet";
 import { cacheWalletSession } from "../hooks/useWallet";
 import { ArrowLeftIcon, ShieldIcon } from "../components/Icons";
 import AnimatedLogo from "../components/AnimatedLogo";
+import { InlineNotice } from "../components/AlertCard";
 
 interface Props {
   onComplete: () => void;
@@ -111,11 +112,7 @@ export default function CreateWallet({ onComplete }: Props) {
               className="input-field mb-3"
             />
 
-            {error && (
-              <p className="text-[12px] mb-3 animate-fade-in" style={{ color: "#ef4444" }}>
-                {error}
-              </p>
-            )}
+            {error && <InlineNotice message={error} className="mb-3" />}
 
             <button onClick={handleSetPassword} disabled={loading} className="btn-primary-premium">
               {loading ? (

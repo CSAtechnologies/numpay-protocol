@@ -7,11 +7,15 @@
 // payload in the message when a node returns a nonstandard rejection (dRPC
 // wrapped honest rejections as code 19 "Temporary internal error"). Never
 // render that blob in the error banner; and cap anything else to a sane size.
+const TECHNICAL_RPC_ERROR =
+  /could not coalesce error|temporary internal error|jsonrpc|payload\s*[=:]|transaction\s*[=:]|trace-id|0x[0-9a-f]{96,}/i;
+
 export function friendlyTxError(raw: string): string {
-  if (/could not coalesce error|temporary internal error/i.test(raw)) {
+  if (TECHNICAL_RPC_ERROR.test(raw)) {
     return "The network node reported a temporary error while broadcasting. Check the Activity page before retrying: the transfer may or may not have gone through.";
   }
-  return raw.length > 300 ? raw.slice(0, 300) + "…" : raw;
+  const cleaned = raw.replace(/^error:\s*/i, "").replace(/\s+/g, " ").trim();
+  return cleaned.length > 220 ? cleaned.slice(0, 217).trimEnd() + "…" : cleaned;
 }
 
 // Map the Send flow's raw error strings to a titled card. `safe` shows the
@@ -27,7 +31,7 @@ export interface SendErrorView {
 
 export function parseSendError(msg: string): SendErrorView {
   if (/waiting for network confirmation/i.test(msg)) {
-    return { title: "Mapping Not Confirmed Yet", body: msg, tone: "amber", safe: false };
+    return { title: "Confirming BPAN Mapping", body: msg, tone: "amber", safe: false };
   }
   if (/no .* address mapped to bpan/i.test(msg)) {
     return { title: "No Mapping Found", body: msg, tone: "amber", safe: false };
@@ -52,9 +56,9 @@ export function parseSendError(msg: string): SendErrorView {
   }
   if (/insufficient balance|insufficient funds/i.test(msg)) {
     return {
-      title: "Insufficient Balance", body: msg,
-      hint: "Network fees count against the balance too, so lower the amount slightly.",
-      tone: "danger", safe: true,
+      title: "Not enough funds",
+      body: "Lower the amount to leave room for the network fee.",
+      tone: "danger", safe: false,
     };
   }
   if (/wallet is locked|wallet not loaded/i.test(msg)) {

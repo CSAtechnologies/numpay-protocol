@@ -167,6 +167,50 @@ export function ShieldIcon({ size = 20, className }: IconProps) {
   );
 }
 
+/** Purpose-built settings icons. Kept monochrome and on the same 24 px grid. */
+export function KeyIcon({ size = 20, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <circle cx="8.5" cy="15.5" r="4.5" />
+      <path d="m11.7 12.3 7.8-7.8" />
+      <path d="m16 8 2 2" />
+      <path d="m18 6 2 2" />
+    </svg>
+  );
+}
+
+export function RecoveryPhraseIcon({ size = 20, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="4" y="3" width="16" height="18" rx="3" />
+      <circle cx="8" cy="9" r="0.7" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="13" r="0.7" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="17" r="0.7" fill="currentColor" stroke="none" />
+      <path d="M11 9h5M11 13h5M11 17h4" />
+    </svg>
+  );
+}
+
+export function EyeIcon({ size = 20, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+      <circle cx="12" cy="12" r="2.5" />
+    </svg>
+  );
+}
+
+export function TrashIcon({ size = 20, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M4 7h16" />
+      <path d="M9 3h6l1 4H8l1-4Z" />
+      <path d="m6.5 7 .8 13h9.4l.8-13" />
+      <path d="M10 11v5M14 11v5" />
+    </svg>
+  );
+}
+
 export function SwapIcon({ size = 20, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -242,82 +286,66 @@ export function AlertIcon({ size = 20, className, style }: IconProps) {
   );
 }
 
-// ── Nav icons — custom duotone set (NumPay Nav Icons design handoff) ──────────
-// Heavier 1.9 strokes on a 24px grid. Each glyph carries an inner fill that
-// fades up to 16% on the active tab; inactive tabs render as a clean line.
-// BPAN / Send / Activity come from the handoff; Wallet / Receive / Settings are
-// drawn in the same language for the tabs the prototype's 5-tab nav didn't have.
+// ── Navigation icons ─────────────────────────────────────────────────────────
+// A quiet monoline set on one 24 px grid. The navigation shell already shows
+// selection, so the glyphs do not add a second duotone/fill treatment.
 
 interface NavIconProps extends IconProps {
   active?: boolean;
 }
 
-const navFill = (active?: boolean): React.CSSProperties => ({
-  opacity: active ? 0.16 : 0,
-  transition: "opacity .2s ease",
-});
-
-export function NavWalletIcon({ size = 20, className, active }: NavIconProps) {
+export function NavWalletIcon({ size = 20, className }: NavIconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <rect x="3" y="6.2" width="18" height="13.2" rx="3.6" fill="currentColor" stroke="none" style={navFill(active)} />
-      <rect x="3" y="6.2" width="18" height="13.2" rx="3.6" />
-      <path d="M21 11h-3.4a1.9 1.9 0 0 0 0 3.8H21" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="3" y="5.5" width="18" height="13" rx="3" />
+      <path d="M3 9h18" />
+      <path d="M16.5 14h1" />
     </svg>
   );
 }
 
-export function NavSendIcon({ size = 20, className, active }: NavIconProps) {
+export function NavSendIcon({ size = 20, className }: NavIconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M21 3 15 21l-3.6-7.4L3.6 9.9Z" fill="currentColor" stroke="none" style={navFill(active)} />
-      <path d="M21 3 3.6 9.9l7.8 3.7L15 21Z" />
-      <path d="M21 3l-9.6 10.6" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M7 17 17 7" />
+      <path d="M9 7h8v8" />
     </svg>
   );
 }
 
-export function NavReceiveIcon({ size = 20, className, active }: NavIconProps) {
+export function NavReceiveIcon({ size = 20, className }: NavIconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M3.6 14v3.2a3.2 3.2 0 0 0 3.2 3.2h10.4a3.2 3.2 0 0 0 3.2-3.2V14Z" fill="currentColor" stroke="none" style={navFill(active)} />
-      <path d="M12 3.6v9.8" />
-      <path d="m8.1 9.7 3.9 3.9 3.9-3.9" />
-      <path d="M3.6 14v3.2a3.2 3.2 0 0 0 3.2 3.2h10.4a3.2 3.2 0 0 0 3.2-3.2V14" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="m17 7-10 10" />
+      <path d="M15 17H7V9" />
     </svg>
   );
 }
 
-export function NavBpanIcon({ size = 20, className, active }: NavIconProps) {
+export function NavBpanIcon({ size = 20, className }: NavIconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <rect x="3" y="4.6" width="18" height="14.8" rx="4.4" fill="currentColor" stroke="none" style={navFill(active)} />
-      <rect x="3" y="4.6" width="18" height="14.8" rx="4.4" />
-      <path d="M10.4 8.7 9 15.3" />
-      <path d="M15.2 8.7 13.8 15.3" />
-      <path d="M8.2 11.1h7.6" />
-      <path d="M7.8 13.4h7.6" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="3" y="5" width="18" height="14" rx="3" />
+      <path d="m10 8.5-1.2 7M15.2 8.5l-1.2 7M7.5 11h9M7.2 14h9" />
     </svg>
   );
 }
 
-export function NavActivityIcon({ size = 20, className, active }: NavIconProps) {
+export function NavActivityIcon({ size = 20, className }: NavIconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M2.6 12.6H6l2.6-6.2 3.4 11.2 2.6-7.8 1.4 2.8h3.4V20.5H2.6Z" fill="currentColor" stroke="none" style={navFill(active)} />
-      <path d="M2.6 12.6H6l2.6-6.2 3.4 11.2 2.6-7.8 1.4 2.8h3.4" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5V12l3 2" />
     </svg>
   );
 }
 
-const GEAR_D = "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z";
-
-export function NavSettingsIcon({ size = 20, className, active }: NavIconProps) {
+export function NavSettingsIcon({ size = 20, className }: NavIconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d={GEAR_D} fill="currentColor" stroke="none" style={navFill(active)} />
-      <path d={GEAR_D} />
-      <circle cx="12" cy="12" r="3" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M4 7h6M14 7h6M4 17h10M18 17h2" />
+      <circle cx="12" cy="7" r="2" />
+      <circle cx="16" cy="17" r="2" />
     </svg>
   );
 }

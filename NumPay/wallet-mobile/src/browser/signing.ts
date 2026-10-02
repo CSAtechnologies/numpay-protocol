@@ -10,7 +10,7 @@
 
 import { ethers } from "ethers";
 import { signDappRequest } from "@numpay/core/dapp";
-import { NETWORKS, BPAN_MAINNET_RPC } from "@numpay/core/networks";
+import { NETWORKS } from "@numpay/core/networks";
 import { importFromMnemonic, getSigner } from "@numpay/core/wallet";
 import { logTx, updateTx, explorerTxUrl } from "@numpay/core/txLog";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
@@ -43,7 +43,7 @@ export async function executeBrowserSign(
     throw new Error("Vault locked");
   }
 
-  const rpc = (await rpcUrlFor(pending.internalChainId)) ?? BPAN_MAINNET_RPC;
+  const rpc = (await rpcUrlFor(pending.internalChainId)) ?? NETWORKS.ethereum.rpcUrl;
   const wd = importFromMnemonic(mnemonic);
   const signer = getSigner(wd.privateKey, rpc);
 

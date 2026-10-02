@@ -10,9 +10,6 @@ dotenv.config();
 const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || "";
 const liveAccounts = DEPLOYER_PRIVATE_KEY ? [DEPLOYER_PRIVATE_KEY] : [];
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
-const SEPOLIA_RPC_URL = process.env.SEPOLIA_RPC_URL || "";
-const MAINNET_RPC_URL = process.env.MAINNET_RPC_URL || "";
-const AMOY_RPC_URL = process.env.AMOY_RPC_URL || "";
 
 const config: HardhatUserConfig = {
   solidity: {
@@ -27,16 +24,14 @@ const config: HardhatUserConfig = {
   },
   networks: {
     hardhat: {},
-    mainnet: {
-      url: MAINNET_RPC_URL,
+    base: {
+      url: process.env.BASE_RPC_URL || "https://mainnet.base.org",
+      chainId: 8453,
       accounts: liveAccounts,
     },
-    sepolia: {
-      url: SEPOLIA_RPC_URL,
-      accounts: liveAccounts,
-    },
-    amoy: {
-      url: AMOY_RPC_URL,
+    baseSepolia: {
+      url: process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org",
+      chainId: 84532,
       accounts: liveAccounts,
     },
   },

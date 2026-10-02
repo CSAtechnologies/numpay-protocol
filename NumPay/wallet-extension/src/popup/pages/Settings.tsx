@@ -14,7 +14,11 @@ import { listOrigins, revoke as revokeOrigin } from "@/lib/dapp/permissions";
 import { notifyDappState } from "@/lib/dapp/notify";
 import Layout from "../components/Layout";
 import PasswordPrompt from "../components/PasswordPrompt";
-import { LockIcon, CopyIcon, CheckIcon, ShieldIcon, SearchIcon, ChevronDownIcon, SunIcon, MoonIcon } from "../components/Icons";
+import { InlineNotice } from "../components/AlertCard";
+import {
+  LockIcon, CopyIcon, CheckIcon, SearchIcon, ChevronDownIcon, SunIcon, MoonIcon,
+  KeyIcon, RecoveryPhraseIcon, EyeIcon, TrashIcon,
+} from "../components/Icons";
 
 interface Props {
   onLock: () => void;
@@ -439,7 +443,7 @@ export default function Settings({ onLock, onReset }: Props) {
               className="input-field"
             />
 
-            {addError && <p className="text-accent-red text-xs">{addError}</p>}
+            {addError && <InlineNotice message={addError} />}
 
             <div className="flex gap-2">
               <button
@@ -484,11 +488,13 @@ export default function Settings({ onLock, onReset }: Props) {
           className="w-full premium-card px-3.5 py-3 mb-1.5 text-left hover:bg-surface-2 transition-colors"
         >
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ShieldIcon size={14} className="text-accent-amber" />
+            <div className="flex items-center gap-2.5">
+              <KeyIcon size={17} className="text-muted" />
               <span className="text-[13px] text-text-primary font-medium">Private Key</span>
             </div>
-            <span className="text-xs text-muted">{showPrivateKey ? "Hide" : "Reveal"}</span>
+            <span className="flex items-center gap-1.5 text-xs text-muted">
+              <EyeIcon size={13} /> {showPrivateKey ? "Hide" : "Reveal"}
+            </span>
           </div>
         </button>
         {revealTarget === "pk" && (
@@ -518,11 +524,13 @@ export default function Settings({ onLock, onReset }: Props) {
               className="w-full premium-card px-3.5 py-3 mb-1.5 text-left hover:bg-surface-2 transition-colors"
             >
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <ShieldIcon size={14} className="text-accent-amber" />
+                <div className="flex items-center gap-2.5">
+                  <RecoveryPhraseIcon size={17} className="text-muted" />
                   <span className="text-[13px] text-text-primary font-medium">Recovery Phrase</span>
                 </div>
-                <span className="text-xs text-muted">{showMnemonic ? "Hide" : "Reveal"}</span>
+                <span className="flex items-center gap-1.5 text-xs text-muted">
+                  <EyeIcon size={13} /> {showMnemonic ? "Hide" : "Reveal"}
+                </span>
               </div>
             </button>
             {revealTarget === "mn" && (
@@ -557,8 +565,9 @@ export default function Settings({ onLock, onReset }: Props) {
           {!confirmReset ? (
             <button
               onClick={() => setConfirmReset(true)}
-              className="w-full py-3 rounded-xl bg-accent-red/5 hover:bg-accent-red/10 text-accent-red font-semibold text-[13px] border border-accent-red/15 transition-colors"
+              className="w-full py-3 rounded-xl bg-accent-red/5 hover:bg-accent-red/10 text-accent-red font-semibold text-[13px] border border-accent-red/15 transition-colors flex items-center justify-center gap-2"
             >
+              <TrashIcon size={14} />
               Reset Wallet
             </button>
           ) : (
@@ -623,7 +632,7 @@ function RevealPrompt({
         placeholder="Password"
         className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-[13px] text-text-primary outline-none focus:border-brand-400"
       />
-      {error && <p className="text-[11px] text-accent-red mt-1.5">{error}</p>}
+      {error && <InlineNotice message={error} className="mt-1.5" />}
       <div className="flex gap-2 mt-2">
         <button
           onClick={onConfirm}

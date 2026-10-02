@@ -49,7 +49,8 @@ await build({
 });
 const req = createRequire(import.meta.url);
 const {
-  loadBalanceSnapshot, saveBalanceSnapshot, clearBalanceSnapshot, walletCacheId, rawSet,
+  loadBalanceSnapshot, saveBalanceSnapshot, clearBalanceSnapshot, walletCacheId,
+  loadWalletPortfolioSummary, saveWalletPortfolioSummary, rawSet,
 } = req(file);
 
 let pass = 0, fail = 0;
@@ -95,6 +96,18 @@ check("wallet 2 reads back its OWN address",
   (await loadBalanceSnapshot("w2"))?.evmAddress === "0xBBB");
 check("wallet 1 is untouched by wallet 2's write",
   (await loadBalanceSnapshot("w1"))?.evmAddress === "0xAAA");
+
+// ── 3b. Wallet-switcher totals stay scoped without switching wallets ───────
+await saveWalletPortfolioSummary("w1", 4512.34);
+check("wallet 1 portfolio summary round-trips",
+  (await loadWalletPortfolioSummary("w1")) === 4512.34);
+check("wallet 2 cannot read wallet 1's portfolio summary",
+  (await loadWalletPortfolioSummary("w2")) !== 4512.34);
+check("older snapshots provide a first-open summary fallback",
+  (await loadWalletPortfolioSummary("w2")) === 4500);
+await saveWalletPortfolioSummary("w2", Number.NaN);
+check("invalid portfolio summaries are ignored",
+  (await loadWalletPortfolioSummary("w2")) === 4500);
 
 // ── 4. Corrupt / stale records are rejected, never half-used ────────────────
 // CONTROL FIRST. Every rejection below asserts that load() returns null, which
@@ -142,6 +155,8 @@ check("a record with half the addresses is rejected",
 // ── 5. Clearing ─────────────────────────────────────────────────────────────
 await clearBalanceSnapshot("w1");
 check("cleared wallet 1 reads back null", (await loadBalanceSnapshot("w1")) === null);
+check("clearing a wallet also clears its switcher summary",
+  (await loadWalletPortfolioSummary("w1")) === null);
 check("...and wallet 2 survived the clear",
   (await loadBalanceSnapshot("w2"))?.evmAddress === "0xBBB");
 

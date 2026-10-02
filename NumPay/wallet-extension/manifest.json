@@ -10,6 +10,7 @@
     "https://*.drpc.org/*",
     "https://*.bnbchain.org/*",
     "https://ethereum-rpc.publicnode.com/*",
+    "https://base-rpc.publicnode.com/*",
     "https://arb1.arbitrum.io/*",
     "https://mainnet.optimism.io/*",
     "https://evm.cronos.org/*",

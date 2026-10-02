@@ -6,10 +6,11 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
-    "deploy:local": "hardhat run deploy/deploy.ts --network hardhat",
-    "deploy:sepolia": "hardhat run deploy/deploy.ts --network sepolia",
-    "deploy:amoy": "hardhat run deploy/deploy.ts --network amoy",
-    "clean": "hardhat clean"
+    "deploy:local": "hardhat run deploy/deploy-base.ts --network hardhat",
+    "clean": "hardhat clean",
+    "deploy:base": "hardhat run deploy/deploy-base.ts --network base",
+    "deploy:base-sepolia": "hardhat run deploy/deploy-base.ts --network baseSepolia",
+    "verify:base": "hardhat run scripts/verify-base.ts --network base"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",

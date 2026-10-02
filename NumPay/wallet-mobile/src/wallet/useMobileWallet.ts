@@ -1,3 +1,4 @@
+import { BPAN_DEPLOYMENT, bpanOwnershipKey } from "@numpay/core/bpanDeployment";
 /**
  * Phase 1 dashboard data: a lean mobile counterpart of the extension's
  * useWallet, calling the same core primitives. Deliberately NOT a port of the
@@ -18,6 +19,8 @@
  * Send work (they share core fetchers already).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AppState, type AppStateStatus } from "react-native";
+import NetInfo from "@react-native-community/netinfo";
 import { ethers } from "ethers";
 import { importFromMnemonic } from "@numpay/core/wallet";
 import { NETWORKS, type Network } from "@numpay/core/networks";
@@ -33,16 +36,21 @@ import {
   type NonEvmAddressMap,
   type NonEvmChain,
 } from "@numpay/core/chains";
-import { sweepEvmNativeBalances, type ChainBalance } from "@numpay/core/balanceSweep";
+import {
+  NATIVE_USD_PRICES, sweepEvmNativeBalances, type ChainBalance,
+} from "@numpay/core/balanceSweep";
 import { sweepAllChainTokens, type AutoToken } from "@numpay/core/autoTokens";
 import { fetchRates, getAnyUsdPrice, getUsdPrice, type Rates } from "@numpay/core/currency";
 import { loadHiddenTokens, setTokenHidden, tokenHideKey } from "@numpay/core/hiddenTokens";
 import { loadPinnedAssets, setAssetPinned } from "@numpay/core/pinnedAssets";
 import { homeSection } from "./assetVisibility";
-import { clearBalanceSnapshot, loadBalanceSnapshot, saveBalanceSnapshot } from "./balanceCache";
+import {
+  clearBalanceSnapshot, loadBalanceSnapshot, saveBalanceSnapshot,
+  saveWalletPortfolioSummary, walletCacheId,
+} from "./balanceCache";
 import { classifyToken } from "@numpay/core/tokenSpam";
 import { chainNameOf } from "@numpay/core/txLog";
-import { getOwnedBPANCount, findOwnedBPANs } from "@numpay/core/bpan";
+import { findOwnedBPANs } from "@numpay/core/bpan";
 import { getItem, setItem } from "@numpay/core/storage";
 import { getUnlockedMnemonic } from "../vault/mobileVault";
 import { savePublicAddresses } from "../notify/receiveWatch";
@@ -57,11 +65,49 @@ const MAJOR_ORDER = [
   "optimism", "avalanche", "tron", "sui", "xrp", "litecoin",
 ];
 
+// A wallet should never open onto an empty asset canvas just because providers
+// have not answered yet. These five native rows are useful before addresses,
+// rates or balances exist, and the first cache/live result replaces them.
+const FIRST_PAINT_NATIVES: readonly AssetRow[] = [
+  {
+    key: "native:ethereum", chainId: "ethereum", chainName: "Ethereum",
+    symbol: "ETH", name: "Ethereum", isNative: true, balanceNum: 0, usdValue: 0,
+  },
+  {
+    key: "native:bitcoin", chainId: "bitcoin", chainName: "Bitcoin",
+    symbol: "BTC", name: "Bitcoin", isNative: true, balanceNum: 0, usdValue: 0,
+  },
+  {
+    key: "native:solana", chainId: "solana", chainName: "Solana",
+    symbol: "SOL", name: "Solana", isNative: true, balanceNum: 0, usdValue: 0,
+  },
+  {
+    key: "native:bsc", chainId: "bsc", chainName: "BNB Chain",
+    symbol: "BNB", name: "BNB Chain", isNative: true, balanceNum: 0, usdValue: 0,
+  },
+  {
+    key: "native:sui", chainId: "sui", chainName: "Sui",
+    symbol: "SUI", name: "Sui", isNative: true, balanceNum: 0, usdValue: 0,
+  },
+];
+
+function firstPaintNatives(): AssetRow[] {
+  return FIRST_PAINT_NATIVES.map((row) => ({ ...row }));
+}
+
 // Hard ceiling on the busy-guarded refresh phase. Found on-device: a hung
 // upstream (no per-call timeout) kept `busy` true for minutes, so the refresh
 // fired by the next unlock bailed silently and the dashboard stayed empty.
 const REFRESH_TIMEOUT_MS = 45_000;
 const DISCOVERY_TIMEOUT_MS = 90_000;
+// Mobile has no always-resident extension service worker. While the wallet is
+// visible, keep balances and newly received tokens moving without making the
+// user pull to refresh. Forty-five seconds is intentionally conservative: it
+// is quick enough to feel live, but avoids continuously sweeping every chain
+// and draining a phone battery. Returning to the app and recovering network
+// connectivity bypass this interval and refresh immediately.
+const FOREGROUND_SYNC_MS = 45_000;
+const AUTO_REFRESH_MIN_GAP_MS = 8_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -98,6 +144,7 @@ export interface MobileWalletState {
   nonEvmAddresses: NonEvmAddressMap | null;
   /** First owned BPAN (raw 11 digits), "" when none / not yet known. */
   bpan: string;
+  refreshBPAN: () => void;
   rows: AssetRow[];
   /** Everything kept off the home list: dust, spam, user-hidden tokens, and the
    *  zero-balance natives outside the default five. Feeds the dashboard's
@@ -208,46 +255,66 @@ async function fetchCustomEvmTokenBalances(
   await Promise.all(tokens.map(async (ct) => {
     const net = NETWORKS[ct.chainId] ?? customNets[ct.chainId];
     if (!net) return; // solana / unknown chain: no RPC read here
+    const provider = new ethers.JsonRpcProvider(net.rpcUrl, net.chainId, { staticNetwork: true });
     try {
-      const provider = new ethers.JsonRpcProvider(net.rpcUrl, net.chainId, { staticNetwork: true });
       const bal = await withTimeout(
         getTokenBalance(ct.address, owner, provider), 8_000, `${ct.symbol} balance`,
       );
       out[`${ct.chainId}:${ct.address.toLowerCase()}`] = bal;
     } catch { /* failed read: the state merge keeps the last-known balance */ }
+    finally { provider.destroy?.(); }
   }));
   return out;
 }
 
-// ── Own-BPAN lookup (auto-display rule): cached per wallet, then a count-gated
-// on-chain ownership scan, mirroring the extension's BPAN page bootstrap. ────
+// ── Own-BPAN lookup (auto-display rule): only a successful on-chain ownership
+// scan may publish an identity. The cache is written for compatibility, but is
+// never treated as ownership proof — it may outlive a deployment or test RPC. ─
 function bpanCacheKey(owner: string): string {
-  return `bpan_numbers_${owner.toLowerCase()}`;
-}
-
-async function loadOwnBPAN(owner: string): Promise<string> {
-  try {
-    const raw = await getItem(bpanCacheKey(owner));
-    const cached: string[] = raw ? JSON.parse(raw) : [];
-    if (cached.length > 0) return cached[0];
-  } catch { /* cache is best-effort */ }
-  try {
-    const count = await getOwnedBPANCount(owner);
-    if (count === 0) return "";
-    const found = await findOwnedBPANs(owner);
-    if (found.length > 0) {
-      await setItem(bpanCacheKey(owner), JSON.stringify(found)).catch(() => {});
-      return found[0];
-    }
-  } catch { /* non-fatal: the dashboard just shows the address */ }
-  return "";
+  return bpanOwnershipKey(owner);
 }
 
 export function useMobileWallet(unlocked: boolean, activeWalletId?: string | null): MobileWalletState {
+  const walletScope = walletCacheId(activeWalletId);
   const [evmAddress, setEvmAddress] = useState("");
-  const [bpan, setBpan] = useState("");
+  const [bpanRecord, setBpanRecord] = useState({ walletId: "", owner: "", value: "" });
+  const [bpanRevision, setBpanRevision] = useState(0);
+  const refreshBPAN = useCallback(() => setBpanRevision(v => v + 1), []);
+  useEffect(() => {
+    let live = true;
+    if (!BPAN_DEPLOYMENT.deployed || !unlocked || !evmAddress) return;
+    const owner = evmAddress.toLowerCase();
+    const walletId = walletScope;
+    (async () => {
+      // Paint the last ON-CHAIN-CONFIRMED identity immediately. The cache key
+      // includes both registry deployment and owner address, and the rendered
+      // value is additionally gated by walletId below, so it cannot bleed into
+      // another account while that account's addresses are being derived.
+      if (bpanRecord.walletId !== walletId || bpanRecord.owner !== owner) {
+        try {
+          const raw = await getItem(bpanCacheKey(owner));
+          const cached = raw ? JSON.parse(raw) as string[] : [];
+          if (live && cached[0]) setBpanRecord({ walletId, owner, value: cached[0] });
+        } catch { /* a missing/corrupt cache just waits for the registry */ }
+      }
+      try {
+        const owned = await findOwnedBPANs(owner);
+        if (!live) return;
+        await setItem(bpanCacheKey(owner), JSON.stringify(owned));
+        if (live) setBpanRecord({ walletId, owner, value: owned[0] ?? "" });
+      } catch {
+        // A temporary Base/RPC failure is not evidence that ownership changed.
+        // Keep the last confirmed value for this exact registry + owner.
+      }
+    })();
+    return () => { live = false; };
+  }, [evmAddress, unlocked, bpanRevision, walletScope]);
+  const bpan = bpanRecord.walletId === walletScope &&
+    bpanRecord.owner === evmAddress.toLowerCase()
+    ? bpanRecord.value
+    : "";
   const [nonEvmAddresses, setNonEvmAddresses] = useState<NonEvmAddressMap | null>(null);
-  const [natives, setNatives] = useState<AssetRow[]>([]);
+  const [natives, setNatives] = useState<AssetRow[]>(firstPaintNatives);
   const [tokensByChain, setTokensByChain] = useState<Record<string, AutoToken[]>>({});
   // Manage-assets state: re-read from core storage on every refresh, so adds/
   // removes made on the ManageAssets screen land on the next sweep.
@@ -270,6 +337,9 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
   // instead of every refresh is what makes refreshes paint promptly. Only
   // PUBLIC addresses are cached; keys are re-derived per send.
   const addrCache = useRef<{ evm: string; addrs: NonEvmAddressMap } | null>(null);
+  // Which wallet owns the public balance/address state currently painted.
+  // This closes the one-render gap before the switch effect clears old rows.
+  const dataWalletId = useRef("");
   // Last successful balance rows. Core's sweep/fetch retention ("a failed
   // read never zeroes a row") only engages when the caller passes the
   // previous results back in — without these, one network blip painted every
@@ -281,6 +351,7 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
   const hydratedRef = useRef(false);
   // Pending post-tx re-checks, so a lock or an unmount cancels them.
   const txRecheck = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const lastAutoRefreshAt = useRef(0);
   const clearTxRecheck = () => {
     for (const t of txRecheck.current) clearTimeout(t);
     txRecheck.current = [];
@@ -323,6 +394,7 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
         void savePublicAddresses(cached.evm, cached.addrs);
       }
       const { evm, addrs } = cached;
+      dataWalletId.current = walletScope;
       setEvmAddress(evm);
       setNonEvmAddresses(addrs);
 
@@ -341,61 +413,18 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
       setCustomNets(netMap);
       setCustomTokens(ctList);
 
-      // Own-BPAN display is independent of balances; let it land whenever the
-      // quorum read finishes (cached after the first success).
-      void loadOwnBPAN(evm).then(setBpan);
-
-      // Prices and balances go out TOGETHER. Rates used to be awaited in its
-      // own earlier phase, which put a full network round-trip in front of
-      // every sweep for no reason: the sweep does not consume rates, only the
-      // usdValue math below does, and that runs after both have landed.
-      const [liveRates, evmSweep, nonEvm] = await withTimeout(Promise.all([
-        fetchRates(),
-        sweepEvmNativeBalances(evm, netMap, prevEvmByChain.current),
-        fetchNonEvmBalancesByAddress(addrs, prevNonEvm.current),
-      ]), REFRESH_TIMEOUT_MS, "Balance sweep");
-      setRates(liveRates);
-      prevEvmByChain.current = new Map(evmSweep.results.map((c) => [c.networkId, c]));
-      prevNonEvm.current = nonEvm;
-
-      const nativeRows: AssetRow[] = [
-        ...evmSweep.results.map((c) => ({
-          key: `native:${c.networkId}`,
-          chainId: c.networkId,
-          chainName: c.name,
-          symbol: c.symbol,
-          name: c.name,
-          isNative: true,
-          balanceNum: c.balanceNum,
-          usdValue: c.usdValue,
-        })),
-        ...nonEvm.map((c: NonEvmChain) => ({
-          key: `native:${c.id}`,
-          chainId: c.id,
-          chainName: c.name,
-          symbol: c.symbol,
-          name: c.name,
-          isNative: true,
-          balanceNum: c.balance,
-          usdValue: c.balance * getUsdPrice(c.symbol, liveRates),
-        })),
-      ];
-      setNatives(nativeRows);
-
-      // Custom-token balances ride outside the busy phase like discovery:
-      // per-token 8 s timeouts, and a failed read keeps the previous value
-      // (prev-merge below) instead of zeroing the row.
+      // Token work is independent of native balances. Start it as soon as the
+      // public addresses exist so one slow native-chain provider cannot add its
+      // timeout to the time before held tokens appear.
       if (ctList.length > 0) {
         void fetchCustomEvmTokenBalances(evm, ctList, netMap).then((bals) => {
           setCustomBal((prev) => ({ ...prev, ...bals }));
         });
       }
 
-      // Token discovery paints as it lands but runs OUTSIDE the busy-guarded
-      // phase, with its own single-flight guard: a slow or hung endpoint here
-      // must never block the next refresh (the on-device failure mode was
-      // exactly that — busy stayed true for minutes and the unlock-triggered
-      // refresh bailed silently, leaving the dashboard empty).
+      // Discovery paints each chain as it lands and has its own single-flight
+      // guard. It deliberately does not participate in `busy`: a slow or hung
+      // indexer must never block a native refresh or the next refresh request.
       if (!discoveryBusy.current) {
         discoveryBusy.current = true;
         const discovery = Promise.all([
@@ -436,13 +465,71 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
           .catch(() => { /* partial lists already painted; next refresh retries */ })
           .finally(() => { discoveryBusy.current = false; });
       }
+
+      // Balances are the first-paint truth; prices are enrichment. Start the
+      // rates request now, but wait at most 1.5 s for it before painting real
+      // balances. A restricted CoinGecko/proxy path used to hold this whole
+      // Promise.all open for ~25 s even when every balance RPC had finished.
+      const ratesPromise = fetchRates().catch(() => ({} as Rates));
+      const quickRates = Promise.race<Rates | null>([
+        ratesPromise,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
+      ]);
+      const [liveRates, evmSweep, nonEvm] = await withTimeout(Promise.all([
+        quickRates,
+        sweepEvmNativeBalances(evm, netMap, prevEvmByChain.current),
+        fetchNonEvmBalancesByAddress(addrs, prevNonEvm.current),
+      ]), REFRESH_TIMEOUT_MS, "Balance sweep");
+      if (liveRates) setRates(liveRates);
+      prevEvmByChain.current = new Map(evmSweep.results.map((c) => [c.networkId, c]));
+      prevNonEvm.current = nonEvm;
+
+      const nativeRows: AssetRow[] = [
+        ...evmSweep.results.map((c) => ({
+          key: `native:${c.networkId}`,
+          chainId: c.networkId,
+          chainName: c.name,
+          symbol: c.symbol,
+          name: c.name,
+          isNative: true,
+          balanceNum: c.balanceNum,
+          usdValue: c.usdValue,
+        })),
+        ...nonEvm.map((c: NonEvmChain) => ({
+          key: `native:${c.id}`,
+          chainId: c.id,
+          chainName: c.name,
+          symbol: c.symbol,
+          name: c.name,
+          isNative: true,
+          balanceNum: c.balance,
+          usdValue: c.balance * (
+            getUsdPrice(c.symbol, liveRates ?? {}) || NATIVE_USD_PRICES[c.symbol] || 0
+          ),
+        })),
+      ];
+      setNatives(nativeRows);
+
+      // Let slow pricing finish in the background, then revalue the rows that
+      // are already visible. This changes fiat values only; balances never
+      // disappear or wait for it.
+      void ratesPromise.then((finalRates) => {
+        setRates(finalRates);
+        setNatives((current) => current.map((row) => ({
+          ...row,
+          usdValue: row.balanceNum * (
+            getUsdPrice(row.symbol, finalRates) || NATIVE_USD_PRICES[row.symbol] || 0
+          ),
+        })));
+      });
+
     })()
       .catch((e) => setError(String(e)))
       .finally(() => {
         busy.current = false;
         setLoading(false);
       });
-  }, [unlocked]);
+  }, [unlocked, walletScope]);
 
   /**
    * Re-check balances after a send/swap/bridge of our own.
@@ -530,7 +617,7 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
       addrCache.current = null;
       prevEvmByChain.current = new Map();
       prevNonEvm.current = undefined;
-      setNatives([]); setTokensByChain({}); setCustomBal({});
+      setNatives(firstPaintNatives()); setTokensByChain({}); setCustomBal({});
       refresh();
     } catch {
       // Verification is a safety net, not a gate: if it cannot run, the next
@@ -556,6 +643,7 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
       hydratedRef.current = true;
       const snap = await loadBalanceSnapshot(activeWalletId);
       if (snap && !addrCache.current) {
+        dataWalletId.current = walletScope;
         addrCache.current = { evm: snap.evmAddress, addrs: snap.addrs };
         setEvmAddress(snap.evmAddress);
         setNonEvmAddresses(snap.addrs);
@@ -582,10 +670,59 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
       }
     }
     refresh();
-  }, [activeWalletId, refresh, verifyCachedAddresses]);
+  }, [activeWalletId, refresh, verifyCachedAddresses, walletScope]);
+
+  // Extension parity for a phone lifecycle: refresh immediately after the app
+  // returns from the background, after connectivity recovers, and periodically
+  // while the wallet is actually on screen. Forced refresh is required here:
+  // the shared token discovery cache is deliberately three minutes long, which
+  // is correct for ordinary navigation but too stale for an incoming deposit.
+  // The hook's native/discovery single-flight guards prevent timer overlap.
+  const requestAutoRefresh = useCallback(() => {
+    if (!unlocked || busy.current) return;
+    const now = Date.now();
+    if (now - lastAutoRefreshAt.current < AUTO_REFRESH_MIN_GAP_MS) return;
+    lastAutoRefreshAt.current = now;
+    refresh(true);
+  }, [refresh, unlocked]);
 
   useEffect(() => {
-    if (unlocked) { void hydrateThenRefresh(); }
+    if (!unlocked) return;
+
+    let appState: AppStateStatus = AppState.currentState;
+    let networkKnown = false;
+    let wasOnline = false;
+
+    const appSub = AppState.addEventListener("change", (next) => {
+      const returnedToForeground = appState !== "active" && next === "active";
+      appState = next;
+      if (returnedToForeground) requestAutoRefresh();
+    });
+
+    const netSub = NetInfo.addEventListener((state) => {
+      const online = state.isConnected === true && state.isInternetReachable !== false;
+      if (networkKnown && !wasOnline && online && appState === "active") {
+        requestAutoRefresh();
+      }
+      networkKnown = true;
+      wasOnline = online;
+    });
+
+    const timer = setInterval(() => {
+      if (appState === "active") requestAutoRefresh();
+    }, FOREGROUND_SYNC_MS);
+
+    return () => {
+      clearInterval(timer);
+      appSub.remove();
+      netSub();
+    };
+  }, [requestAutoRefresh, unlocked]);
+
+  useEffect(() => {
+    if (unlocked) {
+      if (!hydratedRef.current) void hydrateThenRefresh();
+    }
     else {
       // Lock: cached addresses die with the session, and so does balance
       // retention — a wipe→import could unlock a DIFFERENT wallet next, which
@@ -615,9 +752,10 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
     prevWalletId.current = activeWalletId;
     if (!unlocked || prev == null || prev === activeWalletId) return;
     addrCache.current = null;
+    dataWalletId.current = "";
     prevEvmByChain.current = new Map();
     prevNonEvm.current = undefined;
-    setNatives([]); setTokensByChain({}); setBpan(""); setEvmAddress("");
+    setNatives(firstPaintNatives()); setTokensByChain({}); setEvmAddress("");
     setNonEvmAddresses(null); setCustomBal({});
     // The new wallet has its own snapshot; hydrate from THAT rather than
     // leaving the previous wallet's rows on screen while its sweep runs.
@@ -728,6 +866,11 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
   // a total that silently drops when you tidy the list is a total you cannot
   // trust. (Dust and spam stay out, as in the extension.)
   const portfolioUsd = [...rows, ...nativeHidden].reduce((s, r) => s + r.usdValue, 0);
+  const visiblePortfolioUsd = dataWalletId.current === walletScope ? portfolioUsd : 0;
+  useEffect(() => {
+    if (!unlocked || !evmAddress || dataWalletId.current !== walletScope) return;
+    void saveWalletPortfolioSummary(activeWalletId, portfolioUsd);
+  }, [activeWalletId, evmAddress, portfolioUsd, unlocked, walletScope]);
   const chainIds = [...new Set(rows.map((r) => r.chainId))];
   // Hidden section: biggest first, so anything worth recovering is at the top.
   // Zero-value rows (the empty natives parked here) fall back to major order so
@@ -755,6 +898,7 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
   return {
     evmAddress,
     bpan,
+    refreshBPAN,
     nonEvmAddresses,
     rows,
     dustRows,
@@ -762,7 +906,7 @@ export function useMobileWallet(unlocked: boolean, activeWalletId?: string | nul
     chainIds,
     tokensByChain: mergedTokensByChain,
     customNets,
-    portfolioUsd,
+    portfolioUsd: visiblePortfolioUsd,
     rates,
     loading,
     error,

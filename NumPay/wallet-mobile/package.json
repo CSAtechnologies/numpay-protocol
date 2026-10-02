@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
+    "@expo/metro-runtime": "~57.0.15",
     "@noble/ciphers": "^2.2.0",
     "@numpay/core": "0.1.0",
     "@react-native-async-storage/async-storage": "2.2.0",
@@ -29,12 +30,14 @@
     "process": "^0.11.10",
     "qrcode-generator": "^2.0.4",
     "react": "19.2.3",
+    "react-dom": "19.2.3",
     "react-native": "0.86.0",
     "react-native-argon2": "^4.0.0",
     "react-native-get-random-values": "~1.11.0",
     "react-native-mmkv": "^4.3.2",
     "react-native-nitro-modules": "^0.36.1",
     "react-native-svg": "15.15.4",
+    "react-native-web": "^0.21.2",
     "react-native-webview": "13.16.1"
   },
   "devDependencies": {
@@ -42,7 +45,8 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "test": "node test/wc-sessions.mjs && node test/notify-diff.mjs && node test/qr-payload.mjs && node test/token-import.mjs && node test/token-pricing.mjs && node test/asset-visibility.mjs && node test/balance-cache.mjs && node test/token-removal.mjs && node test/injected-sync.mjs && node test/browser-origin.mjs && node test/browser-router.mjs && node test/theme-switch.mjs && node test/palette-contrast.mjs && node test/token-usage.mjs && node test/attempt-policy.mjs && node test/app-update.mjs",
+    "test": "node test/wc-sessions.mjs && node test/notify-diff.mjs && node test/live-balance-sync.mjs && node test/qr-payload.mjs && node test/token-import.mjs && node test/token-pricing.mjs && node test/token-detail-chart.mjs && node test/asset-visibility.mjs && node test/asset-format.mjs && node test/balance-cache.mjs && node test/wallet-switcher.mjs && node test/token-removal.mjs && node test/injected-sync.mjs && node test/browser-origin.mjs && node test/browser-router.mjs && node test/theme-switch.mjs && node test/palette-contrast.mjs && node test/token-usage.mjs && node test/attempt-policy.mjs && node test/app-update.mjs && node test/motion-system.mjs && node test/bpan-flow.mjs && node test/debug-network-trust.mjs && node test/startup-balance.mjs && node test/startup-unlock.mjs",
+    "gen:logos": "node scripts/generate-mobile-logo-map.mjs",
     "gen:injected": "node scripts/gen-injected.mjs",
     "start": "expo start",
     "android": "expo run:android",

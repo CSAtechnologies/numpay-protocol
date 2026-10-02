@@ -9,7 +9,7 @@
 // Mobile is multi-chain with no active-network selector, so the subtitle stays
 // chain-agnostic rather than naming a chain that means nothing here.
 import { useEffect, useMemo, useState } from "react";
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Linking, ScrollView, StyleSheet, Text, View } from "react-native";
 import { colors, radius, type as ts, themedStyles } from "../ui/theme";
 import { Card, ScreenHeader, Tappable } from "../ui/components";
 import { ExternalLinkIcon, ShieldIcon, TrendingUpIcon } from "../ui/icons";
@@ -137,10 +137,12 @@ export function DeFiScreen({ onBack }: { onBack: () => void }) {
         {protocols.map((p) => {
           const stat = statFor(p);
           return (
-            <Pressable
+            <Tappable
               key={p.name + p.type}
               onPress={() => { Linking.openURL(p.url).catch(() => {}); }}
-              style={({ pressed }) => [sx.row, pressed && { opacity: 0.7 }]}
+              feedback="row"
+              style={sx.row}
+              accessibilityRole="link"
             >
               <LogoCoin uri={p.logo} label={p.name} size={36} />
               <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
@@ -163,7 +165,7 @@ export function DeFiScreen({ onBack }: { onBack: () => void }) {
                   <Text style={sx.tvl}>{stats || loadFailed ? "—" : "…"}</Text>
                 )}
               </View>
-            </Pressable>
+            </Tappable>
           );
         })}
 

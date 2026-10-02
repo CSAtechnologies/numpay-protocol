@@ -1,3 +1,4 @@
+import { BPAN_DEPLOYMENT, BPAN_UNAVAILABLE_MESSAGE, bpanOwnershipKey } from "@numpay/core/bpanDeployment";
 import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import { useWallet } from "../hooks/useWallet";
@@ -5,16 +6,16 @@ import { type NonEvmWallet } from "@numpay/core/chains";
 import {
   getBPANContract, isValidBPAN, formatBPAN,
   getAllBPANMappings, isBPANRegistered, getBPANOwner,
-  registerBPAN, setWalletMapping, findOwnedBPANs, getOwnedBPANCount,
-  type BPANReadTarget,
+  registerBPAN, setWalletMapping, findOwnedBPANs,
 } from "@numpay/core/bpan";
 import {
-  BPAN_MAINNET_CONTRACT, BPAN_SEPOLIA_CONTRACT,
+  BPAN_MAINNET_CONTRACT,
   BPAN_MAINNET_RPC, NETWORKS, BPAN_CHAINS,
 } from "@numpay/core/networks";
 import { getSigner, isLocked } from "@numpay/core/wallet";
 import { isValidChainAddress } from "@numpay/core/addressValidation";
 import Layout from "../components/Layout";
+import AlertCard, { InlineNotice } from "../components/AlertCard";
 import {
   SearchIcon, CheckIcon, ExternalLinkIcon, ChevronDownIcon,
   CopyIcon, HashIcon, RefreshIcon, LayersIcon, AlertIcon, GlobeIcon,
@@ -25,19 +26,19 @@ type Tab = "my-bpan" | "register" | "mapping" | "lookup";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function getSavedBPANs(address: string): string[] {
-  try { return JSON.parse(localStorage.getItem(`bpan_numbers_${address.toLowerCase()}`) || "[]"); }
+  try { return JSON.parse(localStorage.getItem(bpanOwnershipKey(address)) || "[]"); }
   catch { return []; }
 }
 function saveBPAN(address: string, number: string) {
   const saved = getSavedBPANs(address);
   if (!saved.includes(number)) {
     saved.unshift(number);
-    localStorage.setItem(`bpan_numbers_${address.toLowerCase()}`, JSON.stringify(saved));
+    localStorage.setItem(bpanOwnershipKey(address), JSON.stringify(saved));
   }
 }
 function removeBPAN(address: string, number: string) {
   localStorage.setItem(
-    `bpan_numbers_${address.toLowerCase()}`,
+    bpanOwnershipKey(address),
     JSON.stringify(getSavedBPANs(address).filter((n) => n !== number))
   );
 }
@@ -61,83 +62,46 @@ async function copyText(text: string) {
   }
 }
 
-// BPAN is a mainnet product. Sepolia is exposed only in dev builds so the team
-// can exercise register/map flows against the testnet deployment; production
-// users only ever operate on mainnet (CONTRACT-8). This keeps the read path and
-// the write path on the SAME contract instead of writing to Sepolia while every
-// read (and the live Send funds path) hits mainnet.
-const BPAN_TESTNET_ENABLED = import.meta.env.DEV;
-
 function canWriteBPAN(networkId: string): boolean {
-  return networkId === "ethereum" || (networkId === "sepolia" && BPAN_TESTNET_ENABLED);
-}
-
-// Read the same deployment the page is writing to. Mainnet by default; the
-// Sepolia contract only in dev builds, so production reads are always mainnet.
-function getReadTarget(networkId: string): BPANReadTarget | undefined {
-  if (networkId === "sepolia" && BPAN_TESTNET_ENABLED) {
-    return { contract: BPAN_SEPOLIA_CONTRACT, rpc: NETWORKS.sepolia.rpcUrl };
-  }
-  return undefined;
-}
-
-function getContractAddress(networkId: string): string {
-  return networkId === "sepolia" && BPAN_TESTNET_ENABLED ? BPAN_SEPOLIA_CONTRACT : BPAN_MAINNET_CONTRACT;
-}
-function getContractRPC(networkId: string): string {
-  return networkId === "sepolia" && BPAN_TESTNET_ENABLED ? NETWORKS.sepolia.rpcUrl : BPAN_MAINNET_RPC;
+  return BPAN_DEPLOYMENT.deployed && networkId === BPAN_DEPLOYMENT.networkId;
 }
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 export default function BPANPage() {
-  const { wallet, network, nonEvmWallet } = useWallet();
+  const { wallet, network, nonEvmWallet, switchNetwork } = useWallet();
   const [tab, setTab] = useState<Tab>("my-bpan");
 
   // Central ownership state — shared by all tabs
   const [ownedBPANs, setOwnedBPANs] = useState<string[]>([]);
-  const [ownershipLoading, setOwnershipLoading] = useState(false);
-  const [ownershipScanned, setOwnershipScanned] = useState(false);
+  const [ownershipLoading, setOwnershipLoading] = useState(true);
+  const [ownershipError, setOwnershipError] = useState(false);
+  const [scanRevision, setScanRevision] = useState(0);
 
-  const isOnEthereum = canWriteBPAN(network.id);
-  const isTestnet = network.id === "sepolia" && BPAN_TESTNET_ENABLED;
-  const contractAddr = getContractAddress(network.id);
-  const contractRPC  = getContractRPC(network.id);
-  const readTarget = getReadTarget(network.id);
+  const isOnRegistry = canWriteBPAN(network.id);
+  const contractAddr = BPAN_MAINNET_CONTRACT;
+  const contractRPC = BPAN_MAINNET_RPC;
 
-  // Reset and reload from address-specific cache when active wallet changes.
-  // Delete the old address-less "bpan_numbers" key if it still exists — we
-  // can't know which wallet it belonged to, so the on-chain scan recovers it.
+  // A wallet or deployment change must cancel the old scan and load only
+  // this registry's cache. Never mix ownership from different wallets.
   useEffect(() => {
-    if (!wallet?.address) return;
-    localStorage.removeItem("bpan_numbers");
-    setOwnedBPANs(getSavedBPANs(wallet.address));
-    setOwnershipScanned(false);
-  }, [wallet?.address]);
-
-  // On-chain ownership scan — runs once per wallet (re-triggers when ownershipScanned resets)
-  useEffect(() => {
-    if (!wallet?.address || ownershipScanned) return;
-    setOwnershipScanned(true);
-
+    if (!BPAN_DEPLOYMENT.deployed) { setOwnedBPANs([]); setOwnershipLoading(false); return; }
+    if (!wallet?.address) { setOwnedBPANs([]); setOwnershipLoading(false); return; }
+    let live = true;
+    const address = wallet.address;
+    setOwnedBPANs(getSavedBPANs(address));
+    setOwnershipLoading(true);
+    setOwnershipError(false);
     (async () => {
-      // Fast check first: does this wallet own any BPANs at all?
-      const count = await getOwnedBPANCount(wallet.address, readTarget);
-      if (count === 0) return;
-
-      // Count > 0 → do the full scan to get token IDs
-      setOwnershipLoading(true);
       try {
-        const found = await findOwnedBPANs(wallet.address, readTarget);
-        if (found.length > 0) {
-          const saved = getSavedBPANs(wallet.address);
-          const merged = Array.from(new Set([...found, ...saved]));
-          localStorage.setItem(`bpan_numbers_${wallet.address.toLowerCase()}`, JSON.stringify(merged));
-          setOwnedBPANs(merged);
-        }
-      } catch { /* non-fatal */ }
-      finally { setOwnershipLoading(false); }
+        const found = await findOwnedBPANs(address);
+        if (!live) return;
+        localStorage.setItem(bpanOwnershipKey(address), JSON.stringify(found));
+        setOwnedBPANs(found);
+      } catch { if (live) setOwnershipError(true); }
+      finally { if (live) setOwnershipLoading(false); }
     })();
-  }, [wallet?.address, ownershipScanned]);
+    return () => { live = false; };
+  }, [wallet?.address, scanRevision]);
 
   function handleRegistered(number: string) {
     if (!wallet?.address) return;
@@ -160,6 +124,18 @@ export default function BPANPage() {
     { id: "lookup",   label: "Lookup"   },
   ];
 
+  if (!BPAN_DEPLOYMENT.deployed) return (
+    <Layout>
+      <div className="app-bg min-h-full px-4 py-4">
+        <h2 className="text-lg font-bold text-text-primary mb-3">BPAN</h2>
+        <div role="status" className="premium-card p-4">
+          <p className="text-sm font-semibold text-text-primary mb-2">Coming to Base</p>
+          <p className="text-xs text-text-secondary">{BPAN_UNAVAILABLE_MESSAGE}</p>
+        </div>
+      </div>
+    </Layout>
+  );
+
   return (
     <Layout>
       <div className="app-bg min-h-full">
@@ -168,44 +144,49 @@ export default function BPANPage() {
           {/* Header */}
           <div className="flex items-center gap-2 mb-1">
             <h2 className="text-lg font-bold text-text-primary">BPAN</h2>
-            {ownedBPANs.length > 0 && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-accent-green/10 text-accent-green font-semibold border border-accent-green/20">
-                LIVE
-              </span>
-            )}
-            {isTestnet && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber/10 font-semibold border border-amber/20" style={{ color: "var(--amber)" }}>
-                TESTNET
-              </span>
-            )}
           </div>
           <div className="flex items-center gap-1.5 mb-4">
             <GlobeIcon size={11} className="text-muted" />
             <p className="text-[11px] text-muted">
-              Registry on <span className="text-brand-400 font-medium">Ethereum mainnet</span>. All chain mappings stored there.
+              Registry: <span className="text-brand-400 font-medium">{BPAN_DEPLOYMENT.name}</span>
             </p>
           </div>
 
-          {/* Write-action warning when not on Ethereum */}
-          {!isOnEthereum && (tab === "register" || tab === "mapping") && (
-            <div className="mb-4 px-3 py-2.5 rounded-xl bg-amber/5 border border-amber/20 flex items-start gap-2 animate-fade-in">
-              <AlertIcon size={13} className="text-amber mt-0.5 flex-shrink-0" style={{ color: "var(--amber)" }} />
-              <p className="text-[11px] leading-relaxed" style={{ color: "var(--amber)" }}>
-                Switch to <strong>Ethereum mainnet</strong>{BPAN_TESTNET_ENABLED ? " or Sepolia" : ""} to register or set mappings. Lookups work on any network.
-              </p>
-            </div>
+          {/* Write-action warning when not on Base */}
+          {!isOnRegistry && (tab === "register" || tab === "mapping") && (
+            <AlertCard
+              title="Base is required"
+              body={`Registration and mapping changes happen on ${BPAN_DEPLOYMENT.name}. Lookups still work from any network.`}
+              tone="amber"
+              action={{ label: `Switch to ${BPAN_DEPLOYMENT.name}`, onClick: () => switchNetwork(BPAN_DEPLOYMENT.networkId) }}
+            />
           )}
 
           {/* Tab row */}
-          <div className="flex premium-card p-1 mb-5 gap-0.5">
+          <div role="tablist" aria-label="BPAN" className="flex premium-card p-1 mb-5 gap-0.5">
             {TABS.map((t) => (
               <button
                 key={t.id}
+                role="tab"
+                id={`bpan-tab-${t.id}`}
+                aria-selected={tab === t.id}
+                aria-controls={`bpan-panel-${t.id}`}
+                tabIndex={tab === t.id ? 0 : -1}
+                onKeyDown={(event) => {
+                  const index = TABS.findIndex((item) => item.id === t.id);
+                  const next = event.key === "ArrowRight" ? (index + 1) % TABS.length
+                    : event.key === "ArrowLeft" ? (index + TABS.length - 1) % TABS.length
+                    : event.key === "Home" ? 0 : event.key === "End" ? TABS.length - 1 : -1;
+                  if (next < 0) return;
+                  event.preventDefault();
+                  // Manual activation avoids clearing an unfinished form on arrow navigation.
+                  document.getElementById(`bpan-tab-${TABS[next].id}`)?.focus();
+                }}
                 onClick={() => setTab(t.id)}
                 className={`flex-1 py-2 text-[11px] rounded-lg font-medium transition-all duration-150 ${
                   tab === t.id
-                    ? "bg-brand-500 text-white shadow-lg shadow-brand-500/30"
-                    : "text-muted hover:text-text-secondary"
+                    ? "bg-brand-600 text-white shadow-lg shadow-brand-500/30"
+                    : "text-text-secondary hover:text-text-primary"
                 }`}
               >
                 {t.label}
@@ -213,13 +194,16 @@ export default function BPANPage() {
             ))}
           </div>
 
-          <div className="animate-slide-up">
+          {TABS.map((panel) => (
+          <div key={panel.id} role="tabpanel" id={`bpan-panel-${panel.id}`} aria-labelledby={`bpan-tab-${panel.id}`} hidden={tab !== panel.id} tabIndex={0} className="motion-safe:animate-slide-up">
+            {tab === panel.id && (<>
             {tab === "my-bpan" && (
               <MyBPANSection
                 wallet={wallet}
                 ownedBPANs={ownedBPANs}
                 loading={ownershipLoading}
-                readTarget={readTarget}
+                error={ownershipError}
+                onRetry={() => setScanRevision((value) => value + 1)}
                 onRemove={handleRemoved}
                 onGoRegister={() => setTab("register")}
                 onGoMapping={() => setTab("mapping")}
@@ -231,10 +215,7 @@ export default function BPANPage() {
                 network={network}
                 contractAddr={contractAddr}
                 contractRPC={contractRPC}
-                ownedBPANs={ownedBPANs}
-                readTarget={readTarget}
                 onRegistered={handleRegistered}
-                onGoMapping={() => setTab("mapping")}
               />
             )}
             {tab === "mapping" && (
@@ -245,11 +226,12 @@ export default function BPANPage() {
                 contractRPC={contractRPC}
                 ownedBPANs={ownedBPANs}
                 nonEvmWallet={nonEvmWallet}
-                readTarget={readTarget}
               />
             )}
-            {tab === "lookup" && <LookupSection readTarget={readTarget} />}
+            {tab === "lookup" && <LookupSection />}
+            </>)}
           </div>
+          ))}
         </div>
       </div>
     </Layout>
@@ -258,24 +240,43 @@ export default function BPANPage() {
 
 // ── My BPAN ───────────────────────────────────────────────────────────────────
 function MyBPANSection({
-  wallet, ownedBPANs, loading, readTarget, onRemove, onGoRegister, onGoMapping,
+  wallet, ownedBPANs, loading, error, onRetry, onRemove, onGoRegister, onGoMapping,
 }: {
   wallet: any;
   ownedBPANs: string[];
   loading: boolean;
-  readTarget?: BPANReadTarget;
+  error: boolean;
+  onRetry: () => void;
   onRemove: (n: string) => void;
   onGoRegister: () => void;
   onGoMapping: () => void;
 }) {
   if (loading && ownedBPANs.length === 0) {
     return (
-      <div className="flex flex-col items-center py-10">
-        <div className="w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full animate-spin mb-3" />
-        <p className="text-xs text-muted">Scanning Ethereum mainnet for your BPANs...</p>
+      <div role="status" aria-label="Loading your BPANs" className="premium-card p-3.5">
+        <span className="sr-only">Loading your BPANs</span>
+        <div aria-hidden="true" className="flex items-center gap-3 motion-safe:animate-pulse">
+          <div className="w-10 h-10 rounded-xl bg-surface-3" />
+          <div className="flex-1 space-y-2">
+            <div className="h-4 w-36 rounded bg-surface-3" />
+            <div className="h-3 w-20 rounded bg-surface-3" />
+          </div>
+        </div>
       </div>
     );
   }
+
+  const scanFailure = error && (
+    <AlertCard
+      title="Could not refresh BPANs"
+      body={ownedBPANs.length > 0 ? "Showing saved numbers from this device." : "Check your connection and try again."}
+      tone="amber"
+      urgent
+      action={{ label: "Retry", onClick: onRetry }}
+      className="mb-2"
+    />
+  );
+  if (error && ownedBPANs.length === 0) return scanFailure;
 
   if (ownedBPANs.length === 0) {
     return (
@@ -294,18 +295,18 @@ function MyBPANSection({
 
   return (
     <div className="space-y-2">
+      {scanFailure}
       {loading && (
         <div className="flex items-center gap-2 mb-1">
           <div className="w-3 h-3 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-[11px] text-muted">Syncing from mainnet...</p>
+          <p className="text-[11px] text-muted">Refreshing your BPANs...</p>
         </div>
       )}
       {ownedBPANs.map((num) => (
         <BPANCard
-          key={num}
+          key={`${BPAN_DEPLOYMENT.chainId}:${num}`}
           number={num}
           walletAddress={wallet?.address}
-          readTarget={readTarget}
           onRemove={() => onRemove(num)}
           onGoMapping={onGoMapping}
         />
@@ -315,11 +316,10 @@ function MyBPANSection({
 }
 
 function BPANCard({
-  number, walletAddress, readTarget, onRemove, onGoMapping,
+  number, walletAddress, onRemove, onGoMapping,
 }: {
   number: string;
   walletAddress?: string;
-  readTarget?: BPANReadTarget;
   onRemove: () => void;
   onGoMapping: () => void;
 }) {
@@ -328,6 +328,7 @@ function BPANCard({
   const [mappings, setMappings] = useState<{ chains: string[]; wallets: string[] } | null>(null);
   const [owner, setOwner] = useState("");
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [detailError, setDetailError] = useState(false);
 
   useEffect(() => {
     if (expanded && !mappings) loadDetail();
@@ -335,14 +336,15 @@ function BPANCard({
 
   async function loadDetail() {
     setLoadingDetail(true);
+    setDetailError(false);
     try {
       const [m, o] = await Promise.all([
-        getAllBPANMappings(number, readTarget),
-        getBPANOwner(number, readTarget),
+        getAllBPANMappings(number),
+        getBPANOwner(number),
       ]);
       setMappings(m);
       setOwner(o);
-    } catch { setMappings({ chains: [], wallets: [] }); }
+    } catch { setDetailError(true); }
     finally { setLoadingDetail(false); }
   }
 
@@ -358,23 +360,27 @@ function BPANCard({
         <div className="flex-1 min-w-0">
           <p className="text-[15px] font-bold text-text-primary tracking-wide font-mono">{formatted}</p>
           {isOwner && (
-            <span className="inline-block text-[10px] bg-accent-green/10 text-accent-green px-1.5 py-0.5 rounded-full font-medium mt-0.5 border border-accent-green/20">
+            <span className="inline-block text-[10px] bg-accent-green/10 bpan-success px-1.5 py-0.5 rounded-full font-medium mt-0.5 border border-accent-green/20">
               Owner
             </span>
           )}
         </div>
         <div className="flex items-center gap-1">
           <button
+            aria-label={copied ? "BPAN copied" : `Copy BPAN ${formatted}`}
             onClick={async () => { await copyText(number); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
-            className="p-1.5 rounded-lg hover:bg-surface-2 transition-colors"
+            className="p-2 min-w-8 min-h-8 rounded-lg hover:bg-surface-2 transition-colors"
           >
             {copied
-              ? <CheckIcon size={14} className="text-accent-green" />
+              ? <CheckIcon size={14} className="bpan-success" />
               : <CopyIcon size={14} className="text-muted" />}
           </button>
           <button
+            aria-label={`${expanded ? "Hide" : "Show"} details for BPAN ${formatted}`}
+            aria-expanded={expanded}
+            aria-controls={`bpan-details-${number}`}
             onClick={() => setExpanded(!expanded)}
-            className="p-1.5 rounded-lg hover:bg-surface-2 transition-colors"
+            className="p-2 min-w-8 min-h-8 rounded-lg hover:bg-surface-2 transition-colors"
           >
             <ChevronDownIcon size={14} className={`text-muted transition-transform duration-200 ${expanded ? "rotate-180" : ""}`} />
           </button>
@@ -382,15 +388,16 @@ function BPANCard({
       </div>
 
       {expanded && (
-        <div className="px-3.5 pb-3 border-t border-border pt-2.5 animate-slide-up">
+        <div id={`bpan-details-${number}`} className="px-3.5 pb-3 border-t border-border pt-2.5 animate-slide-up">
+          {detailError && <InlineNotice message="Could not refresh mappings. Try Refresh again." tone="amber" className="mb-2" />}
           {loadingDetail && (
             <div className="flex items-center gap-2 py-2">
               <div className="w-4 h-4 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
-              <p className="text-xs text-muted">Loading from Ethereum mainnet...</p>
+              <p className="text-xs text-muted">Loading from {BPAN_DEPLOYMENT.name}...</p>
             </div>
           )}
 
-          {!loadingDetail && mappings && mappings.chains.length > 0 && (
+          {mappings && mappings.chains.length > 0 && (
             <div className="space-y-1.5 mb-2.5">
               <p className="text-[11px] text-muted uppercase tracking-wider font-medium">Wallet Mappings</p>
               {mappings.chains.map((chain, i) => (
@@ -405,7 +412,7 @@ function BPANCard({
             </div>
           )}
 
-          {!loadingDetail && mappings && mappings.chains.length === 0 && (
+          {!loadingDetail && !detailError && mappings && mappings.chains.length === 0 && (
             <p className="text-xs text-muted mb-2.5">No mappings set yet.</p>
           )}
 
@@ -414,7 +421,7 @@ function BPANCard({
             <span className="text-muted text-xs">·</span>
             <button onClick={onGoMapping} className="text-[11px] text-brand-400 font-medium hover:underline">Add mappings</button>
             <span className="text-muted text-xs">·</span>
-            <button onClick={onRemove} className="text-[11px] font-medium hover:underline" style={{ color: "var(--danger)" }}>Remove</button>
+            <button onClick={onRemove} className="text-[11px] font-medium hover:underline" style={{ color: "var(--danger-text)" }}>Remove</button>
           </div>
         </div>
       )}
@@ -424,16 +431,13 @@ function BPANCard({
 
 // ── Register ──────────────────────────────────────────────────────────────────
 function RegisterSection({
-  wallet, network, contractAddr, contractRPC, ownedBPANs, readTarget, onRegistered, onGoMapping,
+  wallet, network, contractAddr, contractRPC, onRegistered,
 }: {
   wallet: any;
   network: any;
   contractAddr: string;
   contractRPC: string;
-  ownedBPANs: string[];
-  readTarget?: BPANReadTarget;
   onRegistered: (n: string) => void;
-  onGoMapping: () => void;
 }) {
   const [number, setNumber] = useState("");
   const [checking, setChecking] = useState(false);
@@ -443,11 +447,10 @@ function RegisterSection({
   const [error, setError] = useState("");
   const [fee, setFee] = useState<string | null>(null);
 
-  const isOnEthereum = canWriteBPAN(network.id);
-  const alreadyOwns = ownedBPANs.length > 0;
+  const isOnRegistry = canWriteBPAN(network.id);
 
   useEffect(() => {
-    if (!isOnEthereum) return;
+    if (!isOnRegistry) return;
     (async () => {
       try {
         const provider = new ethers.JsonRpcProvider(contractRPC);
@@ -456,52 +459,16 @@ function RegisterSection({
         setFee(ethers.formatEther(f));
       } catch {}
     })();
-  }, [contractAddr, contractRPC, isOnEthereum]);
+  }, [contractAddr, contractRPC, isOnRegistry]);
 
-  // Block registration if this wallet already owns a BPAN
-  if (alreadyOwns) {
-    return (
-      <div className="premium-card p-4 animate-fade-in">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center flex-shrink-0">
-            <CheckIcon size={18} className="text-white" />
-          </div>
-          <div>
-            <p className="text-[13px] font-semibold text-text-primary">Already registered</p>
-            <p className="text-[11px] text-muted">
-              This wallet owns {ownedBPANs.length === 1 ? "a BPAN" : `${ownedBPANs.length} BPANs`}
-            </p>
-          </div>
-        </div>
-
-        <div className="space-y-1.5 mb-4">
-          {ownedBPANs.map((num) => (
-            <div key={num} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-brand-500/5 border border-brand-500/15">
-              <HashIcon size={12} className="text-brand-400" />
-              <span className="font-mono text-[13px] font-semibold text-brand-400">{formatBPAN(num)}</span>
-            </div>
-          ))}
-        </div>
-
-        <p className="text-xs text-muted mb-4 leading-relaxed">
-          Each wallet holds one BPAN. To receive on more chains, add wallet mappings to your existing BPAN: one number works across every supported chain.
-        </p>
-
-        <button onClick={onGoMapping} className="btn-primary-premium text-[13px]">
-          Add Chain Mappings
-        </button>
-      </div>
-    );
-  }
-
-  if (!isOnEthereum) {
+  if (!isOnRegistry) {
     return (
       <div className="text-center py-8">
         <div className="w-14 h-14 rounded-2xl premium-card flex items-center justify-center mx-auto mb-3">
           <AlertIcon size={24} className="text-muted" />
         </div>
-        <p className="text-[13px] text-text-secondary font-medium mb-1">Switch to Ethereum</p>
-        <p className="text-xs text-muted">BPAN registration requires Ethereum mainnet or Sepolia.</p>
+        <p className="text-[13px] text-text-secondary font-medium mb-1">Switch to {BPAN_DEPLOYMENT.name}</p>
+        <p className="text-xs text-muted">BPAN registration requires {BPAN_DEPLOYMENT.name}.</p>
       </div>
     );
   }
@@ -510,7 +477,7 @@ function RegisterSection({
     if (!isValidBPAN(number)) { setError("Enter a valid 11-digit number"); return; }
     setError(""); setAvailable(null); setChecking(true);
     try {
-      const registered = await isBPANRegistered(number, readTarget);
+      const registered = await isBPANRegistered(number);
       setAvailable(!registered);
     } catch {
       setError("Check failed. Verify your connection.");
@@ -518,7 +485,7 @@ function RegisterSection({
   }
 
   async function handleRegister() {
-    if (!wallet || !isOnEthereum) return;
+    if (!wallet || !isOnRegistry) return;
     if (!isValidBPAN(number)) { setError("Enter a valid 11-digit number"); return; }
     // Authoritative lock check before any key is used: auto-lock clears the
     // session, but an open popup can still hold this wallet in memory until it
@@ -541,18 +508,20 @@ function RegisterSection({
       <div className="premium-card p-3.5 mb-4">
         <p className="text-[11px] text-muted uppercase tracking-wider font-medium mb-1">How it works</p>
         <p className="text-xs text-text-secondary leading-relaxed">
-          Register any 11-digit number as your BPAN identity. It mints as an NFT on Ethereum mainnet. You then map wallet addresses for each chain you want to receive on.
+          Choose an 11-digit number, then add addresses to receive payments.
         </p>
         {fee && (
           <p className="text-xs text-brand-400 font-medium mt-2">
-            Registration fee: {parseFloat(fee) === 0 ? "Free" : `${fee} ETH`}
+            Registration fee: {parseFloat(fee) === 0 ? "0 ETH" : `${fee} ETH`}. Network gas is paid in ETH on {BPAN_DEPLOYMENT.name}.
           </p>
         )}
       </div>
 
-      <label className="text-xs text-text-secondary mb-1.5 block font-medium">Your BPAN number</label>
+      <label htmlFor="bpan-register-number" className="text-xs text-text-secondary mb-1.5 block font-medium">Your BPAN number</label>
       <div className="flex gap-2 mb-3">
         <input
+          id="bpan-register-number"
+          inputMode="numeric"
           value={number}
           onChange={(e) => {
             setNumber(e.target.value.replace(/\D/g, "").slice(0, 11));
@@ -574,18 +543,15 @@ function RegisterSection({
 
       {available === true && (
         <div className="flex items-center gap-1.5 mb-3 animate-fade-in">
-          <CheckIcon size={14} className="text-accent-green" />
-          <p className="text-xs text-accent-green font-medium">Available!</p>
+          <CheckIcon size={14} className="bpan-success" />
+          <p role="status" className="text-xs bpan-success font-medium">Available!</p>
         </div>
       )}
       {available === false && (
-        <div className="flex items-center gap-1.5 mb-3 animate-fade-in">
-          <AlertIcon size={14} style={{ color: "var(--danger)" }} />
-          <p className="text-xs font-medium" style={{ color: "var(--danger)" }}>Already taken. Try a different number.</p>
-        </div>
+        <InlineNotice message="Already taken. Try a different number." className="mb-3" />
       )}
 
-      {error && <p className="text-xs mb-3 animate-fade-in" style={{ color: "var(--danger)" }}>{error}</p>}
+      {error && <InlineNotice message={error} className="mb-3" />}
       {txHash && <TxSuccess hash={txHash} explorer={network.explorer} />}
 
       <button
@@ -621,7 +587,7 @@ function autoNonEvmAddress(chainId: string, nonEvmWallet: NonEvmWallet | null): 
 }
 
 function MappingSection({
-  wallet, network, contractAddr, contractRPC, ownedBPANs, nonEvmWallet, readTarget,
+  wallet, network, contractAddr, contractRPC, ownedBPANs, nonEvmWallet,
 }: {
   wallet: any;
   network: any;
@@ -629,7 +595,6 @@ function MappingSection({
   contractRPC: string;
   ownedBPANs: string[];
   nonEvmWallet: NonEvmWallet | null;
-  readTarget?: BPANReadTarget;
 }) {
   const defaultBPAN = ownedBPANs[0] || "";
   const [number, setNumber] = useState(defaultBPAN);
@@ -684,13 +649,13 @@ function MappingSection({
     setExistingMap(null);
     if (!isValidBPAN(number)) return;
     let stale = false;
-    getAllBPANMappings(number, readTarget)
+    getAllBPANMappings(number)
       .then((m) => {
         if (!stale) setExistingMap(Object.fromEntries(m.chains.map((c, i) => [c, m.wallets[i]])));
       })
       .catch(() => { /* stays null — no skipping without data */ });
     return () => { stale = true; };
-  }, [number, readTarget?.contract, readTarget?.rpc]);
+  }, [number]);
 
   // "Up to date" = an existing mapping equals what would be written (EVM
   // addresses compare case-insensitively; base58/bech32 chains exactly).
@@ -700,7 +665,7 @@ function MappingSection({
   const nonEvmUpToDate = (id: string) =>
     !!existingMap?.[id] && existingMap[id].trim() === (nonEvmAddrs[id] || "").trim();
 
-  const isOnEthereum = canWriteBPAN(network.id);
+  const isOnRegistry = canWriteBPAN(network.id);
 
   const evmChains = BPAN_CHAINS.filter((c) => c.isEVM);
   const q = chainSearch.toLowerCase();
@@ -740,7 +705,7 @@ function MappingSection({
     selectedNonEvmChains.every((c) => !!(nonEvmAddrs[c.id] || "").trim());
 
   async function handleSetMappings() {
-    if (!wallet || !isOnEthereum) return;
+    if (!wallet || !isOnRegistry) return;
     if (!isValidBPAN(number)) { setError("Enter a valid 11-digit BPAN"); return; }
     if (selectedChains.size === 0) { setError("Select at least one chain"); return; }
     if (!allAddressesFilled) { setError("Fill in all wallet addresses before mapping"); return; }
@@ -772,7 +737,7 @@ function MappingSection({
       // drive both the no-op skip and the stale-override rewrites below.
       let existing: Record<string, string> | null = null;
       try {
-        const m = await getAllBPANMappings(number, readTarget);
+        const m = await getAllBPANMappings(number);
         existing = Object.fromEntries(m.chains.map((c, i) => [c, m.wallets[i]]));
         setExistingMap(existing);
       } catch {
@@ -834,14 +799,14 @@ function MappingSection({
     } finally { setLoading(false); }
   }
 
-  if (!isOnEthereum) {
+  if (!isOnRegistry) {
     return (
       <div className="text-center py-8">
         <div className="w-14 h-14 rounded-2xl premium-card flex items-center justify-center mx-auto mb-3">
           <AlertIcon size={24} className="text-muted" />
         </div>
-        <p className="text-[13px] text-text-secondary font-medium mb-1">Switch to Ethereum</p>
-        <p className="text-xs text-muted">Setting wallet mappings requires Ethereum mainnet or Sepolia.</p>
+        <p className="text-[13px] text-text-secondary font-medium mb-1">Switch to {BPAN_DEPLOYMENT.name}</p>
+        <p className="text-xs text-muted">Setting wallet mappings requires {BPAN_DEPLOYMENT.name}.</p>
       </div>
     );
   }
@@ -849,7 +814,7 @@ function MappingSection({
   return (
     <div>
       <p className="text-[13px] text-muted mb-4 leading-relaxed">
-        Map your wallet addresses to your BPAN across multiple chains. All mappings are stored on Ethereum mainnet.
+        Map your wallet addresses to your BPAN across multiple chains. All mappings are stored on {BPAN_DEPLOYMENT.name}.
       </p>
 
       <label className="text-xs text-text-secondary mb-1.5 block font-medium">BPAN Number</label>
@@ -858,10 +823,11 @@ function MappingSection({
           {ownedBPANs.map((n) => (
             <button
               key={n}
+              aria-pressed={number === n}
               onClick={() => setNumber(n)}
               className={`px-3 py-1.5 rounded-xl text-xs font-mono font-semibold border transition-colors ${
                 number === n
-                  ? "bg-brand-500 text-white border-brand-500"
+                  ? "bg-brand-600 text-white border-brand-600"
                   : "bg-surface-2 text-text-secondary border-border hover:border-brand-500/40"
               }`}
             >
@@ -871,6 +837,8 @@ function MappingSection({
         </div>
       ) : (
         <input
+          id="bpan-mapping-number" aria-label="Registered BPAN number"
+          inputMode="numeric"
           value={number}
           onChange={(e) => setNumber(e.target.value.replace(/\D/g, "").slice(0, 11))}
           placeholder="Your registered BPAN"
@@ -880,6 +848,8 @@ function MappingSection({
 
       <label className="text-xs text-text-secondary mb-1.5 block font-medium">Target Chains</label>
       <button
+        aria-expanded={showChainPicker}
+        aria-label={`Target chains: ${selectedLabel}`}
         onClick={() => { setShowChainPicker(!showChainPicker); setChainSearch(""); }}
         className="w-full input-field mb-1.5 text-left flex items-center justify-between"
       >
@@ -894,6 +864,7 @@ function MappingSection({
           <div className="relative border-b border-border">
             <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
             <input
+              aria-label="Search chains"
               value={chainSearch}
               onChange={(e) => setChainSearch(e.target.value)}
               placeholder="Search chains..."
@@ -909,6 +880,7 @@ function MappingSection({
             {/* One row = every EVM chain (a single "evm" registry mapping) */}
             {evmRowVisible && (
               <button
+                role="checkbox" aria-checked={evmSelected}
                 onClick={() => toggleChain("evm")}
                 className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-[13px] hover:bg-surface-2 transition-colors border-b border-border ${evmSelected ? "text-brand-400" : "text-text-primary"}`}
               >
@@ -929,7 +901,7 @@ function MappingSection({
                   </div>
                 </div>
                 {evmUpToDate ? (
-                  <span className="text-[9px] text-accent-green bg-accent-green/10 px-1.5 py-0.5 rounded-full border border-accent-green/20 font-medium flex-shrink-0">mapped</span>
+                  <span className="text-[9px] bpan-success bg-accent-green/10 px-1.5 py-0.5 rounded-full border border-accent-green/20 font-medium flex-shrink-0">mapped</span>
                 ) : (
                   <span className="text-[9px] text-brand-400 bg-brand-500/10 px-1.5 py-0.5 rounded-full border border-brand-500/20 font-medium flex-shrink-0">1 tx</span>
                 )}
@@ -940,6 +912,7 @@ function MappingSection({
               return (
                 <button
                   key={c.id}
+                  role="checkbox" aria-checked={sel}
                   onClick={() => toggleChain(c.id)}
                   className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-[13px] hover:bg-surface-2 transition-colors ${sel ? "text-brand-400" : "text-text-primary"}`}
                 >
@@ -949,7 +922,7 @@ function MappingSection({
                   <ChainIcon chainId={c.id} logo={c.logo} size={18} />
                   <span className="font-medium flex-1 text-left">{c.name}</span>
                   {nonEvmUpToDate(c.id) && (
-                    <span className="text-[9px] text-accent-green bg-accent-green/10 px-1.5 py-0.5 rounded-full border border-accent-green/20 font-medium flex-shrink-0">mapped</span>
+                    <span className="text-[9px] bpan-success bg-accent-green/10 px-1.5 py-0.5 rounded-full border border-accent-green/20 font-medium flex-shrink-0">mapped</span>
                   )}
                 </button>
               );
@@ -964,13 +937,14 @@ function MappingSection({
           <label className="text-xs text-text-secondary mb-1.5 block font-medium">
             EVM Address
             {evmUpToDate ? (
-              <span className="text-accent-green font-normal ml-1.5">✓ already mapped to this address</span>
+              <span className="bpan-success font-normal ml-1.5">✓ already mapped to this address</span>
             ) : (
               <span className="text-muted font-normal ml-1.5">(covers ALL EVM chains, one transaction)</span>
             )}
           </label>
           <div className="flex gap-2">
             <input
+              aria-label="EVM address"
               value={evmAddr}
               onChange={(e) => setEvmAddr(e.target.value)}
               placeholder="0x..."
@@ -999,13 +973,14 @@ function MappingSection({
                   <ChainIcon chainId={c.id} logo={c.logo} size={14} />
                   <span className="text-[11px] text-text-secondary font-medium">{c.name}</span>
                   {nonEvmUpToDate(c.id) ? (
-                    <span className="text-[9px] bg-accent-green/10 text-accent-green px-1.5 py-0.5 rounded-full border border-accent-green/20 font-medium">✓ mapped</span>
+                    <span className="text-[9px] bg-accent-green/10 bpan-success px-1.5 py-0.5 rounded-full border border-accent-green/20 font-medium">✓ mapped</span>
                   ) : auto && val === auto ? (
-                    <span className="text-[9px] bg-accent-green/10 text-accent-green px-1.5 py-0.5 rounded-full border border-accent-green/20 font-medium">auto</span>
+                    <span className="text-[9px] bg-accent-green/10 bpan-success px-1.5 py-0.5 rounded-full border border-accent-green/20 font-medium">auto</span>
                   ) : null}
                 </div>
                 <div className="flex gap-2">
                   <input
+                    aria-label={`${c.name} address`}
                     value={val}
                     onChange={(e) => setNonEvmAddrs((prev) => ({ ...prev, [c.id]: e.target.value }))}
                     placeholder={auto || `${c.name} address`}
@@ -1026,7 +1001,7 @@ function MappingSection({
         </div>
       )}
 
-      {error && <p className="text-xs mb-3 animate-fade-in" style={{ color: "var(--danger)" }}>{error}</p>}
+      {error && <InlineNotice message={error} className="mb-3" />}
 
       {loading && (
         <div className="mb-3 premium-card p-3 animate-fade-in">
@@ -1049,11 +1024,11 @@ function MappingSection({
           {txHashes.map((tx, i) => (
             <div key={i} className="premium-card px-3 py-2 flex items-center gap-2">
               <div className="w-4 h-4 rounded-full bg-accent-green/15 flex items-center justify-center flex-shrink-0">
-                <CheckIcon size={8} className="text-accent-green" />
+                <CheckIcon size={8} className="bpan-success" />
               </div>
               <span className="text-[11px] text-text-secondary font-medium w-24 truncate">{tx.chain}</span>
               <a
-                href={`${NETWORKS[network.id]?.explorer || "https://etherscan.io"}/tx/${tx.hash}`}
+                href={`${NETWORKS[network.id]?.explorer || BPAN_DEPLOYMENT.explorer}/tx/${tx.hash}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-[11px] text-brand-400 font-mono truncate hover:underline flex-1"
@@ -1095,7 +1070,7 @@ function MappingSection({
 }
 
 // ── Lookup ────────────────────────────────────────────────────────────────────
-function LookupSection({ readTarget }: { readTarget?: BPANReadTarget }) {
+function LookupSection() {
   const [number, setNumber] = useState("");
   const [result, setResult] = useState<{ chains: string[]; wallets: string[] } | null>(null);
   const [owner, setOwner] = useState("");
@@ -1107,9 +1082,9 @@ function LookupSection({ readTarget }: { readTarget?: BPANReadTarget }) {
     if (!isValidBPAN(clean)) { setError("Enter a valid 11-digit BPAN number"); return; }
     setError(""); setLoading(true); setResult(null); setOwner("");
     try {
-      const registered = await isBPANRegistered(clean, readTarget);
+      const registered = await isBPANRegistered(clean);
       if (!registered) { setError("This number is not registered"); setLoading(false); return; }
-      const [m, o] = await Promise.all([getAllBPANMappings(clean, readTarget), getBPANOwner(clean, readTarget)]);
+      const [m, o] = await Promise.all([getAllBPANMappings(clean), getBPANOwner(clean)]);
       setResult(m);
       setOwner(o);
     } catch (e: any) {
@@ -1121,6 +1096,8 @@ function LookupSection({ readTarget }: { readTarget?: BPANReadTarget }) {
     <div>
       <div className="relative mb-3">
         <input
+          id="bpan-lookup-number" aria-label="BPAN number to look up"
+          inputMode="numeric"
           value={number}
           onChange={(e) => setNumber(e.target.value.replace(/\D/g, "").slice(0, 11))}
           placeholder="11-digit BPAN number"
@@ -1134,12 +1111,12 @@ function LookupSection({ readTarget }: { readTarget?: BPANReadTarget }) {
         {loading ? (
           <span className="flex items-center gap-2">
             <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-            Looking up on Ethereum mainnet...
+            Looking up on {BPAN_DEPLOYMENT.name}...
           </span>
         ) : "Lookup"}
       </button>
 
-      {error && <p className="text-xs mb-3 animate-fade-in" style={{ color: "var(--danger)" }}>{error}</p>}
+      {error && <InlineNotice message={error} className="mb-3" />}
 
       {owner && (
         <div className="mb-3 premium-card px-3.5 py-3 animate-slide-up">
@@ -1175,9 +1152,9 @@ function TxSuccess({ hash, explorer }: { hash: string; explorer: string }) {
     <div className="mb-3 premium-card p-3 animate-slide-up">
       <div className="flex items-center gap-1.5 mb-1">
         <div className="w-4 h-4 rounded-full bg-accent-green/15 flex items-center justify-center">
-          <CheckIcon size={10} className="text-accent-green" />
+          <CheckIcon size={10} className="bpan-success" />
         </div>
-        <p className="text-accent-green text-xs font-semibold">Transaction submitted!</p>
+        <p className="bpan-success text-xs font-semibold">Transaction submitted!</p>
       </div>
       <a
         href={`${explorer}/tx/${hash}`}

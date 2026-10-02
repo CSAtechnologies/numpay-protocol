@@ -253,3 +253,15 @@ assert every file is byte-identical again before the second commit. It was, all
    port landed there, in `cb05918`.
 5. `NEXT_STEP.md` is stale (dated 2026-05-22, says no production code exists).
    It is not a usable resume page any more.
+
+
+## 2026-09-06 update: primary action contrast
+
+The user requested applying relevant UI advice from a supplied video. Primary
+buttons and Receive's Copy Address action now use a separate darker purple
+`gradients.action` ramp. BPAN selected tabs and number chips use `colors.action`.
+The logo ramp remains decorative. The previous test that pinned failing button
+ratios has been replaced with 4.5:1 assertions for every action ramp stop in
+both themes. This resolves the color choice for these controls; it does not
+establish whole-app accessibility compliance. This update has automated checks,
+not a fresh device visual pass. See NUMPAY_UI_REVIEW_2026-09-06.md.

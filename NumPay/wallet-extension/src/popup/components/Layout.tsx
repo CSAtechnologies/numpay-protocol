@@ -66,16 +66,6 @@ export default function Layout({ children, title, showBack, showNav = true }: La
                     : "text-muted hover:text-text-secondary"
                 }`}
               >
-                {/* Active background pill */}
-                {active && (
-                  <div
-                    className="absolute inset-x-1.5 inset-y-1.5 rounded-2xl"
-                    style={{
-                      background: "rgba(139, 92, 246, 0.12)",
-                      border: "1px solid rgba(139, 92, 246, 0.1)",
-                    }}
-                  />
-                )}
                 <item.Icon size={17} active={active} className="relative z-10" />
                 <span
                   className="relative z-10 font-semibold tracking-wider"

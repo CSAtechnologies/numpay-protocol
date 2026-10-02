@@ -169,7 +169,7 @@ for (const [theme, p] of Object.entries(palettes)) {
   ratio(theme, "brand2 on surface2", p.brand2, p.surface2);
   ratio(theme, "brand2 on coinDisc", p.brand2, p.coinDisc);
 
-  // Labels sitting ON a filled chip or tile rather than on a surface.
+  // Brand graphics use the 3:1 bar; normal-sized control labels use action below.
   ratio(theme, "onBrand on the brand fill", p.onBrand, p.brand, 3);
   ratio(theme, "onBrand on the danger button", p.onBrand, p.dangerBtn);
 
@@ -188,76 +188,14 @@ for (const [theme, p] of Object.entries(palettes)) {
     theme === "light" ? "#12101e" : "#ffffff", p.bg);
 }
 
-// ── The brand ramp, which paints every primary button ────────────────────────
-/**
- * The block above asserts `onBrand` against the FLAT `brand` token, at 3. That
- * is the right bar for a chip label, and it is not what a primary button
- * paints: `Btn variant="primary"` fills with the `gradients.brand` RAMP, and
- * the ramp's light end is nowhere near the flat token. So the flat assertion
- * passed while the real thing failed, on the dashboard Send CTA, Copy Address,
- * Register BPAN, Scan QR code and the BPAN tab pill.
- *
- * Measured on device 2026-07-31 against `onBrand` (#ffffff in BOTH themes), at
- * `type.body` 15px/600, which is normal text and so wants 4.5:
- *
- *     #a394ff  top stop     2.55:1
- *     #7c6df0  mid, 0.55    3.96:1
- *     #5b4cdb  bottom       6.00:1
- *
- * A centred label sits around the mid stop.
- *
- * WHY THIS IS PINNED RATHER THAN ENFORCED. Fixing it means darkening the app's
- * most recognisable colour: repositioning the stops is not enough, because even
- * pushing the light stop to `[0, 0.15, 1]` only reaches 4.37:1 across the text
- * band. That is a brand decision, and it was deliberately left open rather than
- * made here.
- *
- * So the ramp is CHARACTERISED instead: the exact stops and their exact ratios
- * are locked. Any edit to the ramp fails this block and forces the decision to
- * be made on purpose, which is the thing the flat-token assertion could not do.
- * When the decision is made, delete this block and assert 4.5 like everything
- * else.
- */
-const BRAND_RAMP = [
-  { stop: "#a394ff", at: "top", ratio: 2.55 },
-  { stop: "#7c6df0", at: "mid (0.55)", ratio: 3.96 },
-  { stop: "#5b4cdb", at: "bottom", ratio: 6.00 },
-];
-
+// Primary controls use a dedicated purple ramp; every stop must support
+// normal-sized white labels. Logo colors are decorative and remain separate.
 for (const theme of ["light", "dark"]) {
   setThemePref(theme);
   const ink = palettes[theme].onBrand;
-  const ramp = gradients.brand;
-
-  // The ramp is deliberately identical in both themes (theme.ts says so: it is
-  // a fill behind white text and must hold its contrast either way). Assert it,
-  // so a future light/dark divergence cannot slip in unmeasured.
-  if (ramp.length !== BRAND_RAMP.length
-      || ramp.some((s, i) => s.toLowerCase() !== BRAND_RAMP[i].stop)) {
-    console.error(
-      `FAIL  [${theme}] brand ramp changed: got ${JSON.stringify(ramp)}\n`
-      + `      expected ${JSON.stringify(BRAND_RAMP.map((s) => s.stop))}.\n`
-      + "      This ramp is behind every primary button's white label. Re-measure\n"
-      + "      it against onBrand and update BRAND_RAMP, or assert 4.5 if the\n"
-      + "      new ramp clears it.",
-    );
-    fail++;
-  } else pass++;
-
-  // Only the dark stop actually clears AA. Assert that one properly, so a
-  // change that drags it up is caught by the normal bar.
-  ratio(theme, "onBrand on the brand ramp's bottom stop", ink, "#5b4cdb");
-
-  // The other two are locked to their measured values, not to a threshold.
-  for (const { stop, at, ratio: expected } of BRAND_RAMP) {
-    const got = contrast(ink, stop);
-    if (Math.abs(got - expected) > 0.01) {
-      console.error(
-        `FAIL  [${theme}] brand ramp ${at} stop ${stop} vs onBrand ${ink}\n`
-        + `      measures ${got.toFixed(2)}:1, pinned at ${expected}:1.`,
-      );
-      fail++;
-    } else pass++;
+  ratio(theme, "onBrand on the action fill", ink, palettes[theme].action);
+  for (const [index, stop] of gradients.action.entries()) {
+    ratio(theme, `onBrand on action gradient stop ${index}`, ink, stop);
   }
 }
 setThemePref("light");

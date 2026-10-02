@@ -19,7 +19,7 @@
 // stay native.
 import { useEffect, useRef } from "react";
 import {
-  ActivityIndicator, Animated, Easing, Linking, Pressable, StyleSheet, Text, View,
+  ActivityIndicator, Animated, Easing, Linking, Modal, Pressable, StyleSheet, Text, View,
 } from "react-native";
 import Svg, { Circle, Defs, LinearGradient, Path, Stop } from "react-native-svg";
 import { colors, themedStyles } from "./theme";
@@ -29,18 +29,22 @@ const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 
 export type TxFxStatus = "pending" | "success" | "error";
-export type TxFxKind = "send" | "swap" | "bridge";
+export type TxFxKind = "send" | "swap" | "bridge" | "bpan-register" | "bpan-map";
 
 const TITLES: Record<TxFxKind, Record<TxFxStatus, string>> = {
   send:   { pending: "Sending…",   success: "Sent",             error: "Send failed" },
   swap:   { pending: "Swapping…",  success: "Swap submitted",   error: "Swap failed" },
   bridge: { pending: "Bridging…",  success: "Bridge submitted", error: "Bridge failed" },
+  "bpan-register": { pending: "Registering BPAN…", success: "BPAN registered", error: "Registration failed" },
+  "bpan-map":      { pending: "Saving mappings…", success: "Mappings saved",   error: "Mapping failed" },
 };
 
 const PENDING_SUB: Record<TxFxKind, string> = {
   send:   "Broadcasting to the network…",
   swap:   "Confirming your swap on-chain…",
   bridge: "Submitting your bridge transfer…",
+  "bpan-register": "Confirming your payment identity on Base…",
+  "bpan-map":      "Confirming your wallet mappings on Base…",
 };
 
 // The popup animates stroke-dashoffset from 1 to 0 against pathLength=1. RN's
@@ -162,7 +166,16 @@ export function TxResultOverlay({
     v.interpolate({ inputRange: [0, 1], outputRange: [len, 0] });
 
   return (
-    <View style={st.scrim}>
+    <Modal
+      visible
+      transparent
+      statusBarTranslucent
+      navigationBarTranslucent
+      presentationStyle="overFullScreen"
+      animationType="none"
+      onRequestClose={isPending ? () => {} : onClose}
+    >
+    <View accessibilityViewIsModal style={st.scrim}>
       <Animated.View style={[st.card, { transform: [{ scale: pop }] }]}>
         <View style={st.markArea}>
           {isSuccess && <Orbs />}
@@ -257,10 +270,11 @@ export function TxResultOverlay({
         )}
 
         {!isPending && (
-          <Btn label={isError ? "Try again" : "Done"} onPress={onClose} style={{ marginTop: 20 }} />
+          <Btn label={isError ? "Try again" : "Done"} onPress={onClose} style={st.action} />
         )}
       </Animated.View>
     </View>
+    </Modal>
   );
 }
 
@@ -310,4 +324,5 @@ const st = themedStyles((colors) => ({
   errBody: { marginTop: 8, fontSize: 12, color: colors.textSecondary, lineHeight: 17, textAlign: "center" },
   pendingSub: { marginTop: 6, fontSize: 12, color: colors.muted },
   hashLink: { marginTop: 12, fontSize: 11, color: colors.brand2 },
+  action: { alignSelf: "stretch", marginTop: 20 },
 }));

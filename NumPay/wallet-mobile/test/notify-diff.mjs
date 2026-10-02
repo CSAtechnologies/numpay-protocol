@@ -47,6 +47,23 @@ const ok = (cond, label) => { if (cond) pass++; else { fail++; console.log("FAIL
   ok(r.nextSnapshot.sui === 3, "new chain stored");
 }
 
+// After a complete watcher baseline, a first-seen positive TOKEN is a deposit.
+{
+  const r = computeReceiveDiff(
+    { base: 0.5 },
+    { base: 0.5, "token:base:0xabc": 12 },
+    { notifyFirstSeen: true },
+  );
+  ok(r.increased.length === 1 && r.increased[0] === "token:base:0xabc",
+    "first-seen token notifies after baseline");
+}
+
+// Initial baseline remains silent even when it already contains tokens.
+{
+  const r = computeReceiveDiff(null, { "token:solana:mint": 42 }, { notifyFirstSeen: true });
+  ok(r.increased.length === 0, "first watcher run never announces existing tokens");
+}
+
 // A spend (lower but positive) is silent and accepted.
 {
   const r = computeReceiveDiff({ base: 0.5 }, { base: 0.2 });

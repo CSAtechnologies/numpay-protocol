@@ -22,7 +22,7 @@ import {
   type SolDappRequestPreview,
 } from "@numpay/core/dapp";
 import { ethers } from "ethers";
-import { NETWORKS, BPAN_MAINNET_RPC } from "@numpay/core/networks";
+import { NETWORKS } from "@numpay/core/networks";
 import { importFromMnemonic, getSigner } from "@numpay/core/wallet";
 import { deriveSolanaAddress } from "@numpay/core/chains/solana";
 import { logTx, updateTx, explorerTxUrl } from "@numpay/core/txLog";
@@ -206,7 +206,7 @@ export async function approveSessionRequest(
     throw new Error("Vault locked");
   }
 
-  const rpc = net?.rpcUrl ?? BPAN_MAINNET_RPC;
+  const rpc = net?.rpcUrl ?? NETWORKS.ethereum.rpcUrl;
   const wd = importFromMnemonic(mnemonic);
   const signer = getSigner(wd.privateKey, rpc);
 

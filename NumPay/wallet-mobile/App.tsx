@@ -14,10 +14,9 @@ import {
 // first real screen is ready; hideAsync then reveals the lock/onboard screen,
 // which animates the logo in itself. No separate JS splash (no double reveal).
 SplashScreen.preventAutoHideAsync().catch(() => {});
-import { LinearGradient } from "expo-linear-gradient";
 import { usePreventScreenCapture } from "expo-screen-capture";
 import {
-  AccessibilityInfo, Animated, BackHandler, Easing, Linking, PanResponder,
+  Animated, BackHandler, Easing, Linking, PanResponder,
   Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View,
   type StyleProp, type ViewStyle,
 } from "react-native";
@@ -31,8 +30,8 @@ import { chainNameOf } from "@numpay/core/txLog";
 import {
   createVault, getLastArgonMs, getStatus, getUnlockedMnemonic, lock,
   autoLockCheck, touchActivity, unlockWithBiometrics, unlockWithPin,
-  getActiveWalletId, switchWallet, addWallet, listWallets,
-  VaultError, wipeVault, type VaultStatus, type WalletMeta,
+  getUnlockedBootstrap, vaultExists, switchWallet, addWallet, listWallets,
+  VaultError, wipeVault, type VaultStatus, type WalletMeta, type UnlockedBootstrap,
 } from "./src/vault/mobileVault";
 import { runSpike, type SpikeResult } from "./spike/runSpike";
 import { runDevnetTx } from "./spike/devnetTx";
@@ -57,10 +56,13 @@ import { parseScannedPayload } from "@numpay/core/qrPayload";
 import { pair } from "./src/walletconnect/client";
 import { BottomNav, BOTTOM_NAV_CLEARANCE, type NavTab } from "./src/ui/BottomNav";
 import { WalletAvatar } from "./src/ui/WalletAvatar";
+import { WalletOverview } from "./src/ui/WalletOverview";
+import { WalletSwitcherSheet } from "./src/ui/WalletSwitcherSheet";
 import { CurrencyProvider, useCurrencyPref, formatFiat } from "./src/ui/currency";
+import { loadWalletPortfolioSummary } from "./src/wallet/balanceCache";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import {
-  ArrowUpRightIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon,
+  AlertIcon, ArrowUpRightIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon,
   CopyIcon, EyeOffIcon, GlobeIcon, HashIcon, LockIcon, PlusIcon,
   ReceiveIcon, RefreshIcon, ScanIcon, ShieldIcon, SwapIcon, TrendingUpIcon, WalletIcon,
 } from "./src/ui/icons";
@@ -81,6 +83,8 @@ import { WcApprovalHost } from "./src/walletconnect/WcApprovalHost";
 import { ensureReceiveWatch } from "./src/notify/backgroundTask";
 import { clearReceiveWatch } from "./src/notify/receiveWatch";
 import { PinPad } from "./src/ui/PinPad";
+import { useReducedMotion } from "./src/ui/useReducedMotion";
+import { safeActionError } from "./src/ui/errors";
 
 // ── Screen transitions ───────────────────────────────────────────────────────
 /**
@@ -90,18 +94,17 @@ import { PinPad } from "./src/ui/PinPad";
  * fixes that: an instant swap is what makes an app feel rigid, because the eye
  * gets no signal about where the new screen came from.
  *
- * This wraps the shell in one animated node that re-enters on every mode
- * change, so a screen fades up and slides a short distance in the direction the
- * user travelled. It is deliberately NOT a full push/pop with both screens on
- * stage at once: that needs the old screen kept mounted (and a navigation
- * library to own it), and the entering half alone carries most of the feeling.
+ * This wraps the shell in one animated node and lets the destination settle
+ * into place over the already-painted app canvas. The opacity never approaches
+ * zero: a two-phase fade-through-blank was visible as a white flash on slower
+ * devices, which felt more like a reload than navigation.
  *
  * Direction comes from `orderOf`. Sliding the same way for a forward tap and a
  * back tap is worse than not sliding at all, because the motion then actively
  * contradicts what the user did.
  */
 const NAV_ORDER: readonly string[] = [
-  "home", "send", "receive", "bpan", "activity", "settings",
+  "home", "send", "bpan", "activity", "settings",
 ];
 
 /**
@@ -112,6 +115,7 @@ const NAV_ORDER: readonly string[] = [
  * the right and back out to the left, whichever tab it was opened from.
  */
 function orderOf(mode: Mode): number {
+  if (mode === "receive") return 11;
   const tab = NAV_ORDER.indexOf(mode);
   if (tab >= 0) return 10 + tab;
   if (mode === "loading" || mode === "onboard" || mode === "import"
@@ -124,55 +128,50 @@ function ScreenTransition({ mode, style, children }: {
   style?: StyleProp<ViewStyle>;
   children: ReactNode;
 }) {
+  const reduceMotion = useReducedMotion();
   const a = useRef(new Animated.Value(1)).current;
-  const prevMode = useRef<Mode>(mode);
-  const dir = useRef(1);
-  const reduceMotion = useRef(false);
+  const previousMode = useRef<Mode>(mode);
+  const direction = useRef(1);
+  const changed = previousMode.current !== mode;
 
-  useEffect(() => {
-    AccessibilityInfo.isReduceMotionEnabled()
-      .then((on) => { reduceMotion.current = on; })
-      .catch(() => {});
-  }, []);
-
-  // Direction is resolved during RENDER, not in the effect. An effect runs
-  // after the new screen has already been laid out, so reading it there would
-  // animate the first frame of every transition using the PREVIOUS direction.
-  // Latching it in a ref also keeps it stable if an unrelated state update
-  // re-renders mid-flight, which would otherwise flip the slide mid-animation.
-  const changed = prevMode.current !== mode;
+  // Resolve direction during render so the very first transformed frame uses
+  // the new route's direction. A later effect would paint one frame with the
+  // previous direction before correcting itself.
   if (changed) {
-    dir.current = orderOf(mode) >= orderOf(prevMode.current) ? 1 : -1;
-    prevMode.current = mode;
+    direction.current = orderOf(mode) >= orderOf(previousMode.current) ? 1 : -1;
+    previousMode.current = mode;
   }
 
-  // Layout effect, not a plain effect: this must start before the frame is
-  // painted, or the new screen shows for one frame at full opacity and then
-  // snaps back to the start of its own animation.
   useLayoutEffect(() => {
-    if (!changed) return;
-    if (reduceMotion.current) { a.setValue(1); return; }
+    if (reduceMotion) {
+      a.stopAnimation();
+      a.setValue(1);
+      return;
+    }
+    // Loading has no JS content. The first real screen is revealed at full
+    // opacity behind the native splash, avoiding a blank frame at cold start.
+    if (!changed || mode === "loading") return;
+
+    a.stopAnimation();
     a.setValue(0);
     Animated.timing(a, {
       toValue: 1,
       duration: motion.screen,
-      // Decelerate: fast off the mark, settling at the end. An ease-in-out here
-      // reads as slow, because the user already committed with the tap.
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
-  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [a, changed, mode, reduceMotion]);
 
   return (
     <Animated.View
       style={[
         style,
         {
-          opacity: a,
+          opacity: a.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }),
           transform: [{
             translateX: a.interpolate({
               inputRange: [0, 1],
-              outputRange: [dir.current * motion.slide, 0],
+              outputRange: [direction.current * motion.slide, 0],
             }),
           }],
         },
@@ -195,6 +194,19 @@ type Mode =
   // routed by core/qrPayload: an address or BPAN opens Send prefilled, a wc:
   // code pairs. (Send has its own scanner for the address field alone.)
   | "scan";
+
+// Enough state to paint the locked shell while the slower SecureStore and
+// biometric capability reads finish. Unlock itself re-checks the real attempt
+// policy, so this optimistic first frame cannot bypass a lockout.
+const pendingVaultStatus = (exists: boolean): VaultStatus => ({
+  exists,
+  biometricsAvailable: false,
+  biometricsEnabled: false,
+  failedAttempts: 0,
+  lockUntil: 0,
+  wipeOnFail: false,
+  attemptsBeforeWipe: null,
+});
 
 export default function App() {
   return (
@@ -226,6 +238,8 @@ function AppInner() {
   const [status, setStatus] = useState<VaultStatus | null>(null);
   const [pendingMnemonic, setPendingMnemonic] = useState("");
   const [error, setError] = useState("");
+  const [unlocking, setUnlocking] = useState(false);
+  const unlockInFlight = useRef(false);
   const [now, setNow] = useState(Date.now()); // drives the lockout countdown
   // Session expired while a wallet screen was open. Rendered as an opaque
   // overlay ON TOP of the mounted tree instead of swapping mode: the mnemonic
@@ -236,6 +250,10 @@ function AppInner() {
   // Active wallet id (multi-wallet): drives the useMobileWallet reload on switch.
   const [activeWalletId, setActiveWalletId] = useState<string | null>(null);
   const [activeWallet, setActiveWallet] = useState<WalletMeta | null>(null);
+  const [walletSwitcherOpen, setWalletSwitcherOpen] = useState(false);
+  const [walletChoices, setWalletChoices] = useState<WalletMeta[]>([]);
+  const [walletBalances, setWalletBalances] = useState<Record<string, number | null>>({});
+  const [walletBalancesLoading, setWalletBalancesLoading] = useState(false);
   const [addWalletOpen, setAddWalletOpen] = useState(false);
   // Manage assets is reachable from BOTH the dashboard (network dropdown, the
   // Assets "+" button) and Settings, so back has to return where it came from
@@ -244,10 +262,14 @@ function AppInner() {
 
   const unlocked =
     mode === "home" || mode === "receive" || mode === "send" || mode === "swap" || mode === "defi" || mode === "activity" || mode === "bpan" || mode === "dapps" || mode === "dev" || mode === "settings" || mode === "token" || mode === "assets" || mode === "scan" || mode === "browser";
-  // The floating nav shows on its six tabs; focused flows (swap, DeFi,
+  // The bottom nav shows on its five destinations. Receive belongs to Pay,
+  // while focused flows (swap, DeFi,
   // dApps, browser, dev) keep the full screen.
   const navVisible =
     mode === "home" || mode === "send" || mode === "receive" || mode === "bpan" || mode === "activity" || mode === "settings";
+  const lastNavTab = useRef<NavTab>("home");
+  if (mode === "receive") lastNavTab.current = "send";
+  else if (navVisible) lastNavTab.current = mode as NavTab;
   /**
    * Screens that drop the shell's padding and reach the display edges
    * themselves.
@@ -272,18 +294,68 @@ function AppInner() {
     setActiveWallet(list.find((w) => w.active) ?? null);
   }, []);
 
+  const applyUnlockedIdentity = useCallback((bootstrap: UnlockedBootstrap) => {
+    setActiveWalletId(bootstrap.activeWalletId);
+    setActiveWallet(bootstrap.activeWallet);
+  }, []);
+
+  // Security metadata is useful to the lock screen, but it is not routing
+  // data. Keep its SecureStore/biometric reads off both the native-splash path
+  // and the successful-unlock path.
+  const refreshStatusInBackground = useCallback(() => {
+    void getStatus().then(setStatus).catch(() => {});
+  }, []);
+
+  const loadWalletSwitcher = useCallback(async () => {
+    setWalletBalancesLoading(true);
+    try {
+      const list = await listWallets();
+      setWalletChoices(list);
+      const summaries = await Promise.all(
+        list.map(async (wallet) => [wallet.id, await loadWalletPortfolioSummary(wallet.id)] as const),
+      );
+      setWalletBalances(Object.fromEntries(summaries));
+    } finally {
+      setWalletBalancesLoading(false);
+    }
+  }, []);
+
+  const openWalletSwitcher = useCallback(() => {
+    setWalletSwitcherOpen(true);
+    void loadWalletSwitcher();
+  }, [loadWalletSwitcher]);
+
+  // A native Modal outlives the dashboard tree. Close the switcher explicitly
+  // when the vault locks so it cannot reappear over the next authenticated
+  // session with stale account choices.
+  useEffect(() => {
+    if (!unlocked || relocked) setWalletSwitcherOpen(false);
+  }, [relocked, unlocked]);
+
   const refresh = useCallback(async () => {
-    const s = await getStatus();
-    setStatus(s);
-    const mn = await getUnlockedMnemonic();
-    setActiveWalletId(await getActiveWalletId());
-    if (mn) { setMode("home"); void loadActiveWallet(); }
-    else setMode(s.exists ? "locked" : "onboard");
-  }, [loadActiveWallet]);
+    // Both reads are RAM/MMKV-only and can run together. The full vault status
+    // includes Android Keystore and biometric calls and must never hold the
+    // splash screen hostage.
+    const [bootstrap, exists] = await Promise.all([
+      getUnlockedBootstrap(),
+      vaultExists(),
+    ]);
+    if (bootstrap) {
+      applyUnlockedIdentity(bootstrap);
+      setMode("home");
+    } else {
+      setActiveWalletId(null);
+      setActiveWallet(null);
+      setStatus((current) => current?.exists === exists ? current : pendingVaultStatus(exists));
+      setMode(exists ? "locked" : "onboard");
+    }
+    refreshStatusInBackground();
+  }, [applyUnlockedIdentity, refreshStatusInBackground]);
 
   // Switch the active wallet (Settings accounts). The hook re-derives on the id
   // change; we land on the dashboard so the switch is visible immediately.
   const onSwitchWallet = useCallback(async (id: string) => {
+    setWalletSwitcherOpen(false);
     await switchWallet(id);
     await touchActivity();
     setActiveWalletId(id);
@@ -304,7 +376,10 @@ function AppInner() {
     switch (p.kind) {
       case "walletconnect":
         setMode("home");
-        void pair(p.uri).catch((e) => setError(`Could not connect: ${String((e as Error)?.message ?? e)}`));
+        void pair(p.uri).catch((e) => setError(safeActionError(
+          e,
+          "The connection request could not be completed. Check the site and try again.",
+        )));
         return;
       case "bpan":
         setScanPrefill({ to: p.bpan });
@@ -338,8 +413,7 @@ function AppInner() {
   }, [mode, themeLoaded]);
 
   useEffect(() => {
-    refresh().catch((e) => setError(String(e)));
-    const tick = setInterval(() => setNow(Date.now()), 1000);
+    refresh().catch((e) => setError(safeActionError(e, "NumPay could not open the wallet. Try again.")));
     const auto = setInterval(() => {
       autoLockCheck().then((locked) => {
         if (!locked) return;
@@ -347,8 +421,21 @@ function AppInner() {
         else refresh();
       });
     }, 30_000);
-    return () => { clearInterval(tick); clearInterval(auto); };
+    return () => clearInterval(auto);
   }, [refresh, showRelock]);
+
+  // The countdown is the only UI that needs a wall-clock tick. Keeping this
+  // timer alive while the wallet is open used to re-render the entire app once
+  // a second, repeatedly rebuilding native animation nodes and flooding the
+  // Android debug log with status-bar updates. Stop ticking as soon as the
+  // lockout expires; a later failed unlock updates status and arms it again.
+  const lockoutUntil = status?.lockUntil ?? 0;
+  const lockoutActive = lockoutUntil > now;
+  useEffect(() => {
+    if (!lockoutActive) return;
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [lockoutActive, lockoutUntil]);
 
   // Navigating counts as activity; without this the 15-min auto-lock is a
   // hard timer from unlock and fires mid-use (observed killing an in-progress
@@ -424,20 +511,31 @@ function AppInner() {
     return () => sub.remove();
   }, []);
 
+  const finishUnlock = useCallback(async (after: () => void | Promise<void>) => {
+    // unlockWithPin/unlockWithBiometrics already decrypted the vault, opened
+    // the session and stamped activity. One RAM read is all the UI needs now.
+    const bootstrap = await getUnlockedBootstrap();
+    if (!bootstrap) throw new VaultError("no-vault", "Wallet session could not be opened.");
+    applyUnlockedIdentity(bootstrap);
+    await after();
+    refreshStatusInBackground();
+  }, [applyUnlockedIdentity, refreshStatusInBackground]);
+
   const onUnlocked = async () => {
     setError("");
-    await touchActivity();
-    await refresh();
+    await finishUnlock(() => setMode("home"));
   };
 
   // Shared PIN/biometric handlers for the cold lock screen (mode "locked",
   // `after` = refresh) and the session-expiry overlay (`after` = dismiss).
   const pinUnlock = async (pin: string, after: () => void | Promise<void>) => {
+    if (unlockInFlight.current) return;
+    unlockInFlight.current = true;
+    setUnlocking(true);
+    setError("");
     try {
       await unlockWithPin(pin);
-      setError("");
-      await touchActivity();
-      await after();
+      await finishUnlock(after);
     } catch (e) {
       if (e instanceof VaultError) {
         // "wiped" is terminal: the vault is already gone, so the message has to
@@ -450,24 +548,39 @@ function AppInner() {
               ? "Too many attempts."
               : `Wrong PIN (${e.failedAttempts} failed).`
         );
-        if (e.code === "wiped") await clearReceiveWatch();
-      } else setError(String(e));
-      setStatus(await getStatus());
+        if (e.code === "wiped") {
+          await clearReceiveWatch();
+          await refresh();
+        } else {
+          // The error can paint as soon as Argon2 returns. SecureStore status
+          // (including a newly-started lockout) follows without keeping the
+          // keypad in its busy state; unlockWithPin enforces it independently.
+          refreshStatusInBackground();
+        }
+      } else setError(safeActionError(e, "NumPay could not unlock the wallet. Try again."));
+    } finally {
+      unlockInFlight.current = false;
+      setUnlocking(false);
     }
   };
   const bioUnlock = async (after: () => void | Promise<void>) => {
+    if (unlockInFlight.current) return;
+    unlockInFlight.current = true;
+    setUnlocking(true);
+    setError("");
     try {
       await unlockWithBiometrics();
-      setError("");
-      await touchActivity();
-      await after();
+      await finishUnlock(after);
     } catch (e) {
-      setError(e instanceof VaultError ? e.message : String(e));
+      setError(e instanceof VaultError ? e.message : safeActionError(e, "Biometric unlock was not completed."));
+    } finally {
+      unlockInFlight.current = false;
+      setUnlocking(false);
     }
   };
 
   /** `chainId` preselects the chain when the caller already knows it (a token
-   *  detail page). The six nav tabs and the dashboard tile pass nothing and
+   *  detail page). The Pay surface and the dashboard tile pass nothing and
    *  keep opening on the default. */
   const goReceive = (chainId?: string) => {
     setReceiveAddrs({ evm: w.evmAddress, nonEvm: w.nonEvmAddresses });
@@ -475,8 +588,7 @@ function AppInner() {
     setMode("receive");
   };
   const navTo = (tab: NavTab) => {
-    if (tab === "receive") goReceive();
-    else setMode(tab);
+    setMode(tab);
   };
 
   return (
@@ -538,7 +650,7 @@ function AppInner() {
                 setPendingMnemonic("");
                 await onUnlocked();
               } catch (e) {
-                setError(String(e));
+                setError(safeActionError(e, "The wallet could not be created. Try again."));
               }
             }}
           />
@@ -548,8 +660,9 @@ function AppInner() {
             status={status}
             now={now}
             error={error}
-            onPin={(pin) => { void pinUnlock(pin, refresh); }}
-            onBio={() => { void bioUnlock(refresh); }}
+            busy={unlocking}
+            onPin={(pin) => { void pinUnlock(pin, () => setMode("home")); }}
+            onBio={() => { void bioUnlock(() => setMode("home")); }}
           />
         )}
         {mode === "home" && (
@@ -566,7 +679,7 @@ function AppInner() {
             onBPAN={() => setMode("bpan")}
             onBrowser={() => setMode("browser")}
             onScan={() => setMode("scan")}
-            onAccounts={() => setMode("settings")}
+            onAccounts={openWalletSwitcher}
             onManageAssets={() => { setAssetsReturn("home"); setMode("assets"); }}
             walletName={activeWallet?.name ?? "NumPay"}
             walletAvatar={activeWallet?.avatar}
@@ -606,6 +719,7 @@ function AppInner() {
             addrs={receiveAddrs}
             initialChainId={receiveInit ?? undefined}
             onBack={() => { setReceiveInit(null); setMode("home"); }}
+            onSend={() => { setReceiveInit(null); setMode("send"); }}
           />
         )}
         {mode === "send" && (
@@ -621,6 +735,7 @@ function AppInner() {
             initialTo={scanPrefill?.to}
             initialAmount={scanPrefill?.amount}
             onBack={() => { setSendInit(null); setScanPrefill(null); setMode("home"); }}
+            onReceive={() => goReceive()}
             onSessionExpired={() => { void showRelock(); }}
           />
         )}
@@ -703,13 +818,33 @@ function AppInner() {
         {mode === "devnet" && <DevnetTx onBack={() => setMode("dev")} />}
       </ScreenTransition>
 
-      {/* Floating pill nav (extension Layout parity) on the six main tabs.
+      {/* Five-destination mobile navigation. Receive is a mode inside Pay.
           A sibling of the shell, so its own 12dp offsets are measured from the
           display edge on every tab. Nested, it inherited the shell's padding
           and drifted: 32dp in from the left on a padded screen against 12dp on
           the flush dashboard, for the same nav. */}
-      {navVisible && !relocked && (
-        <BottomNav active={mode as NavTab} onNavigate={navTo} />
+      <BottomNav
+        visible={navVisible && !relocked}
+        active={lastNavTab.current}
+        onNavigate={navTo}
+      />
+
+      {unlocked && !relocked && (
+        <WalletSwitcherSheet
+          open={walletSwitcherOpen}
+          wallets={walletChoices}
+          activeWalletId={activeWalletId}
+          balances={walletBalances}
+          liveBalanceUsd={w.portfolioUsd}
+          rates={w.rates}
+          loading={walletBalancesLoading}
+          onClose={() => setWalletSwitcherOpen(false)}
+          onSwitch={(id) => { void onSwitchWallet(id); }}
+          onManage={() => {
+            setWalletSwitcherOpen(false);
+            setMode("settings");
+          }}
+        />
       )}
 
       {/* WalletConnect approval sheets (session proposals + signing requests)
@@ -757,6 +892,7 @@ function AppInner() {
             status={status}
             now={now}
             error={error}
+            busy={unlocking}
             onPin={(pin) => { void pinUnlock(pin, () => setRelocked(false)); }}
             onBio={() => { void bioUnlock(() => setRelocked(false)); }}
           />
@@ -771,7 +907,7 @@ function AppInner() {
 function AuthHeader() {
   return (
     <View style={st.authHeader}>
-      <AnimatedLogo size={72} />
+      <AnimatedLogo size={64} />
       <Text style={st.authWordmark}>NumPay</Text>
     </View>
   );
@@ -785,8 +921,9 @@ function Onboard(p: { onCreate: () => void; onImport: () => void }) {
   useEffect(() => { void checkDeviceIntegrity().then(setIntegrity); }, []);
 
   return (
-    <View>
-      <Text style={st.h2}>Set up your wallet</Text>
+    <View style={st.authPanel}>
+      <Text style={[st.h2, { textAlign: "center", marginBottom: 6 }]}>Money, without the maze.</Text>
+      <Text style={st.authIntro}>Create a new wallet or bring an existing one with you.</Text>
       {shouldWarn(integrity) && integrity && (
         <Notice
           tone="danger"
@@ -887,7 +1024,17 @@ function PinSetup(p: {
           />
         </View>
       )}
-      {!!(localErr || p.error) && <Text style={[st.err, { textAlign: "center" }]}>{localErr || p.error}</Text>}
+      <InlineError message={localErr || p.error} />
+    </View>
+  );
+}
+
+function InlineError({ message }: { message: string }) {
+  if (!message) return null;
+  return (
+    <View accessible accessibilityRole="alert" style={st.inlineError}>
+      <AlertIcon size={13} color={colors.dangerText} />
+      <Text style={st.inlineErrorText}>{message}</Text>
     </View>
   );
 }
@@ -901,6 +1048,7 @@ function Locked(p: {
   };
   now: number;
   error: string;
+  busy: boolean;
   onPin: (pin: string) => void;
   onBio: () => void;
 }) {
@@ -941,6 +1089,7 @@ function Locked(p: {
         <PinPad
           onComplete={(pin) => p.onPin(pin)}
           shakeToken={shake}
+          disabled={p.busy}
           showBiometrics={p.status.biometricsEnabled}
           onBiometrics={p.onBio}
         />
@@ -950,7 +1099,13 @@ function Locked(p: {
           field-level feedback and belongs next to the keypad, not at the top
           of the screen where the eye is not looking. */}
       <View style={st.errSlot}>
-        {!!p.error && <Text style={[st.err, st.errCentered]}>{p.error}</Text>}
+        {p.busy ? (
+          <Text accessibilityLiveRegion="polite" style={st.unlockProgress}>
+            Unlocking securely…
+          </Text>
+        ) : (
+          <InlineError message={p.error} />
+        )}
       </View>
     </View>
   );
@@ -975,7 +1130,7 @@ function AddWalletOverlay(p: { onClose: () => void; onAdded: (id: string) => voi
       const id = await addWallet(mnemonic, name);
       p.onAdded(id);
     } catch (e) {
-      setError(String((e as Error)?.message ?? e));
+      setError(safeActionError(e, "The wallet could not be added. Try again."));
       setBusy(false);
     }
   };
@@ -1127,158 +1282,15 @@ function Dashboard(p: {
           />
         }
       >
-        {/* ── Hero gradient section (.hero-section): header, balance, pills and
-            the action row all sit on the extension's gradient block. ── */}
-        <HeroSection>
-          <View style={st.heroInner}>
-            {/* Header: account pill (avatar + wallet name -> Settings/accounts)
-                left, scan + dApps + lock right. Scan is mobile-only (camera). */}
-            <View style={st.homeHeader}>
-              <Tappable feedback="tile" borderRadius={radius.pill} style={st.acctPill} onPress={p.onAccounts}>
-                <WalletAvatar avatar={p.walletAvatar} name={p.walletName} size={20} />
-                <Text style={st.acctName} numberOfLines={1}>{p.walletName}</Text>
-                <ChevronDownIcon size={11} color={colors.muted} />
-              </Tappable>
-              <View style={{ flex: 1 }} />
-              <Tappable onPress={p.onScan} feedback="ghost" borderRadius={radius.iconBtn} style={st.iconBtn} hitSlop={8} accessibilityLabel="Scan a QR code">
-                <ScanIcon size={15} color={colors.muted} />
-              </Tappable>
-              {/* The browser takes this slot. Connected dApps moved to
-                  Settings: opening a dApp is the frequent action, reviewing
-                  what is already connected is the occasional one. */}
-              <Tappable onPress={p.onBrowser} feedback="ghost" borderRadius={radius.iconBtn} style={st.iconBtn} hitSlop={8} accessibilityLabel="Open the dApp browser">
-                <GlobeIcon size={15} color={colors.muted} />
-              </Tappable>
-              <Tappable onPress={p.onLock} feedback="ghost" borderRadius={radius.iconBtn} style={st.iconBtn} hitSlop={8} accessibilityLabel="Lock wallet">
-                <LockIcon size={15} color={colors.muted} />
-              </Tappable>
-            </View>
-
-            {/* Balance: the ext's centered gradient portfolio number, no card. */}
-            <View style={{ alignItems: "center", marginTop: 10 }}>
-              <GradientNumber text={formatFiat(w.portfolioUsd, cur.code, cur.currency, w.rates)} size={42} />
-              <Text style={st.heroSub}>
-                Total Portfolio{w.loading ? "  · syncing…" : ""}
-              </Text>
-            </View>
-
-            {/* Pills: chain filter + the wallet's BPAN (identity rule) */}
-            <View style={st.pillRow}>
-              <Tappable feedback="tile" borderRadius={radius.pill} style={st.filterPill} onPress={() => setShowNetworks((v) => !v)}>
-                {filter
-                  ? <ChainIcon chainId={filter} size={15} />
-                  : <View style={st.allDisc}><Text style={st.allDiscText}>All</Text></View>}
-                <Text style={st.filterPillText}>{filterName}</Text>
-                {showNetworks
-                  ? <ChevronUpIcon size={10} color={colors.muted} />
-                  : <ChevronDownIcon size={10} color={colors.muted} />}
-              </Tappable>
-              {w.bpan ? (
-                <Tappable feedback="tile" borderRadius={radius.pill} style={st.bpanPill} onPress={() => { void copyBpan(); }}>
-                  <HashIcon size={9} color={colors.brand2} />
-                  <Text style={st.bpanPillText}>{formatBPAN(w.bpan)}</Text>
-                  {bpanCopied
-                    ? <CheckIcon size={10} color={colors.success} />
-                    : <CopyIcon size={10} color={colors.brand2} />}
-                </Tappable>
-              ) : (
-                <Tappable feedback="tile" borderRadius={radius.pill} style={st.getBpanPill} onPress={p.onBPAN}>
-                  <HashIcon size={9} color={colors.textSecondary} />
-                  <Text style={st.getBpanText}>Get BPAN</Text>
-                </Tappable>
-              )}
-            </View>
-
-            {/* Network / filter dropdown, grouped the way the extension groups
-                it. Mobile lists only the chains that actually have something to
-                show (w.chainIds) rather than every network. */}
-            {showNetworks && (
-              <Card style={{ marginBottom: 14, maxHeight: 250 }}>
-                <ScrollView nestedScrollEnabled>
-                  <Tappable
-                    style={st.netRow}
-                    onPress={() => { setFilter(null); setShowNetworks(false); }}
-                  >
-                    <View style={st.allDiscLg}><Text style={st.allDiscText}>All</Text></View>
-                    <Text style={[st.netName, filter === null && { color: colors.brand2 }]}>All Assets</Text>
-                    {filter === null && <CheckIcon size={14} color={colors.brand2} />}
-                  </Tappable>
-                  {w.chainIds.map((id) => (
-                    <Tappable
-                      key={id}
-                      style={st.netRow}
-                      onPress={() => { setFilter(id); setShowNetworks(false); }}
-                    >
-                      <ChainIcon chainId={id} size={18} />
-                      <Text style={[st.netName, filter === id && { color: colors.brand2 }]}>
-                        {chainNameOf(id) ?? id}
-                      </Text>
-                      {filter === id && <CheckIcon size={14} color={colors.brand2} />}
-                    </Tappable>
-                  ))}
-                  <Tappable
-                    style={[st.netRow, { borderBottomWidth: 0 }]}
-                    onPress={() => { setShowNetworks(false); p.onManageAssets(); }}
-                  >
-                    <View style={st.dashedDisc}><PlusIcon size={11} color={colors.brand2} /></View>
-                    <Text style={[st.netName, { color: colors.brand2 }]}>Manage Tokens &amp; Networks</Text>
-                  </Tappable>
-                </ScrollView>
-              </Card>
-            )}
-
-            {/* Primary Send CTA (ext: gradient bar, "Pay anyone, any chain") */}
-            <Tappable onPress={p.onSend} feedback="tile" borderRadius={radius.card} accessibilityLabel="Send">
-              <LinearGradient
-                colors={["#b5a8ff", "#7c6df0", "#5b4cdb"]}
-                locations={[0, 0.5, 1]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={st.sendCta}
-              >
-                {/* Specular gloss: a soft highlight from the top-right corner,
-                    the same overlay the extension paints over the CTA. */}
-                <LinearGradient
-                  colors={["rgba(255,255,255,0.18)", "rgba(255,255,255,0)"]}
-                  start={{ x: 1, y: 0 }}
-                  end={{ x: 0.15, y: 1 }}
-                  style={StyleSheet.absoluteFill}
-                  pointerEvents="none"
-                />
-                <View style={st.sendCtaChip}>
-                  <ArrowUpRightIcon size={15} color="#fff" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={st.sendCtaTitle}>Send</Text>
-                  <Text style={st.sendCtaSub}>Pay anyone, any chain</Text>
-                </View>
-                <ChevronRightIcon size={16} color="rgba(255,255,255,0.7)" />
-              </LinearGradient>
-            </Tappable>
-
-            {/* Secondary row: Receive / Swap / DeFi — same three as the extension.
-                Bridging is not a slot here: it is a cross-chain pair inside Swap. */}
-            <View style={st.actionCards}>
-              {([
-                { label: "Receive", Icon: ReceiveIcon, onPress: p.onReceive },
-                { label: "Swap", Icon: SwapIcon, onPress: p.onSwap },
-                { label: "DeFi", Icon: TrendingUpIcon, onPress: p.onDeFi },
-              ] as const).map(({ label, Icon, onPress }) => (
-                <Tappable
-                  key={label}
-                  onPress={onPress}
-                  feedback="tile"
-                  borderRadius={radius.tile}
-                  accessibilityLabel={label}
-                  style={st.actionCard}
-                >
-                  <Icon size={14} color={colors.muted} />
-                  <Text style={st.actionCardLabel}>{label}</Text>
-                </Tappable>
-              ))}
-            </View>
-          </View>
-        </HeroSection>
+        <WalletOverview
+          walletName={p.walletName} walletAvatar={p.walletAvatar}
+          balance={formatFiat(w.portfolioUsd, cur.code, cur.currency, w.rates)}
+          loading={w.loading} bpan={w.bpan ? formatBPAN(w.bpan) : null}
+          copied={bpanCopied} onAccounts={p.onAccounts} onScan={p.onScan}
+          onBrowser={p.onBrowser} onSend={p.onSend}
+          onReceive={p.onReceive} onSwap={p.onSwap} onDeFi={p.onDeFi}
+          onBPAN={p.onBPAN} onCopyBPAN={() => { void copyBpan(); }}
+        />
 
         {/* Update notice. Below the hero rather than over it: the balance is
             what the user opened the app to see, and nothing advisory should
@@ -1318,12 +1330,60 @@ function Dashboard(p: {
 
         {/* ── Assets section ── */}
         <View style={st.assetsSection}>
+            {/* Network / filter dropdown, grouped the way the extension groups
+                it. Mobile lists only the chains that actually have something to
+                show (w.chainIds) rather than every network. */}
+            {showNetworks && (
+              <Card style={{ marginBottom: 14, maxHeight: 250 }}>
+                <ScrollView nestedScrollEnabled>
+                  <Tappable
+                    style={st.netRow}
+                    onPress={() => { setFilter(null); setShowNetworks(false); }}
+                  >
+                    <View style={st.allDiscLg}><Text style={st.allDiscText}>All</Text></View>
+                    <Text style={[st.netName, filter === null && { color: colors.brand2 }]}>All Assets</Text>
+                    {filter === null && <CheckIcon size={14} color={colors.brand2} />}
+                  </Tappable>
+                  {w.chainIds.map((id) => (
+                    <Tappable
+                      key={id}
+                      style={st.netRow}
+                      onPress={() => { setFilter(id); setShowNetworks(false); }}
+                    >
+                      <ChainIcon chainId={id} size={18} />
+                      <Text style={[st.netName, filter === id && { color: colors.brand2 }]}>
+                        {chainNameOf(id) ?? id}
+                      </Text>
+                      {filter === id && <CheckIcon size={14} color={colors.brand2} />}
+                    </Tappable>
+                  ))}
+                  <Tappable
+                    style={[st.netRow, { borderBottomWidth: 0 }]}
+                    onPress={() => { setShowNetworks(false); p.onManageAssets(); }}
+                  >
+                    <View style={st.dashedDisc}><PlusIcon size={11} color={colors.brand2} /></View>
+                    <Text style={[st.netName, { color: colors.brand2 }]}>Manage Tokens &amp; Networks</Text>
+                  </Tappable>
+                </ScrollView>
+              </Card>
+            )}
 
           <View style={st.assetsHead}>
-            <SectionLabel text="Assets" />
-            <View style={{ flexDirection: "row", gap: 2 }}>
-              <Tappable hitSlop={8} onPress={p.onManageAssets} feedback="ghost" borderRadius={radius.iconBtn} style={st.headBtn} accessibilityLabel="Manage tokens and networks">
-                <PlusIcon size={14} color={colors.muted} />
+            <View style={st.assetsTitleGroup}>
+              <Text style={st.assetsTitle}>Assets</Text>
+              <Tappable feedback="ghost" borderRadius={10} style={st.filterPill} onPress={() => setShowNetworks((v) => !v)}>
+                {filter
+                  ? <ChainIcon chainId={filter} size={14} />
+                  : <View style={st.allDisc}><Text style={st.allDiscText}>All</Text></View>}
+                <Text numberOfLines={1} style={st.filterPillText}>{filterName}</Text>
+                {showNetworks
+                  ? <ChevronUpIcon size={10} color={colors.muted} />
+                  : <ChevronDownIcon size={10} color={colors.muted} />}
+              </Tappable>
+            </View>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
+              <Tappable hitSlop={8} onPress={p.onManageAssets} feedback="ghost" borderRadius={10} style={st.manageBtn} accessibilityLabel="Manage tokens and networks">
+                <Text style={st.manageText}>Manage</Text>
               </Tappable>
               <Tappable hitSlop={8} onPress={() => w.refresh(true)} feedback="ghost" borderRadius={radius.iconBtn} style={st.headBtn} accessibilityLabel="Refresh balances">
                 <RefreshIcon size={14} color={colors.muted} />
@@ -1525,31 +1585,33 @@ function SwipeToHideRow({ onHide, onPress, children }: {
   return (
     <View style={{ position: "relative", overflow: "hidden" }}>
       {/* Action sits beneath the row's right edge, revealed as the row slides. */}
-      <Pressable
+      <Tappable
         accessibilityRole="button"
         accessibilityLabel="Hide token"
         onPress={() => { settle(false); onHide(); }}
+        feedback="row"
         style={st.hideAction}
       >
         <EyeOffIcon size={15} color="#fff" />
         <Text style={st.hideActionText}>Hide</Text>
-      </Pressable>
+      </Tappable>
       {/* Opaque background is load-bearing: it is what keeps the action out of
           sight until the row is actually dragged off it. */}
       <Animated.View
         {...pan.panHandlers}
         style={{ transform: [{ translateX: dx }], backgroundColor: colors.bg }}
       >
-        <Pressable
+        <Tappable
           onPress={() => {
             if (movedRef.current) return;             // a swipe, not a tap
             if (openRef.current) { settle(false); return; } // tap closes it
             onPress?.();
           }}
-          style={({ pressed }) => [st.tokenRow, pressed && { opacity: 0.7 }]}
+          feedback="row"
+          style={st.tokenRow}
         >
           {children}
-        </Pressable>
+        </Tappable>
       </Animated.View>
     </View>
   );
@@ -1594,9 +1656,9 @@ function AssetRowView(p: {
         {r.usdValue > 0 && <Text style={st.tokenSub}>{p.fiat}</Text>}
       </View>
       {p.onUnhide && (
-        <Pressable hitSlop={8} onPress={p.onUnhide} style={st.unhideBtn}>
+        <Tappable hitSlop={8} onPress={p.onUnhide} feedback="ghost" borderRadius={radius.pill} style={st.unhideBtn}>
           <Text style={st.unhideText}>Unhide</Text>
-        </Pressable>
+        </Tappable>
       )}
     </>
   );
@@ -1605,12 +1667,13 @@ function AssetRowView(p: {
     return <SwipeToHideRow onHide={p.onHide} onPress={p.onPress}>{body}</SwipeToHideRow>;
   }
   return (
-    <Pressable
+    <Tappable
       onPress={p.onPress}
-      style={({ pressed }) => [st.tokenRow, pressed && { opacity: 0.7 }]}
+      feedback="row"
+      style={st.tokenRow}
     >
       {body}
-    </Pressable>
+    </Tappable>
   );
 }
 
@@ -1689,8 +1752,13 @@ const st = themedStyles((colors) => ({
   },
   containerFlush: { paddingTop: 0, paddingHorizontal: 0 },
 
-  authHeader: { alignItems: "center", marginTop: 72, marginBottom: 36 },
-  authWordmark: { color: colors.textPrimary, fontSize: 22, fontWeight: "700", marginTop: 16 },
+  authHeader: { alignItems: "center", marginTop: 42, marginBottom: 24 },
+  authWordmark: { color: colors.textPrimary, fontSize: 19, fontWeight: "700", marginTop: 10 },
+  authPanel: { width: "100%", maxWidth: 440, alignSelf: "center" },
+  authIntro: {
+    color: colors.textSecondary, fontSize: ts.row, lineHeight: 20,
+    textAlign: "center", marginBottom: 16,
+  },
   homeHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 },
   wordmark: { color: colors.textPrimary, fontSize: 16, fontWeight: "700" },
   iconBtn: {
@@ -1719,10 +1787,6 @@ const st = themedStyles((colors) => ({
   acctName: { color: colors.textPrimary, fontSize: 13, fontWeight: "600", maxWidth: 140 },
   heroSub: { color: colors.textSecondary, fontSize: 12, marginTop: 4 },
 
-  pillRow: {
-    flexDirection: "row", justifyContent: "center", alignItems: "center",
-    gap: 8, marginTop: 14, marginBottom: 14,
-  },
   // "All" disc: the neutral stand-in the extension shows when no chain filter
   // is set, in place of a chain logo.
   allDisc: {
@@ -1745,33 +1809,43 @@ const st = themedStyles((colors) => ({
   },
   filterPill: {
     flexDirection: "row", alignItems: "center", gap: 6,
-    paddingVertical: 7, paddingHorizontal: 13,
-    borderRadius: radius.pill,
-    backgroundColor: colors.card,
-    borderWidth: 1, borderColor: colors.border,
+    minHeight: 36, maxWidth: 132, paddingVertical: 7, paddingHorizontal: 8,
   },
-  filterPillText: { color: colors.textPrimary, fontSize: 12.5, fontWeight: "500" },
+  filterPillText: { color: colors.textSecondary, fontSize: 11.5, fontWeight: "500", flexShrink: 1 },
   pillChevron: { color: colors.muted, fontSize: 9 },
-  bpanPill: {
-    flexDirection: "row", alignItems: "center", gap: 6,
-    paddingVertical: 7, paddingHorizontal: 13,
-    borderRadius: radius.pill,
-    backgroundColor: colors.brandTint,
-    borderWidth: 1, borderColor: "rgba(124, 109, 240, 0.32)",
-  },
-  bpanPillText: {
-    color: colors.brand2, fontSize: 12.5, fontWeight: "600",
-    fontVariant: ["tabular-nums"],
-  },
-  // No BPAN yet: the extension marks the empty state with a dashed pill.
-  getBpanPill: {
-    flexDirection: "row", alignItems: "center", gap: 6,
-    paddingVertical: 7, paddingHorizontal: 13,
-    borderRadius: radius.pill,
+  bpanCopyRow: {
+    minHeight: 66,
+    marginTop: 20,
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    borderRadius: radius.tile,
     backgroundColor: colors.card,
-    borderWidth: 1, borderStyle: "dashed", borderColor: colors.border,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
   },
-  getBpanText: { color: colors.textSecondary, fontSize: 12.5, fontWeight: "500" },
+  bpanIdentity: { flex: 1, flexDirection: "row", alignItems: "center", gap: 11 },
+  bpanMark: {
+    width: 36, height: 36, borderRadius: 11,
+    alignItems: "center", justifyContent: "center",
+    backgroundColor: colors.brandTint,
+  },
+  bpanLabel: { color: colors.muted, fontSize: 9.5, fontWeight: "700", letterSpacing: 1.1 },
+  bpanNumber: {
+    color: colors.textPrimary, fontSize: 18, fontWeight: "700",
+    letterSpacing: 0.4, marginTop: 2, fontVariant: ["tabular-nums"],
+  },
+  bpanEmptyTitle: { color: colors.textPrimary, fontSize: 14, fontWeight: "600", marginTop: 2 },
+  copyAffordance: {
+    minHeight: 38, paddingHorizontal: 10, borderRadius: 10,
+    flexDirection: "row", alignItems: "center", gap: 6,
+    backgroundColor: colors.brandTint,
+  },
+  copyAffordanceDone: { backgroundColor: colors.successTint },
+  copyAffordanceText: { color: colors.brand2, fontSize: 11.5, fontWeight: "700" },
   netRow: {
     flexDirection: "row", alignItems: "center", gap: 10,
     paddingHorizontal: 14, paddingVertical: 11,
@@ -1782,35 +1856,36 @@ const st = themedStyles((colors) => ({
 
   sendCta: {
     flexDirection: "row", alignItems: "center", gap: 12,
-    paddingVertical: 13, paddingHorizontal: 14,
-    borderRadius: 14,
-    shadowColor: colors.brand,
-    shadowOpacity: 0.85, shadowRadius: 12, shadowOffset: { width: 0, height: 10 },
-    elevation: 10,
+    minHeight: 72, paddingVertical: 14, paddingHorizontal: 14,
+    borderRadius: radius.card,
+    backgroundColor: colors.action,
   },
   sendCtaChip: {
     width: 32, height: 32, borderRadius: 9,
-    backgroundColor: "rgba(255,255,255,0.16)",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(255,255,255,0.12)",
     alignItems: "center", justifyContent: "center",
   },
   sendCtaTitle: { color: "#fff", fontSize: 15, fontWeight: "600", letterSpacing: -0.3 },
-  sendCtaSub: { color: "rgba(255,255,255,0.75)", fontSize: 11, marginTop: 1 },
+  sendCtaSub: { color: "rgba(255,255,255,0.82)", fontSize: 11.5, marginTop: 2 },
 
   actionCards: { flexDirection: "row", gap: 7, marginTop: 8 },
   actionCard: {
     flex: 1, alignItems: "center", gap: 5,
-    paddingVertical: 9,
+    minHeight: 58, paddingVertical: 9,
     borderRadius: 11,
     backgroundColor: colors.card,
-    borderWidth: 1, borderColor: colors.border,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
   },
   actionCardLabel: { color: colors.textPrimary, fontSize: 11, fontWeight: "500" },
 
   assetsHead: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    marginBottom: 4,
+    marginBottom: 7,
   },
+  assetsTitleGroup: { flexDirection: "row", alignItems: "center", flex: 1, minWidth: 0, gap: 4 },
+  assetsTitle: { color: colors.textPrimary, fontSize: 15, fontWeight: "700" },
+  manageBtn: { minHeight: 40, justifyContent: "center", paddingHorizontal: 7 },
+  manageText: { color: colors.brand2, fontSize: 12, fontWeight: "600" },
   headBtn: { padding: 6, borderRadius: radius.iconBtn },
 
   // Update notice actions. "Get the update" is a filled brand pill; dismiss is
@@ -1875,9 +1950,32 @@ const st = themedStyles((colors) => ({
   mono: { color: colors.textPrimary, fontFamily: "monospace", fontSize: ts.row, marginTop: 2 },
   ok: { color: colors.successText, fontSize: ts.row },
   err: { color: colors.dangerText, fontSize: ts.body, marginTop: 8, fontWeight: "600" },
-  errCentered: { textAlign: "center", marginTop: 0 },
   // Height held whether or not there is an error, so the layout never jumps.
-  errSlot: { minHeight: 30, justifyContent: "center", marginTop: 8 },
+  errSlot: { minHeight: 38, justifyContent: "center", marginTop: 6 },
+  unlockProgress: {
+    color: colors.muted,
+    fontSize: ts.small,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  inlineError: {
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: radius.pill,
+    backgroundColor: colors.dangerTint,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.dangerLine,
+  },
+  inlineErrorText: {
+    color: colors.dangerText,
+    fontSize: ts.small,
+    lineHeight: 16,
+    fontWeight: "600",
+  },
   segRow: {
     flexDirection: "row", gap: 6,
     padding: 4,

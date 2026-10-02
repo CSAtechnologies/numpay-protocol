@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import Layout from "../components/Layout";
+import { InlineNotice } from "../components/AlertCard";
 import { NETWORKS } from "@numpay/core/networks";
 import { BPAN_CHAINS } from "@numpay/core/networks";
 import { getCustomTokens, addCustomToken, removeCustomToken, type CustomToken } from "@numpay/core/customTokens";
@@ -346,7 +347,7 @@ export default function ManageAssets() {
                   ) : "Detect"}
                 </button>
               </div>
-              {detectErr && <p className="text-accent-red text-[12px]">{detectErr}</p>}
+              {detectErr && <InlineNotice message={detectErr} />}
             </div>
 
             {/* Token preview card */}
@@ -444,7 +445,7 @@ export default function ManageAssets() {
                     ) : "Detect"}
                   </button>
                 </div>
-                {netDetectErr && <p className="text-accent-red text-[11px] mt-1">{netDetectErr}</p>}
+                {netDetectErr && <InlineNotice message={netDetectErr} className="mt-1" />}
               </div>
 
               {/* Chain ID badge */}
@@ -500,7 +501,7 @@ export default function ManageAssets() {
                 />
               </div>
 
-              {netAddErr && <p className="text-accent-red text-[12px]">{netAddErr}</p>}
+              {netAddErr && <InlineNotice message={netAddErr} />}
 
               <button
                 onClick={handleAddNetwork}

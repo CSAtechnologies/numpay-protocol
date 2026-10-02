@@ -1,0 +1,411 @@
+<style>
+  #npv2 {
+    --np-canvas: #f5f6f8;
+    --np-surface: #ffffff;
+    --np-raised: #f0f1f5;
+    --np-ink: #15161b;
+    --np-sub: #666b78;
+    --np-line: #e1e3e9;
+    --np-brand: #6758dc;
+    --np-brand-soft: #ece9ff;
+    --np-good: #16775a;
+    --np-good-soft: #e7f6f0;
+    --np-warn: #95590a;
+    --np-warn-soft: #fff4df;
+    --np-bad: #bd3541;
+    --np-bad-soft: #fdecee;
+    --np-info: #235fb8;
+    --np-info-soft: #eaf2ff;
+    color: var(--np-ink);
+    background: var(--np-canvas);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100%;
+    border-radius: 18px;
+    overflow: hidden;
+  }
+  #npv2.dark {
+    --np-canvas: #0e1015;
+    --np-surface: #171a22;
+    --np-raised: #20242e;
+    --np-ink: #f4f5f8;
+    --np-sub: #a3a8b5;
+    --np-line: #2b303b;
+    --np-brand: #8c7cf2;
+    --np-brand-soft: #28233f;
+    --np-good: #63c6a4;
+    --np-good-soft: #17362d;
+    --np-warn: #e3aa55;
+    --np-warn-soft: #392b17;
+    --np-bad: #ef7b84;
+    --np-bad-soft: #3a2025;
+    --np-info: #72a8ee;
+    --np-info-soft: #1b2d47;
+  }
+  #npv2 * { box-sizing: border-box; }
+  #npv2 button, #npv2 input { font: inherit; }
+  #npv2 button { color: inherit; }
+  .np-top {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 18px 22px; border-bottom: 1px solid var(--np-line); background: var(--np-surface);
+  }
+  .np-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .np-mark { width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; background: var(--np-brand); color: white; font-weight: 700; }
+  .np-top h1 { font-size: 18px; line-height: 1.2; font-weight: 650; margin: 0; }
+  .np-top p { font-size: 12px; color: var(--np-sub); margin: 3px 0 0; }
+  .np-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .np-tool { min-height: 38px; border: 1px solid var(--np-line); background: var(--np-surface); border-radius: 10px; padding: 0 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
+  .np-tool.is-on { background: var(--np-brand-soft); border-color: var(--np-brand); color: var(--np-brand); }
+  .np-workspace { display: grid; grid-template-columns: 230px minmax(330px, 430px) minmax(220px, 1fr); gap: 0; min-height: 900px; }
+  .np-catalog { padding: 18px 12px 28px; border-right: 1px solid var(--np-line); background: var(--np-surface); }
+  .np-section-label { margin: 18px 10px 7px; color: var(--np-sub); font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+  .np-section-label:first-child { margin-top: 2px; }
+  .np-screen-link { width: 100%; border: 0; background: transparent; border-radius: 10px; padding: 9px 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; cursor: pointer; font-size: 13px; }
+  .np-screen-link:hover { background: var(--np-raised); }
+  .np-screen-link.is-active { color: var(--np-brand); background: var(--np-brand-soft); font-weight: 650; }
+  .np-screen-link span:last-child { color: var(--np-sub); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .np-stage { display: grid; place-items: start center; padding: 34px 20px; background: radial-gradient(circle at 50% 18%, var(--np-brand-soft), transparent 36%); }
+  .phone { width: 360px; height: 780px; border: 8px solid var(--np-ink); border-radius: 42px; overflow: hidden; background: var(--np-canvas); box-shadow: 0 22px 60px rgba(15,16,25,.18); position: sticky; top: 18px; }
+  .phone-screen { height: 100%; display: flex; flex-direction: column; background: var(--np-canvas); position: relative; }
+  .statusbar { height: 28px; flex: 0 0 auto; padding: 8px 18px 0; display: flex; align-items: center; justify-content: space-between; font-size: 10px; font-weight: 650; }
+  .status-icons { display: flex; gap: 5px; align-items: center; }
+  .status-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .7; }
+  .appbar { height: 55px; flex: 0 0 auto; padding: 4px 18px 8px; display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--np-canvas); }
+  .appbar h2 { margin: 0; font-size: 20px; line-height: 1; font-weight: 680; letter-spacing: -.02em; }
+  .appbar-sub { color: var(--np-sub); font-size: 11px; margin-top: 4px; }
+  .icon-button { width: 40px; height: 40px; border: 1px solid var(--np-line); border-radius: 12px; background: var(--np-surface); display: grid; place-items: center; padding: 0; }
+  .icon-button.plain { border-color: transparent; background: transparent; }
+  .icon-button i, .quick i, .nav-item i, .row-icon i, .field-icon i, .primary i, .secondary i { width: 18px; height: 18px; stroke-width: 1.8; }
+  .screen-body { flex: 1; overflow: hidden; padding: 8px 18px 20px; }
+  .screen-body.flush { padding: 0 0 20px; }
+  .scroll-body { height: 100%; overflow: auto; scrollbar-width: none; padding-bottom: 12px; }
+  .scroll-body::-webkit-scrollbar { display: none; }
+  .eyebrow { color: var(--np-sub); font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; margin: 18px 0 8px; }
+  .hero-balance { padding: 14px 0 18px; }
+  .hero-balance .wallet-name { display: inline-flex; align-items: center; gap: 7px; color: var(--np-sub); font-size: 12px; }
+  .avatar { width: 22px; height: 22px; border-radius: 8px; background: var(--np-brand); color: white; display: grid; place-items: center; font-size: 10px; font-weight: 700; }
+  .hero-balance strong { display: block; font-size: 38px; line-height: 1.1; letter-spacing: -.05em; margin-top: 12px; font-variant-numeric: tabular-nums; }
+  .hero-balance small { color: var(--np-good); font-size: 12px; display: inline-block; margin-top: 7px; }
+  .quick-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
+  .quick { min-height: 68px; border: 1px solid var(--np-line); border-radius: 14px; background: var(--np-surface); padding: 10px 8px; display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; font-size: 11px; font-weight: 650; }
+  .quick.primary-quick { background: var(--np-brand); color: white; border-color: var(--np-brand); }
+  .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0 7px; }
+  .section-head h3 { margin: 0; font-size: 14px; font-weight: 680; }
+  .text-action { border: 0; background: transparent; color: var(--np-brand); font-size: 11px; padding: 6px; }
+  .asset-list, .settings-list { border-top: 1px solid var(--np-line); }
+  .row { min-height: 58px; display: flex; align-items: center; gap: 11px; padding: 9px 0; border-bottom: 1px solid var(--np-line); }
+  .row-icon, .coin { width: 36px; height: 36px; flex: 0 0 auto; border-radius: 12px; display: grid; place-items: center; background: var(--np-raised); color: var(--np-sub); font-size: 11px; font-weight: 750; }
+  .coin.eth { background: #e9edff; color: #3f5dbd; }
+  .coin.sol { background: #17191e; color: #70e7b6; }
+  .coin.btc { background: #fff0d9; color: #c76a00; }
+  .coin.bnb { background: #fff3c7; color: #8d6900; }
+  .coin.sui { background: #e5f3ff; color: #2178b9; }
+  .row-main { min-width: 0; flex: 1; }
+  .row-title { font-size: 13px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-sub { color: var(--np-sub); font-size: 11px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-tail { text-align: right; font-variant-numeric: tabular-nums; }
+  .row-tail strong { font-size: 13px; font-weight: 650; display: block; }
+  .row-tail small { color: var(--np-sub); font-size: 10px; margin-top: 3px; display: block; }
+  .bottom-nav { height: 67px; flex: 0 0 auto; border-top: 1px solid var(--np-line); background: var(--np-surface); display: grid; grid-template-columns: repeat(5,1fr); padding: 7px 7px 10px; }
+  .nav-item { border: 0; background: transparent; color: var(--np-sub); min-width: 0; display: flex; flex-direction: column; gap: 4px; align-items: center; justify-content: center; font-size: 9px; font-weight: 600; }
+  .nav-item.active { color: var(--np-brand); }
+  .nav-item.active i { stroke-width: 2.25; }
+  .field { min-height: 58px; border: 1px solid var(--np-line); border-radius: 13px; background: var(--np-surface); padding: 10px 12px; margin-bottom: 10px; }
+  .field-label { font-size: 10px; color: var(--np-sub); margin-bottom: 6px; }
+  .field-value { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 550; }
+  .field-value.placeholder { color: var(--np-sub); font-weight: 450; }
+  .field-value .grow { flex: 1; }
+  .field-icon { color: var(--np-sub); display: grid; place-items: center; }
+  .amount-box { padding: 18px 0 16px; border-bottom: 1px solid var(--np-line); margin-bottom: 14px; }
+  .amount-box .amount { font-size: 37px; font-weight: 650; letter-spacing: -.04em; font-variant-numeric: tabular-nums; display: flex; align-items: baseline; gap: 8px; }
+  .amount-box .amount span { color: var(--np-sub); font-size: 18px; }
+  .amount-meta { display: flex; justify-content: space-between; color: var(--np-sub); font-size: 11px; margin-top: 8px; }
+  .primary, .secondary, .danger-btn { min-height: 49px; width: 100%; border-radius: 12px; border: 1px solid transparent; padding: 0 15px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; font-weight: 680; margin-top: 10px; }
+  .primary { background: var(--np-brand); color: white; }
+  .secondary { background: var(--np-surface); color: var(--np-ink); border-color: var(--np-line); }
+  .danger-btn { background: var(--np-bad); color: white; }
+  .notice { border-left: 3px solid var(--np-info); padding: 10px 12px; background: var(--np-info-soft); border-radius: 0 10px 10px 0; margin: 10px 0; }
+  .notice.warn { border-color: var(--np-warn); background: var(--np-warn-soft); }
+  .notice.bad { border-color: var(--np-bad); background: var(--np-bad-soft); }
+  .notice.good { border-color: var(--np-good); background: var(--np-good-soft); }
+  .notice strong { display: block; font-size: 12px; margin-bottom: 3px; }
+  .notice p { margin: 0; color: var(--np-sub); font-size: 11px; line-height: 1.45; }
+  .segmented { display: grid; grid-template-columns: repeat(2,1fr); padding: 3px; background: var(--np-raised); border-radius: 11px; gap: 3px; margin-bottom: 14px; }
+  .segment { border: 0; min-height: 36px; border-radius: 9px; background: transparent; color: var(--np-sub); font-size: 12px; font-weight: 650; }
+  .segment.active { background: var(--np-surface); color: var(--np-ink); box-shadow: 0 1px 4px rgba(15,16,25,.08); }
+  .network-strip { display: flex; gap: 7px; margin: 2px 0 15px; }
+  .filter { border: 1px solid var(--np-line); background: var(--np-surface); border-radius: 999px; min-height: 34px; padding: 0 12px; font-size: 11px; }
+  .filter.active { border-color: var(--np-brand); color: var(--np-brand); background: var(--np-brand-soft); }
+  .review-block { border-top: 1px solid var(--np-line); margin-top: 10px; }
+  .review-row { display: flex; justify-content: space-between; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--np-line); font-size: 11px; }
+  .review-row span:first-child { color: var(--np-sub); }
+  .review-row strong { text-align: right; max-width: 62%; font-weight: 650; }
+  .center-state { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 28px; }
+  .state-mark { width: 62px; height: 62px; border-radius: 20px; background: var(--np-brand-soft); color: var(--np-brand); display: grid; place-items: center; margin-bottom: 18px; }
+  .state-mark.good { background: var(--np-good-soft); color: var(--np-good); }
+  .state-mark.bad { background: var(--np-bad-soft); color: var(--np-bad); }
+  .state-mark i { width: 28px; height: 28px; stroke-width: 1.8; }
+  .center-state h3 { margin: 0; font-size: 21px; font-weight: 680; letter-spacing: -.02em; }
+  .center-state p { color: var(--np-sub); font-size: 12px; line-height: 1.55; max-width: 250px; margin: 9px 0 14px; }
+  .qr { width: 190px; height: 190px; margin: 15px auto; border: 12px solid var(--np-surface); background: repeating-conic-gradient(var(--np-ink) 0 25%, var(--np-surface) 0 50%) 0/18px 18px; box-shadow: 0 0 0 1px var(--np-line); }
+  .address { font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; text-align: center; padding: 11px 15px; background: var(--np-raised); border-radius: 10px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+  .chart { height: 116px; margin: 14px -4px 2px; position: relative; overflow: hidden; }
+  .chart::before { content: ""; position: absolute; inset: 12px 0; background: linear-gradient(160deg, transparent 0 30%, var(--np-brand) 31% 33%, transparent 34% 48%, var(--np-brand) 49% 51%, transparent 52% 62%, var(--np-brand) 63% 65%, transparent 66%); opacity: .8; }
+  .stats { display: grid; grid-template-columns: repeat(2,1fr); border-top: 1px solid var(--np-line); border-left: 1px solid var(--np-line); margin-top: 12px; }
+  .stat { padding: 11px; border-right: 1px solid var(--np-line); border-bottom: 1px solid var(--np-line); }
+  .stat small { color: var(--np-sub); display: block; font-size: 10px; }
+  .stat strong { display: block; margin-top: 5px; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .bpan-number { font-size: 28px; letter-spacing: .02em; font-weight: 680; font-variant-numeric: tabular-nums; margin: 8px 0 4px; }
+  .mapping { display: grid; grid-template-columns: 32px 1fr auto; gap: 9px; align-items: center; min-height: 49px; border-bottom: 1px solid var(--np-line); }
+  .mapping .map-dot { width: 28px; height: 28px; border-radius: 9px; background: var(--np-raised); display: grid; place-items: center; font-size: 9px; font-weight: 700; }
+  .mapping strong { font-size: 12px; }
+  .mapping span { font-size: 10px; color: var(--np-sub); }
+  .check { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; background: var(--np-good-soft); color: var(--np-good); font-size: 10px; }
+  .timeline { position: relative; padding-left: 24px; }
+  .timeline::before { content: ""; position: absolute; left: 7px; top: 10px; bottom: 12px; width: 1px; background: var(--np-line); }
+  .timeline-item { position: relative; padding: 6px 0 16px; }
+  .timeline-item::before { content: ""; position: absolute; width: 9px; height: 9px; border-radius: 50%; left: -21px; top: 10px; background: var(--np-good); box-shadow: 0 0 0 4px var(--np-good-soft); }
+  .timeline-item.pending::before { background: var(--np-warn); box-shadow: 0 0 0 4px var(--np-warn-soft); }
+  .timeline-item strong { font-size: 12px; display: block; }
+  .timeline-item span { color: var(--np-sub); font-size: 10px; display: block; margin-top: 3px; }
+  .phrase-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 8px; counter-reset: word; margin-top: 14px; }
+  .phrase { counter-increment: word; min-height: 39px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--np-line); border-radius: 10px; background: var(--np-surface); font-size: 11px; }
+  .phrase::before { content: counter(word); color: var(--np-sub); font-size: 9px; width: 12px; }
+  .pin-dots { display: flex; justify-content: center; gap: 13px; margin: 26px 0; }
+  .pin-dot { width: 11px; height: 11px; border: 1px solid var(--np-brand); border-radius: 50%; }
+  .pin-dot.filled { background: var(--np-brand); }
+  .keypad { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
+  .key { min-height: 54px; border: 0; border-radius: 13px; background: transparent; font-size: 20px; font-weight: 550; }
+  .browser-bar { display: flex; gap: 7px; padding: 8px 12px; border-bottom: 1px solid var(--np-line); background: var(--np-surface); }
+  .url { min-height: 38px; flex: 1; border-radius: 10px; background: var(--np-raised); display: flex; align-items: center; padding: 0 11px; gap: 7px; font-size: 10px; color: var(--np-sub); }
+  .site-hero { padding: 28px 18px 20px; text-align: center; }
+  .site-mark { width: 54px; height: 54px; border-radius: 17px; background: var(--np-brand-soft); color: var(--np-brand); display: grid; place-items: center; margin: auto; font-weight: 800; }
+  .site-hero h3 { margin: 12px 0 4px; font-size: 18px; }
+  .site-hero p { color: var(--np-sub); font-size: 11px; margin: 0; }
+  .sheet-scrim { position: absolute; inset: 0; background: rgba(8,9,13,.54); display: flex; align-items: flex-end; z-index: 5; }
+  .sheet { width: 100%; background: var(--np-surface); border-radius: 22px 22px 0 0; padding: 10px 18px 24px; }
+  .handle { width: 34px; height: 4px; border-radius: 3px; background: var(--np-line); margin: 0 auto 16px; }
+  .sheet h3 { margin: 0; font-size: 17px; }
+  .sheet p { color: var(--np-sub); font-size: 11px; line-height: 1.5; }
+  .np-notes { padding: 28px 26px; border-left: 1px solid var(--np-line); background: var(--np-surface); }
+  .np-counter { color: var(--np-brand); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+  .np-notes h2 { font-size: 24px; letter-spacing: -.03em; margin: 10px 0 7px; }
+  .np-notes .purpose { color: var(--np-sub); font-size: 13px; line-height: 1.55; max-width: 520px; }
+  .np-note-block { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--np-line); }
+  .np-note-block h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--np-sub); margin: 0 0 10px; }
+  .np-note-block ul { margin: 0; padding-left: 18px; }
+  .np-note-block li { font-size: 12px; line-height: 1.55; margin: 7px 0; }
+  .np-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .np-flow span { font-size: 11px; padding: 6px 8px; background: var(--np-raised); border-radius: 8px; }
+  .np-flow b { color: var(--np-sub); font-weight: 500; }
+  .np-legend { margin-top: 24px; font-size: 11px; color: var(--np-sub); line-height: 1.55; }
+  @media (max-width: 920px) {
+    .np-workspace { grid-template-columns: 190px 1fr; }
+    .np-notes { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--np-line); }
+  }
+  @media (max-width: 650px) {
+    .np-top { align-items: flex-start; flex-direction: column; }
+    .np-tools { justify-content: flex-start; }
+    .np-workspace { display: block; }
+    .np-catalog { border-right: 0; border-bottom: 1px solid var(--np-line); display: flex; gap: 6px; overflow-x: auto; padding: 10px; }
+    .np-section-label { display: none; }
+    .np-screen-link { flex: 0 0 auto; width: auto; }
+    .np-screen-link span:last-child { display: none; }
+    .np-stage { padding: 22px 6px; }
+    .phone { width: min(360px, calc(100vw - 28px)); height: 760px; position: relative; top: 0; }
+    .np-notes { padding: 22px 18px; }
+  }
+</style>
+
+<div id="npv2">
+  <header class="np-top">
+    <div class="np-title">
+      <div class="np-mark">N</div>
+      <div><h1>NumPay Android V2</h1><p>Complete product redesign · design approval before implementation</p></div>
+    </div>
+    <div class="np-tools" aria-label="Prototype controls">
+      <button type="button" class="np-tool" id="np-prev"><i data-lucide="chevron-left" aria-hidden="true"></i>Previous</button>
+      <button type="button" class="np-tool" id="np-next">Next<i data-lucide="chevron-right" aria-hidden="true"></i></button>
+      <button type="button" class="np-tool" id="np-theme" aria-pressed="false"><i data-lucide="moon" aria-hidden="true"></i>Dark preview</button>
+    </div>
+  </header>
+  <div class="np-workspace">
+    <nav class="np-catalog" id="np-catalog" aria-label="Screen catalog"></nav>
+    <main class="np-stage"><div class="phone" aria-live="polite"><div class="phone-screen" id="np-phone"></div></div></main>
+    <aside class="np-notes" id="np-notes"></aside>
+  </div>
+</div>
+
+<script>
+(() => {
+  const screens = [
+    {section:'Start & security',title:'Welcome',kind:'welcome',purpose:'A confident first impression with two clear paths and no marketing carousel.',flow:['Create wallet','Import wallet'],notes:['Brand stays compact so the decision remains above the fold.','Security promise is factual and secondary.']},
+    {section:'Start & security',title:'Import wallet',kind:'import',purpose:'Restore from a recovery phrase with clear privacy and paste behavior.',flow:['Welcome','Import','Create PIN'],notes:['Multiline entry is the only dominant control.','Inline validation sits directly below the phrase field.']},
+    {section:'Start & security',title:'Recovery phrase',kind:'phrase',purpose:'Present the new phrase as protected material, not celebratory content.',flow:['Create','Backup','Verify'],notes:['Screenshot protection remains enabled.','Words use quiet numbered cells and never overflow.']},
+    {section:'Start & security',title:'Verify backup',kind:'verify',purpose:'Confirm backup with a short, understandable word-selection task.',flow:['Backup','Verify','Create PIN'],notes:['Progress is explicit: 2 of 3.','Wrong choices resolve inline without a blocking modal.']},
+    {section:'Start & security',title:'Create PIN',kind:'pin',purpose:'Create a six-digit device PIN with immediate, native-feeling input.',flow:['Verify','Enter PIN','Confirm PIN'],notes:['Rapid taps are accepted reliably.','The keypad stays visually light with 44dp+ targets.']},
+    {section:'Start & security',title:'Unlock',kind:'unlock',purpose:'Fast daily entry with wallet context and optional biometrics.',flow:['Launch','Unlock','Resume last screen'],notes:['No oversized logo or card shell.','Lockout and wrong-PIN messages occupy a stable inline area.']},
+    {section:'Start & security',title:'Session expired',kind:'expired',purpose:'Re-authenticate without losing the in-progress payment or browser state.',flow:['Any flow','Re-authenticate','Resume'],notes:['Shown as a secure sheet over the preserved destination.','Copy explains why the app locked.']},
+    {section:'Wallet',title:'Portfolio home',kind:'home',purpose:'Show value, primary money actions, and the asset list in one calm hierarchy.',flow:['Wallet','Asset detail'],notes:['One violet action; Receive and Swap stay neutral.','Rows use dividers instead of individual cards.']},
+    {section:'Wallet',title:'Wallet switcher',kind:'wallets',purpose:'Switch, rename, or add accounts without entering Settings.',flow:['Wallet','Switcher','Wallet'],notes:['Addresses remain secondary and truncated.','The active wallet is marked without a large filled tile.']},
+    {section:'Wallet',title:'Portfolio loading',kind:'loading',purpose:'Keep navigation usable while cached balances refresh progressively.',flow:['Unlock','Cached shell','Live balances'],notes:['Skeletons match final row geometry.','No full-page spinner.']},
+    {section:'Wallet',title:'Offline portfolio',kind:'offline',purpose:'Keep last-known values visible and explain data freshness without alarm.',flow:['Wallet','Offline','Retry'],notes:['Connectivity is a compact status line.','Local navigation and receive remain available.']},
+    {section:'Wallet',title:'Token detail',kind:'token',purpose:'Combine balance, market context, actions, and wallet-specific history.',flow:['Asset row','Token detail','Send or swap'],notes:['Price chart is subordinate to owned value.','Risk information appears only when actionable.']},
+    {section:'Pay',title:'Send',kind:'send',purpose:'A progressive payment form: recipient, asset, amount, then review.',flow:['Pay','Send','Review'],notes:['Network follows the selected asset.','BPAN and address share one recipient field with clear resolution.']},
+    {section:'Pay',title:'Choose asset',kind:'assetPicker',purpose:'Select held assets first, then search/import without a dense token wall.',flow:['Send','Asset picker','Send'],notes:['Balance and network are both visible.','Pasting a contract becomes an explicit import action.']},
+    {section:'Pay',title:'Choose network',kind:'networkPicker',purpose:'Select a receiving or payment network using recognizable chain identity.',flow:['Send or receive','Network picker','Flow'],notes:['Recent networks lead; the full list remains searchable.','Unsupported combinations explain themselves.']},
+    {section:'Pay',title:'Scan',kind:'scan',purpose:'Use one universal scanner for address, BPAN, WalletConnect, and payment URI.',flow:['Header scan','Recognize payload','Route'],notes:['The viewfinder is uncluttered.','Recognition feedback identifies what was scanned before routing.']},
+    {section:'Pay',title:'Review payment',kind:'review',purpose:'Confirm the exact value, destination, network, and fee before signing.',flow:['Send','Review','Sending'],notes:['Recipient is readable and copyable.','Warnings appear above the committed action.']},
+    {section:'Pay',title:'Insufficient balance',kind:'insufficient',purpose:'Explain fee-inclusive affordability next to the amount—not in a large error card.',flow:['Send','Correct amount'],notes:['Suggested correction is specific.','Primary action stays disabled until valid.']},
+    {section:'Pay',title:'Sending',kind:'sending',purpose:'Show deterministic progress without implying completion before confirmation.',flow:['Review','Broadcast','Confirm'],notes:['The screen distinguishes submitted from confirmed.','Leaving the screen does not lose activity tracking.']},
+    {section:'Pay',title:'Payment complete',kind:'success',purpose:'Close the payment with a clear outcome and useful receipt actions.',flow:['Sending','Complete','Done'],notes:['Amount and recipient remain the visual proof.','Share receipt is secondary.']},
+    {section:'Pay',title:'Payment failed',kind:'failure',purpose:'Translate provider or chain failure into a concise recoverable state.',flow:['Sending','Failed','Retry or edit'],notes:['No RPC payload, trace ID, or raw transaction data.','Preserves the form for editing.']},
+    {section:'Pay',title:'Receive',kind:'receive',purpose:'Make the selected network and address unmistakable before sharing.',flow:['Pay','Receive','Share'],notes:['Network is visible above the QR code.','Address copy and share are separate, conventional actions.']},
+    {section:'Swap & bridge',title:'Swap',kind:'swap',purpose:'Price a same-chain swap with explicit sell/buy assets and route.',flow:['Wallet','Swap','Review swap'],notes:['Direction switch is centered between fields.','Quote expiry and slippage stay visible but quiet.']},
+    {section:'Swap & bridge',title:'Bridge',kind:'bridge',purpose:'Expose origin, destination, received amount, duration, and bridge route.',flow:['Swap','Change destination chain','Bridge'],notes:['Cross-chain mode is visually distinct without a separate app section.','Route timing appears beside cost.']},
+    {section:'Swap & bridge',title:'Route selection',kind:'routes',purpose:'Compare routes by received amount, fee, and estimated time.',flow:['Swap or bridge','Routes','Quote'],notes:['Best route is labeled, not simply colored.','Selection rows retain readable provider identity.']},
+    {section:'Swap & bridge',title:'Confirm exchange',kind:'swapReview',purpose:'Summarize minimum received, route, price impact, and recipient.',flow:['Quote','Review','Exchange'],notes:['High price impact becomes a focused caution.','No decorative confirmation card stack.']},
+    {section:'BPAN',title:'My BPAN',kind:'bpan',purpose:'Treat the BPAN as a payment identity with visible mapping health.',flow:['BPAN','Identity','Mappings'],notes:['The number is prominent and copyable.','Chain readiness is summarized before details.']},
+    {section:'BPAN',title:'Register BPAN',kind:'bpanRegister',purpose:'Register an 11-digit identity with fee and ownership explained plainly.',flow:['BPAN','Register','Confirmation'],notes:['Availability checks inline after entry.','Base network and gas are explicit.']},
+    {section:'BPAN',title:'Map wallets',kind:'mapping',purpose:'Map EVM and non-EVM addresses with clear current/pending state.',flow:['My BPAN','Mappings','Confirm transactions'],notes:['One global EVM mapping is explained before chain-specific rows.','Automatic addresses are marked as this wallet.']},
+    {section:'BPAN',title:'Lookup',kind:'lookup',purpose:'Resolve a BPAN into human-readable, verified chain destinations.',flow:['BPAN','Lookup','Result'],notes:['Result includes owner and mapped chains.','Missing and unconfirmed results are distinct.']},
+    {section:'BPAN',title:'Waiting for finality',kind:'finality',purpose:'Explain a recent mapping without blaming the user or exposing infrastructure.',flow:['Recent mapping','Wait','Retry'],notes:['Expected wait is plain and contextual.','Send stays unavailable until finalized.']},
+    {section:'Activity',title:'Activity list',kind:'activity',purpose:'Scan transactions by time, direction, status, asset, and chain.',flow:['Activity','Transaction'],notes:['Status is carried by icon, label, and value treatment.','Filters remain compact and optional.']},
+    {section:'Activity',title:'Transaction detail',kind:'transaction',purpose:'Provide a readable receipt with timeline and explorer access.',flow:['Activity','Detail','Explorer'],notes:['Timeline distinguishes submitted and confirmed.','Hash and technical fields are available without dominating.']},
+    {section:'Activity',title:'Empty activity',kind:'emptyActivity',purpose:'Explain an empty wallet and point toward one relevant action.',flow:['Activity','Receive'],notes:['No oversized illustration.','One useful action only.']},
+    {section:'Assets',title:'Manage tokens',kind:'manageTokens',purpose:'View custom tokens and begin import without mixing network administration.',flow:['Settings or Wallet','Tokens','Add token'],notes:['Existing tokens use simple rows.','Removal is a trailing action with confirmation where needed.']},
+    {section:'Assets',title:'Add token',kind:'addToken',purpose:'Detect a token from network plus contract/mint address before saving.',flow:['Manage tokens','Detect','Preview','Add'],notes:['Detected metadata is previewed before commit.','Wrong-network errors stay attached to the address field.']},
+    {section:'Assets',title:'Manage networks',kind:'manageNetworks',purpose:'List custom RPC networks separately from token imports.',flow:['Manage assets','Networks','Add network'],notes:['Trust warning is compact and persistent.','Built-in networks cannot be removed.']},
+    {section:'Assets',title:'Add network',kind:'addNetwork',purpose:'Validate chain ID and endpoint before saving a custom network.',flow:['Networks','Validate RPC','Save'],notes:['Advanced fields reveal progressively.','Security copy avoids generic fear language.']},
+    {section:'Settings',title:'Settings',kind:'settings',purpose:'Group accounts, security, connections, preferences, and support into a scannable list.',flow:['Settings','Subpage'],notes:['No card around every row.','The danger zone is clearly separated from ordinary preferences.']},
+    {section:'Settings',title:'Accounts',kind:'accounts',purpose:'Rename, switch, add, or remove wallets with clear active-account context.',flow:['Settings','Accounts','Wallet action'],notes:['Removal identifies the exact wallet.','The last wallet requires stronger confirmation.']},
+    {section:'Settings',title:'Security',kind:'security',purpose:'Centralize lock, biometrics, device integrity, auto-lock, and backup access.',flow:['Settings','Security','Action'],notes:['States are readable without relying on toggle color.','Recovery access is intentionally separated.']},
+    {section:'Settings',title:'Reveal recovery phrase',kind:'revealSheet',purpose:'Require PIN, explain ownership risk, then reveal inside screenshot protection.',flow:['Security','Confirm PIN','Reveal'],notes:['The phrase never appears in a generic modal.','Hide action stays reachable.']},
+    {section:'Settings',title:'Preferences',kind:'preferences',purpose:'Manage currency, theme, notifications, and motion without crowding the root page.',flow:['Settings','Preferences'],notes:['System theme is the default option.','Reduced motion reflects OS state and can be explained.']},
+    {section:'Settings',title:'Currency picker',kind:'currency',purpose:'Search and select display currency with familiar symbol and country context.',flow:['Preferences','Currency','Preferences'],notes:['Selection is a checkmark, not a fully colored row.','Search stays pinned above the list.']},
+    {section:'Connections',title:'Connected dApps',kind:'connections',purpose:'Review WalletConnect and browser permissions in one place.',flow:['Settings','Connections','Session detail'],notes:['Origin, network, account, and last used are visible.','Disconnect is scoped per session.']},
+    {section:'Connections',title:'WalletConnect',kind:'walletConnect',purpose:'Scan or paste a WalletConnect URI and see active sessions.',flow:['Connections','Scan or paste','Approve'],notes:['Scanner and paste are peer options.','Configuration failures use a compact notice.']},
+    {section:'Connections',title:'Browser start',kind:'browser',purpose:'Open known dApps with visible open-web risk and recent destinations.',flow:['Wallet','Browser','Site'],notes:['Search/address bar is the focal control.','Popular destinations are not represented as fake cards.']},
+    {section:'Connections',title:'Browser approval',kind:'approval',purpose:'Approve connection, signature, transaction, or network addition with verified origin context.',flow:['Site request','Review','Confirm or reject'],notes:['Risk and permission details precede the action.','Reject and confirm have stable positions.']},
+    {section:'Explore',title:'DeFi directory',kind:'defi',purpose:'Browse earn, lend, and stake providers without implying endorsement or live balance.',flow:['Wallet','DeFi','External provider'],notes:['Protocol rows emphasize category and TVL source.','Risk disclosure stays visible but concise.']},
+    {section:'Advanced',title:'Developer tools',kind:'developer',purpose:'Keep internal diagnostics visually separate from normal wallet settings.',flow:['Settings','Advanced','Diagnostic'],notes:['This screen is hidden from ordinary users.','Actions identify network and consequence.']},
+    {section:'Advanced',title:'Remove wallet',kind:'destructive',purpose:'Confirm a destructive local action with exact scope and recovery consequence.',flow:['Accounts','Remove','Confirm'],notes:['Cancel remains the default focus.','Destructive label names the wallet.']}
+  ];
+
+  const icon = name => `<i data-lucide="${name}" aria-hidden="true"></i>`;
+  const coin = (symbol, cls='') => `<div class="coin ${cls}">${symbol}</div>`;
+  const row = (lead,title,sub,tail='',tailSub='') => `<div class="row">${lead}<div class="row-main"><div class="row-title">${title}</div><div class="row-sub">${sub}</div></div>${tail?`<div class="row-tail"><strong>${tail}</strong>${tailSub?`<small>${tailSub}</small>`:''}</div>`:''}</div>`;
+  const appbar = (title, back=true, extra='') => `<div class="appbar">${back?`<button class="icon-button plain" aria-label="Back">${icon('arrow-left')}</button>`:'<div></div>'}<div style="flex:1"><h2>${title}</h2></div>${extra||'<div style="width:40px"></div>'}</div>`;
+  const status = () => `<div class="statusbar"><span>9:41</span><span class="status-icons"><span class="status-dot"></span><span class="status-dot"></span><span>82%</span></span></div>`;
+  const nav = active => `<nav class="bottom-nav" aria-label="Main navigation">${[['wallet','Wallet'],['send','Pay'],['badge-cent','BPAN'],['clock-3','Activity'],['settings-2','Settings']].map(([ic,label])=>`<button class="nav-item ${label===active?'active':''}">${icon(ic)}<span>${label}</span></button>`).join('')}</nav>`;
+  const notice = (tone,title,body) => `<div class="notice ${tone}"><strong>${title}</strong><p>${body}</p></div>`;
+  const btn = (label,type='primary',ic='') => `<button class="${type}">${ic?icon(ic):''}${label}</button>`;
+  const shell = (title,body,active='',opts={}) => `${status()}${opts.appbar===false?'':appbar(title,opts.back!==false,opts.extra||'')}<div class="screen-body ${opts.flush?'flush':''}"><div class="scroll-body">${body}</div></div>${active?nav(active):''}`;
+  const settingsRow = (ic,title,sub,right=icon('chevron-right')) => row(`<div class="row-icon">${icon(ic)}</div>`,title,sub,right);
+
+  function authBody(kind){
+    if(kind==='welcome') return `${status()}<div class="center-state"><div class="np-mark" style="width:58px;height:58px;border-radius:18px;font-size:24px">N</div><h3 style="margin-top:22px">Money, without the maze.</h3><p>One wallet for addresses, tokens, and simple payment numbers.</p>${btn('Create a new wallet')}${btn('Import an existing wallet','secondary')}<p style="font-size:10px;margin-top:18px">Your keys stay encrypted on this device.</p></div>`;
+    if(kind==='import') return shell('Import wallet',`<p class="row-sub" style="white-space:normal;line-height:1.5;margin:2px 0 15px">Enter the 12 or 24 recovery words in order.</p><div class="field" style="min-height:150px"><div class="field-label">Recovery phrase</div><div class="field-value placeholder" style="align-items:flex-start;line-height:1.6">word one word two word three…</div></div>${notice('','Private input','NumPay never sends this phrase to a server.')}${btn('Continue')}`);
+    if(kind==='phrase') return shell('Back up your wallet',`<p class="row-sub" style="white-space:normal;line-height:1.5">Write these words down in order and keep them offline.</p><div class="phrase-grid">${['orbit','velvet','maple','drift','harbor','signal','cabin','lunar','frame','raven','copper','meadow'].map(w=>`<div class="phrase">${w}</div>`).join('')}</div>${notice('warn','Do not share these words','Anyone with this phrase can control the wallet.')}${btn('I saved it securely')}`);
+    if(kind==='verify') return shell('Verify your backup',`<div class="appbar-sub">Step 2 of 3</div><div class="eyebrow">Select word 8</div><div class="quick-grid" style="grid-template-columns:repeat(2,1fr)">${['velvet','lunar','signal','copper','raven','maple'].map((w,i)=>`<button class="quick ${i===1?'primary-quick':''}" style="min-height:50px;justify-content:center;align-items:center">${w}</button>`).join('')}</div><div class="eyebrow">Then select word 11</div><div class="quick-grid" style="grid-template-columns:repeat(2,1fr)">${['copper','orbit','frame','meadow'].map(w=>`<button class="quick" style="min-height:50px;justify-content:center;align-items:center">${w}</button>`).join('')}</div>${btn('Continue')}`);
+    const error = kind==='unlock'?notice('bad','That PIN did not match','2 attempts remaining before the next delay.') : '';
+    return `${status()}<div class="screen-body"><div class="center-state" style="justify-content:flex-start;padding-top:55px"><div class="avatar" style="width:42px;height:42px;border-radius:14px">W1</div><h3 style="margin-top:16px">${kind==='pin'?'Create your PIN':'Welcome back'}</h3><p>${kind==='pin'?'Use six digits you can remember. Avoid birthdays and repeated numbers.':'Wallet 1 · 0xb4fc…d9c5'}</p>${error}<div class="pin-dots">${[1,2,3,4,5,6].map((_,i)=>`<span class="pin-dot ${i<3?'filled':''}"></span>`).join('')}</div><div class="keypad">${['1','2','3','4','5','6','7','8','9','fingerprint','0','delete'].map(k=>`<button class="key">${/\d/.test(k)?k:icon(k)}</button>`).join('')}</div></div></div>`;
+  }
+
+  function renderBody(s){
+    switch(s.kind){
+      case 'welcome': case 'import': case 'phrase': case 'verify': case 'pin': case 'unlock': return authBody(s.kind);
+      case 'expired': return `${shell('Send',`<div class="amount-box"><div class="amount">0.42 <span>ETH</span></div></div><div class="field"><div class="field-label">To</div><div class="field-value">653-8163-8718</div></div>`, 'Pay')}`.replace('</div></div><nav',`</div></div><div class="sheet-scrim"><div class="sheet"><div class="handle"></div><h3>Unlock to continue</h3><p>Your wallet locked after 15 minutes. Enter your PIN to return to this payment.</p><div class="pin-dots">${[1,2,3,4,5,6].map(_=>'<span class="pin-dot"></span>').join('')}</div>${btn('Unlock')}</div></div><nav`);
+      case 'home': return `${status()}<div class="appbar"><button class="secondary" style="width:auto;margin:0;min-height:40px;padding:0 11px"><span class="avatar">W1</span>Wallet 1 ${icon('chevron-down')}</button><div style="display:flex;gap:7px"><button class="icon-button">${icon('scan-line')}</button><button class="icon-button">${icon('bell')}</button></div></div><div class="screen-body"><div class="scroll-body"><div class="hero-balance"><span class="wallet-name">Total portfolio ${icon('eye')}</span><strong>$12,840.62</strong><small>+$214.80 · 1.7% today</small></div><div class="quick-grid"><button class="quick primary-quick">${icon('arrow-up-right')}Send</button><button class="quick">${icon('arrow-down-left')}Receive</button><button class="quick">${icon('repeat-2')}Swap</button></div><div class="section-head"><h3>Assets</h3><button class="text-action">Manage</button></div><div class="asset-list">${row(coin('ETH','eth'),'Ethereum','2.408 ETH','$7,312.41','57%')}${row(coin('BTC','btc'),'Bitcoin','0.052 BTC','$3,426.08','27%')}${row(coin('SOL','sol'),'Solana','13.81 SOL','$1,843.10','14%')}${row(coin('SUI','sui'),'Sui','211.4 SUI','$259.03','2%')}</div></div></div>${nav('Wallet')}`;
+      case 'wallets': return `${shell('Wallet',`<div class="hero-balance"><span class="wallet-name">Current account</span><strong style="font-size:28px">Wallet 1</strong><div class="row-sub">0xb4fc8acd…6b49dc5</div></div>`, 'Wallet')}<div class="sheet-scrim"><div class="sheet"><div class="handle"></div><h3>Your wallets</h3>${row('<div class="avatar">W1</div>','Wallet 1','0xb4fc…d9c5','✓')}${row('<div class="avatar" style="background:var(--np-raised);color:var(--np-ink)">T</div>','Trading','0x7e21…41aa')}${btn('Add wallet','secondary','plus')}</div></div>`;
+      case 'loading': return `${status()}${appbar('Wallet',false)}<div class="screen-body"><div class="hero-balance"><span class="wallet-name">Total portfolio</span><strong style="color:var(--np-line)">$—</strong></div><div class="quick-grid"><button class="quick primary-quick">${icon('arrow-up-right')}Send</button><button class="quick">${icon('arrow-down-left')}Receive</button><button class="quick">${icon('repeat-2')}Swap</button></div><div class="section-head"><h3>Assets</h3></div>${[1,2,3,4,5].map(_=>`<div class="row"><div class="row-icon"></div><div class="row-main"><div style="height:10px;width:42%;background:var(--np-line);border-radius:5px"></div><div style="height:8px;width:28%;background:var(--np-line);border-radius:4px;margin-top:7px"></div></div></div>`).join('')}</div>${nav('Wallet')}`;
+      case 'offline': return shell('Wallet',`${notice('warn','Showing saved balances','Last updated 18 minutes ago. Receive and local wallet actions still work.')}<div class="hero-balance"><span class="wallet-name">Total portfolio</span><strong>$12,840.62</strong></div><div class="section-head"><h3>Assets</h3><button class="text-action">Retry</button></div><div class="asset-list">${row(coin('ETH','eth'),'Ethereum','Saved balance','$7,312.41')}${row(coin('BTC','btc'),'Bitcoin','Saved balance','$3,426.08')}${row(coin('SOL','sol'),'Solana','Saved balance','$1,843.10')}</div>`, 'Wallet',{back:false});
+      case 'token': return shell('Ethereum',`<div class="hero-balance"><span class="wallet-name">Your balance</span><strong style="font-size:32px">2.408 ETH</strong><div class="row-sub">$7,312.41</div></div><div class="quick-grid"><button class="quick primary-quick">${icon('arrow-up-right')}Send</button><button class="quick">${icon('arrow-down-left')}Receive</button><button class="quick">${icon('repeat-2')}Swap</button></div><div class="section-head"><h3>ETH price</h3><span class="row-sub">24H</span></div><div style="display:flex;justify-content:space-between;align-items:end"><strong style="font-size:20px">$3,036.72</strong><span style="font-size:11px;color:var(--np-good)">+1.8%</span></div><div class="chart"></div><div class="stats"><div class="stat"><small>Market cap</small><strong>$366.4B</strong></div><div class="stat"><small>24h volume</small><strong>$18.2B</strong></div></div><div class="section-head"><h3>Recent activity</h3><button class="text-action">See all</button></div>${row('<div class="row-icon">'+icon('arrow-down-left')+'</div>','Received ETH','Today · Base','+0.12 ETH','$364.41')}`);
+      case 'send': return shell('Send',`<div class="segmented"><button class="segment active">Send</button><button class="segment">Receive</button></div><div class="field"><div class="field-label">Recipient</div><div class="field-value placeholder"><span class="grow">Address or 11-digit BPAN</span><span class="field-icon">${icon('scan-line')}</span></div></div><div class="field"><div class="field-label">Asset</div><div class="field-value">${coin('ETH','eth')}<span class="grow">Ethereum</span>${icon('chevron-down')}</div></div><div class="amount-box"><div class="field-label">Amount</div><div class="amount">0.00 <span>ETH</span></div><div class="amount-meta"><span>$0.00</span><span>Available 2.408 ETH</span></div></div><div class="amount-meta"><span>Estimated network fee</span><strong>~$0.42</strong></div>${btn('Review payment')}`, 'Pay');
+      case 'assetPicker': return shell('Choose asset',`<div class="field"><div class="field-value placeholder">${icon('search')}<span>Search assets or paste contract</span></div></div><div class="eyebrow">Your assets</div>${row(coin('ETH','eth'),'Ethereum','Ethereum','$7,312.41','2.408 ETH')}${row(coin('USDC'),'USD Coin','Base','$261.00','261 USDC')}${row(coin('SOL','sol'),'Solana','Solana','$1,843.10','13.81 SOL')}<div class="eyebrow">More assets</div>${row(coin('POL'),'Polygon','Polygon','$0.00','0 POL')}${row(coin('BNB','bnb'),'BNB','BNB Chain','$0.00','0 BNB')}`);
+      case 'networkPicker': return shell('Choose network',`<div class="field"><div class="field-value placeholder">${icon('search')}<span>Search networks</span></div></div><div class="eyebrow">Recent</div>${row(coin('ETH','eth'),'Ethereum','ETH · Mainnet','✓')}${row(coin('B'),'Base','ETH · Mainnet')}${row(coin('SOL','sol'),'Solana','SOL · Mainnet')}<div class="eyebrow">All networks</div>${row(coin('A'),'Arbitrum One','ETH')}${row(coin('OP'),'Optimism','ETH')}${row(coin('BNB','bnb'),'BNB Chain','BNB')}`);
+      case 'scan': return `${status()}${appbar('Scan',true)}<div class="screen-body"><div class="center-state"><div style="width:250px;height:250px;border:2px solid var(--np-brand);border-radius:26px;position:relative;background:var(--np-raised)"><div style="position:absolute;left:24px;right:24px;top:50%;height:2px;background:var(--np-brand)"></div></div><h3 style="font-size:16px;margin-top:24px">Scan a payment code</h3><p>Address, BPAN, WalletConnect, or supported payment link</p>${btn('Choose image','secondary','image')}</div></div>`;
+      case 'review': return shell('Review payment',`<div class="center-state" style="height:auto;padding:16px 0 10px"><div class="state-mark">${icon('arrow-up-right')}</div><div class="row-sub">You send</div><h3 style="font-size:29px;margin-top:5px">0.42 ETH</h3><p>$1,275.42</p></div><div class="review-block"><div class="review-row"><span>To</span><strong>653-8163-8718<br><small class="row-sub">0x71c4…09ea</small></strong></div><div class="review-row"><span>Network</span><strong>Base</strong></div><div class="review-row"><span>Network fee</span><strong>~0.00014 ETH · $0.42</strong></div><div class="review-row"><span>Total</span><strong>0.42014 ETH</strong></div></div>${btn('Hold to send','primary','fingerprint')}`);
+      case 'insufficient': return shell('Send',`<div class="field"><div class="field-label">Recipient</div><div class="field-value">653-8163-8718 <span style="margin-left:auto;color:var(--np-good)">Verified</span></div></div><div class="amount-box"><div class="field-label">Amount</div><div class="amount">2.408 <span>ETH</span></div><div class="amount-meta"><span>$7,312.41</span><span>MAX</span></div></div>${notice('bad','Not enough for the network fee','Lower the amount by at least 0.00014 ETH to cover the estimated fee.')}<button class="secondary">Use 2.40786 ETH</button><button class="primary" style="opacity:.45">Review payment</button>`, 'Pay');
+      case 'sending': return `<div class="center-state">${status()}<div class="state-mark">${icon('loader-circle')}</div><h3>Submitting payment</h3><p>0.42 ETH to 653-8163-8718</p><div class="timeline" style="width:240px;text-align:left;margin-top:14px"><div class="timeline-item"><strong>Signed securely</strong><span>Completed</span></div><div class="timeline-item pending"><strong>Broadcasting to Base</strong><span>Usually a few seconds</span></div><div class="timeline-item pending"><strong>Network confirmation</strong><span>Waiting</span></div></div>${btn('View in Activity','secondary')}</div>`;
+      case 'success': return `<div class="center-state">${status()}<div class="state-mark good">${icon('check')}</div><h3>Payment complete</h3><p>0.42 ETH was sent to 653-8163-8718 on Base.</p><div class="review-block" style="width:100%"><div class="review-row"><span>Paid</span><strong>$1,275.42</strong></div><div class="review-row"><span>Fee</span><strong>$0.42</strong></div></div>${btn('Done')}${btn('Share receipt','secondary','share-2')}</div>`;
+      case 'failure': return `<div class="center-state">${status()}<div class="state-mark bad">${icon('x')}</div><h3>Payment not sent</h3><p>The Base network did not accept this transaction. Your balance was not changed.</p>${notice('bad','What you can do','Check your connection, then retry. If the fee changed, review the amount first.')}${btn('Review and retry')}${btn('Back to wallet','secondary')}</div>`;
+      case 'receive': return shell('Receive',`<div class="segmented"><button class="segment">Send</button><button class="segment active">Receive</button></div><div class="field"><div class="field-label">Network</div><div class="field-value">${coin('ETH','eth')}<span class="grow">Ethereum</span>${icon('chevron-down')}</div></div><div class="qr"></div><div class="address">0xb4fc8acd085e404e5d482b6e98e4b13666b49dc5</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${btn('Copy','secondary','copy')}${btn('Share','secondary','share-2')}</div>${notice('warn','Ethereum only','Sending another network to this address may result in loss.')}`, 'Pay');
+      case 'swap': case 'bridge': return shell(s.kind==='bridge'?'Bridge':'Swap',`${s.kind==='bridge'?'<div class="network-strip"><button class="filter active">Base</button><span style="align-self:center">→</span><button class="filter">Arbitrum</button></div>':''}<div class="field"><div class="field-label">You sell${s.kind==='bridge'?' · Base':''}</div><div class="field-value">${coin('ETH','eth')}<span class="grow">ETH</span><strong>0.42</strong></div><div class="amount-meta"><span>Balance 2.408</span><span>$1,275.42</span></div></div><div style="display:grid;place-items:center;margin:-3px 0 7px"><button class="icon-button">${icon(s.kind==='bridge'?'arrow-down':'arrow-down-up')}</button></div><div class="field"><div class="field-label">You receive${s.kind==='bridge'?' · Arbitrum':''}</div><div class="field-value">${coin(s.kind==='bridge'?'ETH':'USDC',s.kind==='bridge'?'eth':'')}<span class="grow">${s.kind==='bridge'?'ETH':'USDC'}</span><strong>${s.kind==='bridge'?'0.4191':'1,273.92'}</strong></div></div>${row('<div class="row-icon">'+icon('route')+'</div>','Best route',s.kind==='bridge'?'Stargate · ~2 min':'0x · 1 hop',s.kind==='bridge'?'$1.84 fee':'$0.42 fee')}${btn(s.kind==='bridge'?'Review bridge':'Review swap')}`);
+      case 'routes': return shell('Choose route',`${notice('','Quotes update automatically','Received amount includes provider and network fees.')}<div class="eyebrow">Available routes</div>${row('<div class="row-icon">'+icon('route')+'</div>','Stargate','~2 min · $1.84 fee','0.4191 ETH','Best received')}${row('<div class="row-icon">'+icon('waves')+'</div>','Across','~1 min · $2.16 fee','0.4190 ETH')}${row('<div class="row-icon">'+icon('waypoints')+'</div>','Relay','~3 min · $1.70 fee','0.4188 ETH')}`);
+      case 'swapReview': return shell('Confirm bridge',`<div class="center-state" style="height:auto;padding:8px 0"><div class="state-mark">${icon('repeat-2')}</div><h3>0.42 ETH → 0.4191 ETH</h3><p>Base to Arbitrum through Stargate</p></div><div class="review-block"><div class="review-row"><span>Minimum received</span><strong>0.4169 ETH</strong></div><div class="review-row"><span>Estimated time</span><strong>~2 minutes</strong></div><div class="review-row"><span>Provider + gas</span><strong>$1.84</strong></div><div class="review-row"><span>Recipient</span><strong>0xb4fc…d9c5</strong></div></div>${btn('Confirm and bridge')}`);
+      case 'bpan': return shell('BPAN',`<div class="hero-balance"><span class="wallet-name">Your payment number</span><div class="bpan-number">653-8163-8718</div><small style="color:var(--np-good)">Ready to receive</small></div><div class="quick-grid"><button class="quick primary-quick">${icon('copy')}Copy</button><button class="quick">${icon('share-2')}Share</button><button class="quick">${icon('search')}Lookup</button></div><div class="section-head"><h3>Wallet mappings</h3><button class="text-action">Edit</button></div><div>${['EVM|0xb4fc…d9c5|ETH','BTC|bc1q…k8se|Bitcoin','SOL|7ttq…3mav|Solana','SUI|0x49…082e|Sui'].map(x=>{const [a,b,c]=x.split('|');return `<div class="mapping"><div class="map-dot">${a}</div><div><strong>${c}</strong><span style="display:block">${b}</span></div><span class="check">✓</span></div>`}).join('')}</div>${notice('','One number, many chains','People can use this BPAN after choosing a mapped network.')}`, 'BPAN');
+      case 'bpanRegister': return shell('Register BPAN',`<p class="row-sub" style="white-space:normal;line-height:1.5">Choose an 11-digit payment number. It will belong to this wallet on Base.</p><div class="field"><div class="field-label">BPAN number</div><div class="field-value" style="font-variant-numeric:tabular-nums">65381638718 <span style="margin-left:auto;color:var(--np-good)">Available</span></div></div><div class="review-block"><div class="review-row"><span>Registration</span><strong>0 ETH</strong></div><div class="review-row"><span>Estimated Base gas</span><strong>~$0.03</strong></div><div class="review-row"><span>Owner</span><strong>Wallet 1</strong></div></div>${notice('warn','Permanent identity','The selected number cannot be changed after registration.')} ${btn('Review registration')}`);
+      case 'mapping': return shell('Wallet mappings',`<div class="field"><div class="field-label">BPAN</div><div class="field-value">653-8163-8718</div></div>${notice('','EVM address','One EVM mapping covers Ethereum, Base, Arbitrum, Optimism, and other EVM networks.')}<div class="mapping"><div class="map-dot">EVM</div><div><strong>All EVM chains</strong><span style="display:block">0xb4fc…d9c5 · This wallet</span></div><span class="check">✓</span></div>${['BTC|Bitcoin|bc1q…k8se','SOL|Solana|7ttq…3mav','SUI|Sui|0x49…082e','TRX|Tron|TNVk…w51g'].map(x=>{const [a,b,c]=x.split('|');return `<div class="mapping"><div class="map-dot">${a}</div><div><strong>${b}</strong><span style="display:block">${c}</span></div><span class="check">✓</span></div>`}).join('')}${btn('Save mapping changes')}`);
+      case 'lookup': return shell('Lookup BPAN',`<div class="field"><div class="field-label">BPAN number</div><div class="field-value">653-8163-8718 <span style="margin-left:auto">${icon('search')}</span></div></div><div class="eyebrow">Verified result</div><div class="hero-balance"><span class="wallet-name">Payment identity</span><div class="bpan-number">653-8163-8718</div><div class="row-sub">Owned by 0xb4fc…d9c5</div></div>${row(coin('ETH','eth'),'EVM networks','0xb4fc…d9c5','Mapped')}${row(coin('BTC','btc'),'Bitcoin','bc1q…k8se','Mapped')}${row(coin('SOL','sol'),'Solana','7ttq…3mav','Mapped')}${btn('Pay this BPAN')}`);
+      case 'finality': return shell('BPAN',`<div class="hero-balance"><span class="wallet-name">Payment number</span><div class="bpan-number">562-9736-1767</div></div>${notice('warn','Mapping is confirming','A new Optimism address was added recently. It usually becomes available within about 15 minutes.')}<div class="timeline"><div class="timeline-item"><strong>Mapping submitted</strong><span>2:04 PM · Base</span></div><div class="timeline-item pending"><strong>Waiting for finality</strong><span>Payment destination is not available yet</span></div></div>${btn('Check again','secondary','refresh-cw')}`, 'BPAN');
+      case 'activity': return shell('Activity',`<div class="network-strip"><button class="filter active">All</button><button class="filter">Sent</button><button class="filter">Received</button></div><div class="eyebrow">Today</div>${row('<div class="row-icon">'+icon('arrow-up-right')+'</div>','Sent ETH','Base · Confirmed','−0.42 ETH','−$1,275.42')}${row('<div class="row-icon">'+icon('repeat-2')+'</div>','Swapped ETH','Ethereum · Confirmed','+1,273 USDC')}${row('<div class="row-icon">'+icon('arrow-down-left')+'</div>','Received SOL','Solana · Confirmed','+2.5 SOL','+$333.65')}<div class="eyebrow">Yesterday</div>${row('<div class="row-icon">'+icon('route')+'</div>','Bridged ETH','Base → Arbitrum · Pending','0.18 ETH')}${row('<div class="row-icon">'+icon('arrow-up-right')+'</div>','Sent BTC','Bitcoin · Confirmed','−0.004 BTC')}`, 'Activity');
+      case 'transaction': return shell('Transaction',`<div class="center-state" style="height:auto;padding:8px 0 14px"><div class="state-mark good">${icon('check')}</div><div class="row-sub">Sent</div><h3 style="font-size:27px">0.42 ETH</h3><p>About $1,275.42</p></div><div class="timeline"><div class="timeline-item"><strong>Payment submitted</strong><span>Today, 2:02 PM</span></div><div class="timeline-item"><strong>Confirmed on Base</strong><span>Today, 2:02 PM · 4 seconds</span></div></div><div class="review-block"><div class="review-row"><span>To</span><strong>653-8163-8718<br><small class="row-sub">0x71c4…09ea</small></strong></div><div class="review-row"><span>Network fee</span><strong>0.00014 ETH</strong></div><div class="review-row"><span>Transaction</span><strong>0x8f21…6e90</strong></div></div>${btn('View on BaseScan','secondary','external-link')}`);
+      case 'emptyActivity': return shell('Activity',`<div class="center-state"><div class="state-mark">${icon('clock-3')}</div><h3>No activity yet</h3><p>Payments, swaps, and bridges will appear here after you use the wallet.</p>${btn('Receive funds','secondary','arrow-down-left')}</div>`, 'Activity');
+      case 'manageTokens': return shell('Manage assets',`<div class="segmented"><button class="segment active">Tokens</button><button class="segment">Networks</button></div>${btn('Add token','secondary','plus')}<div class="eyebrow">Custom tokens</div>${row(coin('ARB'),'Arbitrum','Ethereum · 0x912…004a','', '')}${row(coin('AERO'),'Aerodrome','Base · 0x940…7832')}${row(coin('BONK'),'Bonk','Solana · DezX…263')}`);
+      case 'addToken': return shell('Add token',`<div class="field"><div class="field-label">Network</div><div class="field-value">${coin('B')}<span class="grow">Base</span>${icon('chevron-down')}</div></div><div class="field"><div class="field-label">Contract address</div><div class="field-value">0x9401…7832</div></div><div class="eyebrow">Detected token</div>${row(coin('AERO'),'Aerodrome','18 decimals · Verified','$0.84','You hold 122.4')}${notice('','Review before adding','Token information is read from the selected network.')}${btn('Add AERO')}`);
+      case 'manageNetworks': return shell('Manage assets',`<div class="segmented"><button class="segment">Tokens</button><button class="segment active">Networks</button></div>${notice('warn','Use RPCs you trust','A custom endpoint can report incorrect balances or transaction state.')}${btn('Add network','secondary','plus')}<div class="eyebrow">Custom networks</div>${row(coin('S'),'Base Sepolia','Chain ID 84532 · ETH','')}${row(coin('L'),'Localhost','Chain ID 31337 · ETH','')}`);
+      case 'addNetwork': return shell('Add network',`<div class="field"><div class="field-label">RPC URL</div><div class="field-value">https://rpc.example.com</div></div><div class="field"><div class="field-label">Network name</div><div class="field-value placeholder">e.g. Base Sepolia</div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div class="field"><div class="field-label">Chain ID</div><div class="field-value">84532</div></div><div class="field"><div class="field-label">Symbol</div><div class="field-value">ETH</div></div></div><div class="field"><div class="field-label">Block explorer</div><div class="field-value placeholder">https://…</div></div>${notice('good','Endpoint verified','The endpoint reports chain ID 84532.')}${btn('Save network')}`);
+      case 'settings': return shell('Settings',`<div class="eyebrow">Account</div><div class="settings-list">${settingsRow('wallet','Wallets','2 accounts')}${settingsRow('shield-check','Security','PIN, biometrics, backup')}${settingsRow('plug','Connections','1 connected dApp')}</div><div class="eyebrow">App</div><div class="settings-list">${settingsRow('landmark','Manage assets','Tokens and networks')}${settingsRow('circle-dollar-sign','Display currency','USD · $')}${settingsRow('sun-moon','Appearance','System')}${settingsRow('bell','Notifications','Receive alerts on')}</div><div class="eyebrow">Support</div><div class="settings-list">${settingsRow('circle-help','Help and support','Guides and contact')}${settingsRow('info','About NumPay','Version 0.1.0')}</div>`, 'Settings',{back:false});
+      case 'accounts': return shell('Wallets',`${row('<div class="avatar">W1</div>','Wallet 1','0xb4fc…d9c5','Active')}${row('<div class="avatar" style="background:var(--np-raised);color:var(--np-ink)">T</div>','Trading','0x7e21…41aa')}${btn('Add wallet','secondary','plus')}<div class="eyebrow">Wallet actions</div>${settingsRow('pencil','Rename Wallet 1','Change the local account name')}${settingsRow('trash-2','Remove Wallet 1','Requires confirmation')}`);
+      case 'security': return shell('Security',`${settingsRow('lock','Auto-lock','After 15 minutes')}${settingsRow('fingerprint','Biometric unlock','Available on this device','<span style="color:var(--np-good)">On</span>')}${settingsRow('shield-check','Device integrity','No issues detected','<span style="color:var(--np-good)">Good</span>')}<div class="eyebrow">Backup</div>${settingsRow('key-round','Recovery phrase','Confirm PIN to reveal')}${settingsRow('shield-alert','Failed PIN protection','Delay after repeated attempts','<span>On</span>')}<div class="eyebrow">Immediate action</div>${btn('Lock wallet now','secondary','lock')}`);
+      case 'revealSheet': return `${shell('Security',`${settingsRow('key-round','Recovery phrase','Confirm PIN to reveal')}`)}<div class="sheet-scrim"><div class="sheet"><div class="handle"></div><h3>Reveal recovery phrase</h3><p>These words control this wallet on any device. Make sure nobody can see your screen.</p><div class="pin-dots">${[1,2,3,4,5,6].map(_=>'<span class="pin-dot"></span>').join('')}</div>${btn('Continue')}${btn('Cancel','secondary')}</div></div>`;
+      case 'preferences': return shell('Preferences',`${settingsRow('circle-dollar-sign','Display currency','USD · United States Dollar')}${settingsRow('sun-moon','Appearance','Follow system')}${settingsRow('bell','Receive notifications','Balance changes and confirmations','<span style="color:var(--np-good)">On</span>')}${settingsRow('accessibility','Reduced motion','Follow device setting','<span>System</span>')}${settingsRow('eye','Hide balances','Blur values on launch','<span>Off</span>')}`);
+      case 'currency': return shell('Display currency',`<div class="field"><div class="field-value placeholder">${icon('search')}<span>Search currencies</span></div></div>${row('<div class="row-icon">$</div>','US Dollar','USD','✓')}${row('<div class="row-icon">€</div>','Euro','EUR')}${row('<div class="row-icon">£</div>','British Pound','GBP')}${row('<div class="row-icon">₦</div>','Nigerian Naira','NGN')}${row('<div class="row-icon">¥</div>','Japanese Yen','JPY')}`);
+      case 'connections': return shell('Connections',`<div class="eyebrow">WalletConnect</div>${row('<div class="row-icon">'+icon('link')+'</div>','Uniswap','Ethereum · Wallet 1','Connected')}${row('<div class="row-icon">'+icon('link')+'</div>','OpenSea','Base · Wallet 1','Connected')}<div class="eyebrow">NumPay browser</div>${row('<div class="row-icon">A</div>','app.aave.com','Ethereum · Wallet 1','Connected')}${btn('Connect another dApp','secondary','plus')}`);
+      case 'walletConnect': return shell('WalletConnect',`${notice('','Connect safely','Only approve sessions from a site you recognize.')}<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${btn('Scan QR','secondary','scan-line')}${btn('Paste URI','secondary','clipboard')}</div><div class="field" style="margin-top:10px"><div class="field-label">Connection URI</div><div class="field-value placeholder">wc:…</div></div>${btn('Connect')}<div class="eyebrow">Active sessions</div>${row('<div class="row-icon">U</div>','Uniswap','Ethereum · 2 permissions','Disconnect')}`);
+      case 'browser': return `${status()}<div class="browser-bar"><button class="icon-button plain">${icon('arrow-left')}</button><div class="url">${icon('search')}Search or enter a dApp address</div><button class="icon-button plain">${icon('ellipsis-vertical')}</button></div><div class="screen-body"><div class="site-hero"><div class="np-mark">N</div><h3>Explore the open web</h3><p>Check the address before connecting or signing.</p></div><div class="eyebrow">Popular</div>${row('<div class="row-icon">U</div>','Uniswap','app.uniswap.org')}${row('<div class="row-icon">A</div>','Aave','app.aave.com')}${row('<div class="row-icon">O</div>','OpenSea','opensea.io')}<div class="eyebrow">Recent</div>${row('<div class="row-icon">C</div>','CoW Swap','swap.cow.fi')}</div>`;
+      case 'approval': return `${status()}<div class="browser-bar"><button class="icon-button plain">${icon('arrow-left')}</button><div class="url">${icon('lock')}app.uniswap.org</div><button class="icon-button plain">${icon('ellipsis-vertical')}</button></div><div class="screen-body"><div class="site-hero"><div class="site-mark">U</div><h3>Uniswap</h3><p>app.uniswap.org · Ethereum</p></div></div><div class="sheet-scrim"><div class="sheet"><div class="handle"></div><h3>Connect to this site?</h3><p>Uniswap will be able to view the selected account and request transactions. It cannot move funds without approval.</p>${row('<div class="avatar">W1</div>','Wallet 1','0xb4fc…d9c5','Ethereum')}${btn('Connect')}${btn('Reject','secondary')}</div></div>`;
+      case 'defi': return shell('DeFi',`<div class="segmented" style="grid-template-columns:repeat(3,1fr)"><button class="segment active">Earn</button><button class="segment">Lend</button><button class="segment">Stake</button></div>${notice('warn','Third-party services','Rates and protocol risks come from external providers. NumPay does not custody these positions.')}<div class="eyebrow">Earn opportunities</div>${row('<div class="row-icon">A</div>','Aave V3','Ethereum · Lending','3.8%','USDC APY')}${row('<div class="row-icon">C</div>','Compound','Base · Lending','3.5%','USDC APY')}${row('<div class="row-icon">L</div>','Lido','Ethereum · Staking','2.9%','ETH APR')}${row('<div class="row-icon">M</div>','Morpho','Base · Vault','4.1%','USDC APY')}`);
+      case 'developer': return shell('Developer tools',`${notice('warn','Advanced diagnostics','These tools can create test transactions and are hidden in production.')} ${settingsRow('activity','Core status','Storage and derivation checks')}${settingsRow('flask-conical','Core spike','Test local primitives')}${settingsRow('radio-tower','Devnet transaction','Use configured test network')}`);
+      case 'destructive': return `${shell('Wallets',`${row('<div class="avatar">W1</div>','Wallet 1','0xb4fc…d9c5','Active')}`)}<div class="sheet-scrim"><div class="sheet"><div class="handle"></div><h3>Remove Wallet 1?</h3><p>This removes the encrypted wallet from this device. You can restore it later only with its recovery phrase.</p>${notice('bad','This cannot be undone on this device','Make sure the recovery phrase is backed up before continuing.')}${btn('Cancel','secondary')}${btn('Remove Wallet 1','danger-btn')}</div></div>`;
+      default: return shell(s.title,`<div class="center-state"><div class="state-mark">${icon('layout-template')}</div><h3>${s.title}</h3><p>${s.purpose}</p></div>`);
+    }
+  }
+
+  const catalog = document.getElementById('np-catalog');
+  const phone = document.getElementById('np-phone');
+  const notes = document.getElementById('np-notes');
+  const previewRoot = document.getElementById('npv2');
+  const previewTheme = document.getElementById('np-theme');
+  const previewOptions = {
+    appearance: new URLSearchParams(globalThis.location?.search || '').get('theme') === 'dark' ? 'Dark' : 'Light'
+  };
+  let current = 0;
+
+  function applyPreviewOptions(){
+    const dark = previewOptions.appearance === 'Dark';
+    previewRoot.classList.toggle('dark',dark);
+    previewTheme.setAttribute('aria-pressed',String(dark));
+    previewTheme.classList.toggle('is-on',dark);
+    previewTheme.innerHTML=`${icon(dark?'sun':'moon')}${dark?'Light preview':'Dark preview'}`;
+    if(window.lucide) window.lucide.createIcons({attrs:{width:18,height:18}});
+  }
+
+  function buildCatalog(){
+    let last = '';
+    catalog.innerHTML = screens.map((s,i)=>{
+      const head = s.section!==last ? `<div class="np-section-label">${s.section}</div>` : '';
+      last = s.section;
+      return `${head}<button type="button" class="np-screen-link" data-screen="${i}"><span>${s.title}</span><span>${String(i+1).padStart(2,'0')}</span></button>`;
+    }).join('');
+    catalog.addEventListener('click',e=>{const b=e.target.closest('[data-screen]');if(b){current=Number(b.dataset.screen);render();}});
+  }
+  function render(){
+    const s=screens[current];
+    phone.innerHTML=renderBody(s);
+    notes.innerHTML=`<div class="np-counter">${s.section} · ${current+1} of ${screens.length}</div><h2>${s.title}</h2><p class="purpose">${s.purpose}</p><div class="np-note-block"><h3>Flow</h3><div class="np-flow">${s.flow.map((x,i)=>`${i?'<b>→</b>':''}<span>${x}</span>`).join('')}</div></div><div class="np-note-block"><h3>Design decisions</h3><ul>${s.notes.map(n=>`<li>${n}</li>`).join('')}</ul></div><div class="np-note-block"><h3>Shared system</h3><ul><li>Neutral canvas and surfaces carry hierarchy; violet is reserved for identity and commitment.</li><li>44dp touch targets, safe-area spacing, accessible roles, and reduced-motion behavior are required.</li><li>Network work never blocks navigation or immediate press feedback.</li></ul></div><p class="np-legend">This is the approval-stage design. Production React Native code remains unchanged until the direction and flows are accepted.</p>`;
+    document.querySelectorAll('[data-screen]').forEach((b,i)=>b.classList.toggle('is-active',i===current));
+    document.querySelector('[data-screen].is-active')?.scrollIntoView({block:'nearest'});
+    if(window.lucide) window.lucide.createIcons({attrs:{width:18,height:18}});
+  }
+  document.getElementById('np-prev').addEventListener('click',()=>{current=(current-1+screens.length)%screens.length;render();});
+  document.getElementById('np-next').addEventListener('click',()=>{current=(current+1)%screens.length;render();});
+  previewTheme.addEventListener('click',()=>{previewOptions.appearance=previewOptions.appearance==='Dark'?'Light':'Dark';applyPreviewOptions();});
+  applyPreviewOptions();
+  buildCatalog(); render();
+  if(globalThis.Tweak){
+    const tweak = new Tweak({container:previewRoot,onChange:applyPreviewOptions});
+    tweak.addSelect(previewOptions,'appearance',{label:'Appearance',options:['Light','Dark'],reference:'preview.appearance'});
+  }
+})();
+</script>

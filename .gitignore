@@ -27,3 +27,15 @@ data/
 *.db
 *.db-shm
 *.db-wal
+
+# Local video reference and extracted review frames
+/artifacts/video-review/
+
+# Local UI review captures and copied source baselines
+/NumPay/wallet-mobile/qa/
+/qa/**/*.png
+/qa/ui-upgrade-baseline/
+
+# Regenerated Base deployment dry runs
+/BPAN/contracts/deploy/base-wallet-plan.json
+/BPAN/contracts/deploy/base-registration-simulation.json

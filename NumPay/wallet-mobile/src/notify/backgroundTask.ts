@@ -3,10 +3,9 @@
 // launch finds the task) from App.tsx; ensureReceiveWatch() is then called
 // once the wallet is unlocked.
 //
-// Delivery expectations (documented in the push scope doc): Android schedules
-// background fetch loosely — ~15 minutes is the floor and Doze can defer it.
-// This is "you got paid, within the hour", not realtime; realtime is the
-// post-launch FCM plan.
+// Delivery expectations: Android schedules background fetch loosely — ~15
+// minutes is the floor and Doze can defer it. Foreground sync is near-live;
+// this task covers closed-app native and token deposits on a best-effort basis.
 
 import { Platform } from "react-native";
 import * as Notifications from "expo-notifications";

@@ -40,6 +40,7 @@ import { ScanIcon, SearchIcon, XIcon } from "../ui/icons";
 import { ImportTokenCard } from "../ui/ImportTokenCard";
 import { QrScanner } from "../ui/QrScanner";
 import { TxResultOverlay, type TxFxStatus } from "../ui/TxResultOverlay";
+import { PayModeSwitch } from "../ui/PayModeSwitch";
 
 interface BpanChange { number: string; chain: string; oldAddr: string; newAddr: string }
 
@@ -77,10 +78,11 @@ export interface SendTokenPick extends TokenSendAsset {
 }
 
 export function SendScreen({
-  w, onBack, onSessionExpired, initialChainId, initialToken, initialTo, initialAmount,
+  w, onBack, onReceive, onSessionExpired, initialChainId, initialToken, initialTo, initialAmount,
 }: {
   w: MobileWalletState;
   onBack: () => void;
+  onReceive: () => void;
   onSessionExpired?: () => void;
   /** Preselect (TokenDetail entry): chain and, for token rows, the token. */
   initialChainId?: string;
@@ -304,7 +306,7 @@ export function SendScreen({
       } else if (res.pendingFinality) {
         setError(
           `The ${chainName} mapping for BPAN ${formatBPAN(clean)} was added recently and is ` +
-          `waiting for network confirmation. This takes about 15 minutes. Try again shortly.`
+          `waiting for network confirmation. Finality can take several minutes. Try again shortly.`
         );
       } else {
         setError(
@@ -499,8 +501,9 @@ export function SendScreen({
 
   return (
     <View style={{ flex: 1 }}>
-      <ScreenHeader title="Send" onBack={onBack} />
+      <ScreenHeader title="Pay" onBack={onBack} />
       <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <PayModeSwitch mode="send" onSend={() => {}} onReceive={onReceive} />
         {/* Chain selector */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, marginBottom: 4 }}>
           {chains.map((id) => (

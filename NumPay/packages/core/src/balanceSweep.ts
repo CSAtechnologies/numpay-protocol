@@ -41,6 +41,10 @@ export const NATIVE_USD_PRICES: Record<string, number> = {
 };
 
 const EVM_TIMEOUT_MS = 5000;
+// Pricing is secondary to showing the user's actual coin balances. CoinGecko
+// and the wallet API can each take several seconds to fail on a restricted
+// network; never let that hold the entire native-balance sweep hostage.
+const QUICK_RATE_WAIT_MS = 1500;
 
 export interface EvmSweepResult {
   results: ChainBalance[];
@@ -65,14 +69,19 @@ export async function sweepEvmNativeBalances(
   // Balances don't need the price to fetch — only to compute their USD value —
   // so we apply prices once both resolve. Falls back to the static table when
   // rates are unavailable so the sweep still completes offline.
-  const ratesPromise: Promise<Rates | null> = fetchRates().catch(() => null);
+  const ratesPromise: Promise<Rates | null> = Promise.race([
+    fetchRates().catch(() => null),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), QUICK_RATE_WAIT_MS)),
+  ]);
 
   const promises = allChainIds.map(async (chainId) => {
     const net = NETWORKS[chainId] || customNetMap[chainId];
     if (!net) return null;
+    // One-shot provider: pin the already-known chain and tear it down after
+    // the read so failed endpoints cannot accumulate background retry timers.
+    const provider = new ethers.JsonRpcProvider(net.rpcUrl, net.chainId, { staticNetwork: true });
     try {
       // staticNetwork: skip the eth_chainId auto-detect round-trip.
-      const provider = new ethers.JsonRpcProvider(net.rpcUrl, net.chainId, { staticNetwork: true });
       const bal = await Promise.race([
         provider.getBalance(address),
         new Promise<never>((_, r) => setTimeout(() => r(new Error("timeout")), EVM_TIMEOUT_MS)),
@@ -89,6 +98,8 @@ export async function sweepEvmNativeBalances(
         networkId: chainId, name: net.name, symbol: net.symbol, logo: net.logo,
         balance: "0", balanceNum: 0, usdValue: 0, failed: true,
       } as ChainBalance & { failed: boolean };
+    } finally {
+      provider.destroy?.();
     }
   });
 

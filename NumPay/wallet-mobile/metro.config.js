@@ -15,4 +15,16 @@ config.resolver.nodeModulesPaths = [
   path.resolve(workspaceRoot, "node_modules"),
 ];
 
+// The wallet shell imports every shipped surface, including WalletConnect,
+// WebView, charts and chain SDKs. Evaluating that entire graph before React can
+// paint the PIN screen makes a debug cold launch look frozen and also wastes
+// release-startup CPU. Keep the bundle deterministic, but defer each module's
+// evaluation until the screen that uses it is actually reached.
+config.transformer.getTransformOptions = async () => ({
+  transform: {
+    experimentalImportSupport: true,
+    inlineRequires: true,
+  },
+});
+
 module.exports = config;

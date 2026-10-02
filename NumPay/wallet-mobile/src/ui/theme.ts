@@ -47,6 +47,8 @@ export interface Palette {
   brand: string;
   brand2: string;
   brandDark: string;
+  /** Filled controls carrying normal-sized white text. */
+  action: string;
   brandGlow: string;
   brandTint: string;
   success: string;
@@ -124,58 +126,59 @@ export interface Palette {
 }
 
 const dark: Palette = {
-  bg: "#0a0912",
-  bg2: "#110f1e",
-  surface1: "#110f1e",
-  surface2: "#181530",
-  surface3: "#201b3d",
-  surface4: "#2a2450",
-  card: "#181530",
-  card2: "#201b3d",
-  border: "#2a2450",
-  borderLight: "#3a3268",
-  muted: "#8a83b8",
-  muted2: "#6b6590",
-  textPrimary: "#f2f0ff",
-  textSecondary: "#a9a3d4",
-  brand: "#7c6df0",
-  brand2: "#a394ff",
-  brandDark: "#5b4cdb",
-  brandGlow: "rgba(124, 109, 240, 0.35)",
-  brandTint: "rgba(124, 109, 240, 0.15)", // .m-action .ic / pill-brand family
-  success: "#34d399",
-  successTint: "rgba(52, 211, 153, 0.12)",
-  danger: "#f87171",
-  dangerTint: "rgba(248, 113, 113, 0.12)",
-  amber: "#fbbf24",
-  amberTint: "rgba(251, 191, 36, 0.12)",
+  bg: "#0e1015",
+  bg2: "#13161d",
+  surface1: "#151820",
+  surface2: "#1b1f28",
+  surface3: "#232832",
+  surface4: "#2c323e",
+  card: "#171a22",
+  card2: "#1d212b",
+  border: "#2b303b",
+  borderLight: "#3b414e",
+  muted: "#a3a8b5",
+  muted2: "#858c9a",
+  textPrimary: "#f4f5f8",
+  textSecondary: "#c7cad2",
+  brand: "#8c7cf2",
+  action: "#6758dc",
+  brand2: "#b2a8ff",
+  brandDark: "#5144c0",
+  brandGlow: "rgba(103, 88, 220, 0.28)",
+  brandTint: "rgba(140, 124, 242, 0.14)",
+  success: "#55b893",
+  successTint: "rgba(85, 184, 147, 0.12)",
+  danger: "#e76f7a",
+  dangerTint: "rgba(231, 111, 122, 0.12)",
+  amber: "#d99a42",
+  amberTint: "rgba(217, 154, 66, 0.12)",
   // Dark theme reverses the problem: the text has to be LIGHTER than the
   // panel, so caution warms up rather than deepens.
-  caution: "#e9a53f",
-  cautionTint: "rgba(233, 165, 63, 0.12)",
-  cautionLine: "rgba(233, 165, 63, 0.24)",
-  dangerText: "#f87171",
-  dangerLine: "rgba(248, 113, 113, 0.24)",
-  successText: "#34d399",
-  successLine: "rgba(52, 211, 153, 0.24)",
-  info: "#3b82f6",
-  infoText: "#60a5fa", // 7.79:1 on the page, 6.95:1 on a card
-  brandLine: "rgba(124, 109, 240, 0.26)",
+  caution: "#e0a957",
+  cautionTint: "rgba(224, 169, 87, 0.11)",
+  cautionLine: "rgba(224, 169, 87, 0.24)",
+  dangerText: "#f18a93",
+  dangerLine: "rgba(231, 111, 122, 0.24)",
+  successText: "#6dc9a7",
+  successLine: "rgba(85, 184, 147, 0.24)",
+  info: "#5e91d8",
+  infoText: "#80afea",
+  brandLine: "rgba(140, 124, 242, 0.25)",
   // A sheet sits ON the scrim, so it steps one surface above the page rather
   // than matching it — that edge is what separates it from the dimmed content.
-  sheet: "#181530",
+  sheet: "#171a22",
   sheetHandle: "rgba(255, 255, 255, 0.22)",
-  coinDisc: "#1b1830", // .coin house disc backing
-  divider: "rgba(42, 36, 80, 0.7)",
-  navBg: "rgba(17, 15, 30, 0.96)",
-  navBorder: "rgba(139, 92, 246, 0.1)",
+  coinDisc: "#20242d",
+  divider: "rgba(255, 255, 255, 0.075)",
+  navBg: "rgba(23, 26, 34, 0.97)",
+  navBorder: "rgba(255, 255, 255, 0.08)",
   overlayBorder: "rgba(255, 255, 255, 0.13)",
-  dangerBtn: "#5b1f2b",
+  dangerBtn: "#982f3b",
   coinRing: "rgba(255, 255, 255, 0.18)",
   onBrand: "#ffffff",
   // The page itself. Dark theme's accents are LIGHTENED, so the ink that reads
   // on them is the darkest thing in the palette.
-  onAccent: "#0a0912",
+  onAccent: "#0e1015",
   scrim: "rgba(0, 0, 0, 0.6)",
 };
 
@@ -183,67 +186,68 @@ const dark: Palette = {
 // component overrides (.m-number, .token-row, .floating-nav, .glass-card),
 // so the two products stay the same product in light too.
 const light: Palette = {
-  bg: "#faf9ff",
-  bg2: "#f4f2ff",
-  surface1: "#f4f2ff",
-  surface2: "#ebe8ff",
-  surface3: "#e0daff",
-  surface4: "#d2c9ff",
+  bg: "#f5f6f8",
+  bg2: "#eceef2",
+  surface1: "#f0f1f5",
+  surface2: "#e9ebf0",
+  surface3: "#e1e4ea",
+  surface4: "#d5d8e0",
   card: "#ffffff",
-  card2: "#f4f2ff",
-  border: "#e3deff",
-  borderLight: "#cfc6ff",
-  muted: "#6e6a9a",
-  muted2: "#8b86b8",
-  textPrimary: "#12101e",
-  textSecondary: "#4a466e",
-  brand: "#7c6df0",
+  card2: "#f7f8fa",
+  border: "#e1e3e9",
+  borderLight: "#cdd1d9",
+  muted: "#616775",
+  muted2: "#7a818f",
+  textPrimary: "#15161b",
+  textSecondary: "#474d59",
+  brand: "#6758dc",
+  action: "#5b4cdb",
   // Darker than dark-theme's brand2: this is accent TEXT, and #a394ff on a
   // near-white background fails contrast.
   brand2: "#5b4cdb",
-  brandDark: "#4a3cc4",
-  brandGlow: "rgba(124, 109, 240, 0.25)",
-  brandTint: "rgba(124, 109, 240, 0.10)",
-  success: "#10b981",
-  successTint: "rgba(16, 185, 129, 0.12)",
-  danger: "#ef4444",
-  dangerTint: "rgba(239, 68, 68, 0.10)",
-  amber: "#f59e0b",
-  amberTint: "rgba(245, 158, 11, 0.12)",
+  brandDark: "#493daf",
+  brandGlow: "rgba(103, 88, 220, 0.2)",
+  brandTint: "rgba(103, 88, 220, 0.09)",
+  success: "#16775a",
+  successTint: "rgba(22, 119, 90, 0.09)",
+  danger: "#bd3541",
+  dangerTint: "rgba(189, 53, 65, 0.08)",
+  amber: "#95590a",
+  amberTint: "rgba(149, 89, 10, 0.08)",
   // Measured, not eyeballed. A notice title is 13px bold, which WCAG does NOT
   // count as large text, so it needs the full 4.5:1 against the surface it
   // actually sits on — the tinted panel, not the white card behind it.
   //   #f59e0b (the old amber): 2.15:1 on white. Worst contrast in the app.
   //   #a1620a: 4.92:1 on white but only 4.25:1 on the panel. Still short.
   //   #95590a: 4.89:1 on the panel, 5.66:1 on white. Passes on both.
-  caution: "#95590a",
-  cautionTint: "rgba(180, 120, 20, 0.09)",
-  cautionLine: "rgba(180, 120, 20, 0.22)",
+  caution: "#87520a",
+  cautionTint: "rgba(149, 89, 10, 0.08)",
+  cautionLine: "rgba(149, 89, 10, 0.2)",
   // #ef4444 on white is ~3.8:1 — fine for an icon, short of AA for 13px bold.
-  dangerText: "#c81e1e",
-  dangerLine: "rgba(239, 68, 68, 0.22)",
-  successText: "#047857",
-  successLine: "rgba(16, 185, 129, 0.22)",
+  dangerText: "#a82531",
+  dangerLine: "rgba(189, 53, 65, 0.2)",
+  successText: "#0f7155",
+  successLine: "rgba(22, 119, 90, 0.2)",
   // #3b82f6 is the badge FILL (it carries a white glyph, not type). As text on
   // the near-white page it measured 3.51:1, so type steps down two stops.
-  info: "#2563eb",
-  infoText: "#1d4ed8", // 6.40:1 on the page, 6.70:1 on a card
-  brandLine: "rgba(124, 109, 240, 0.22)",
+  info: "#356fbf",
+  infoText: "#235fae",
+  brandLine: "rgba(103, 88, 220, 0.2)",
   // Pure white against the off-white page (#faf9ff), so the sheet edge is
   // legible without a heavy border.
   sheet: "#ffffff",
   sheetHandle: "rgba(18, 16, 30, 0.16)",
-  coinDisc: "#f4f2ff",
-  divider: "rgba(124, 109, 240, 0.12)",
+  coinDisc: "#f0f1f5",
+  divider: "rgba(21, 22, 27, 0.09)",
   navBg: "rgba(255, 255, 255, 0.96)",
-  navBorder: "rgba(124, 109, 240, 0.14)",
+  navBorder: "rgba(21, 22, 27, 0.09)",
   overlayBorder: "rgba(18, 16, 30, 0.10)",
   // Dark theme's maroon reads as mud on white, so light uses the full danger
   // red. White label text clears contrast on both.
-  dangerBtn: "#dc2626",
+  dangerBtn: "#b4232f",
   coinRing: "rgba(18, 16, 30, 0.10)",
   onBrand: "#ffffff",
-  onAccent: "#12101e", // textPrimary: the accents are mid-tones here, not lightened
+  onAccent: "#15161b",
   scrim: "rgba(0, 0, 0, 0.45)",
 };
 
@@ -261,11 +265,11 @@ export const colors: Palette = { ...light };
 // m-hero 20, icon-btn 10, pills fully round.
 export const radius = {
   card: 16,
-  button: 14,
-  input: 14,
-  hero: 20,
+  button: 12,
+  input: 12,
+  hero: 18,
   tile: 12,
-  iconBtn: 10,
+  iconBtn: 12,
   pill: 999,
   /** Bottom sheet top corners. Deliberately larger than a card: the generous
    *  curve is most of what makes a sheet read as a sheet and not as a panel
@@ -352,18 +356,18 @@ export const spacing = {
  */
 export const motion = {
   /** Press-state feedback. Must be near-instant or it reads as lag. */
-  press: 90,
+  press: 100,
   /** Screen enter, toast in, anything that carries content. */
-  screen: 260,
+  screen: 220,
   /** Screen/overlay exit. Always faster than the enter: leaving should not
    *  cost the user time. */
-  exit: 190,
+  exit: 100,
   /** Distance a screen travels on enter. Small: a long slide reads as a
    *  slideshow, a short one reads as depth. */
-  slide: 22,
+  slide: 14,
   /** Sheet spring, shared with anything else that should settle rather than
    *  stop. Damped enough not to bounce (a bouncy wallet reads as a toy). */
-  spring: { damping: 26, stiffness: 260, mass: 0.9 },
+  spring: { damping: 28, stiffness: 300, mass: 0.9 },
 } as const;
 
 /**
@@ -442,7 +446,7 @@ export const elevation: Elevation = { ...elevationFor.light };
 function makePress(isLight: boolean) {
   return {
     /** Scale for a button or tile. Subtle: 0.98 reads as a press, 0.94 as a wobble. */
-    scale: 0.97,
+    scale: 0.985,
     /** Overlay wash for a row, which should tint rather than shrink. */
     rowTint: isLight
       ? "rgba(124, 109, 240, 0.07)"
@@ -467,12 +471,13 @@ const pressFor: Record<ThemeName, Press> = {
 export const press: Press = { ...pressFor.light };
 
 // Gradient stops from the extension's premium classes, verbatim:
-// .logo-mark / .btn-primary-premium share the brand ramp; .m-number is the
+// Logo and action fills have separate ramps; .m-number is the
 // gradient text ramp; the ambient wash mirrors body::before's radials.
 export interface Gradients {
-  /** 135deg on the logo mark, 180deg on primary buttons. */
+  /** Decorative logo ramp. Use action for white button labels. */
   brand: readonly [string, string, string];
   brandLocations: readonly [number, number, number];
+  action: readonly [string, string, string];
   /** .m-number gradient text. */
   number: readonly [string, string];
   /** body::before ambient radial washes, as SVG stop colour + opacity. */
@@ -483,23 +488,24 @@ export interface Gradients {
 const darkGradients: Gradients = {
   brand: ["#a394ff", "#7c6df0", "#5b4cdb"],
   brandLocations: [0, 0.55, 1],
-  number: ["#ffffff", "#b8acff"],
-  ambientA: { color: "#7c6df0", opacity: 0.14 },
-  ambientB: { color: "#a394ff", opacity: 0.08 },
+  action: ["#6758dc", "#5b4cdb", "#5143bd"],
+  number: ["#f4f5f8", "#b2a8ff"],
+  ambientA: { color: "#6758dc", opacity: 0.035 },
+  ambientB: { color: "#8c7cf2", opacity: 0.02 },
 };
 
 const lightGradients: Gradients = {
-  // The brand ramp is a FILL behind white text, so it stays identical: it
-  // must keep its contrast in both themes.
+  // Decorative identity colors stay consistent across themes.
   brand: ["#a394ff", "#7c6df0", "#5b4cdb"],
   brandLocations: [0, 0.55, 1],
+  action: ["#6758dc", "#5b4cdb", "#5143bd"],
   // The single most theme-sensitive value in the app. This ramp paints the
   // portfolio total AS TEXT, so dark theme's white->lilac renders invisible
   // on a near-white background. Matches the extension's light .m-number:
   // linear-gradient(180deg, #12101e 0%, #5b4cdb 100%).
-  number: ["#12101e", "#5b4cdb"],
-  ambientA: { color: "#7c6df0", opacity: 0.10 },
-  ambientB: { color: "#a394ff", opacity: 0.06 },
+  number: ["#15161b", "#5146b8"],
+  ambientA: { color: "#6758dc", opacity: 0.025 },
+  ambientB: { color: "#8c7cf2", opacity: 0.015 },
 };
 
 const gradientsFor: Record<ThemeName, Gradients> = {

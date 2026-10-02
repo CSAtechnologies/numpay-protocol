@@ -2,7 +2,7 @@
   "expo": {
     "name": "NumPay",
     "slug": "wallet-mobile",
-    "version": "1.02",
+    "version": "1.03",
     "scheme": "numpay",
     "orientation": "portrait",
     "icon": "./assets/numpay-icon.png",
@@ -18,7 +18,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.anonymous.walletmobile",
-      "versionCode": 6,
+      "versionCode": 7,
       "intentFilters": [
         {
           "action": "VIEW",

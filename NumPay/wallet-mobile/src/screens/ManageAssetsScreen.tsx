@@ -6,7 +6,7 @@
 // re-reads both lists on every refresh, so additions land on the dashboard
 // and in the Send picker on the next sweep (App triggers one on back).
 import { useEffect, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { NETWORKS } from "@numpay/core/networks";
 import {
   getCustomTokens, addCustomToken, removeCustomToken, type CustomToken,
@@ -21,22 +21,23 @@ import { colors, radius, type as ts, themedStyles } from "../ui/theme";
 import { Notice, Btn, Card, Field, ScreenHeader, Tappable } from "../ui/components";
 import { XIcon } from "../ui/icons";
 import { ChainIcon, TokenIcon } from "../ui/coins";
+import { safeActionError } from "../ui/errors";
 
 type Tab = "tokens" | "networks";
 
 // ── Chain helpers ─────────────────────────────────────────────────────────────
 
 interface ChainOption {
-  id: string; name: string; rpcUrl: string; type: "evm" | "solana";
+  id: string; name: string; rpcUrl: string; chainId?: number; type: "evm" | "solana";
 }
 
 function getAllChainOptions(custom: CustomChain[]): ChainOption[] {
   const evm = Object.values(NETWORKS).map((n) => ({
-    id: n.id, name: n.name, rpcUrl: n.rpcUrl, type: "evm" as const,
+    id: n.id, name: n.name, rpcUrl: n.rpcUrl, chainId: n.chainId, type: "evm" as const,
   }));
   const nonEvm: ChainOption[] = [{ id: "solana", name: "Solana", rpcUrl: "", type: "solana" }];
   const customOpts = custom.map((c) => ({
-    id: c.id, name: c.name, rpcUrl: c.rpcUrl, type: "evm" as const,
+    id: c.id, name: c.name, rpcUrl: c.rpcUrl, chainId: c.chainId, type: "evm" as const,
   }));
   return [...evm, ...nonEvm, ...customOpts];
 }
@@ -113,7 +114,9 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
         result = await detectSolanaToken(addr);
       } else {
         if (!selectedChainOpt?.rpcUrl) throw new Error("No RPC for this chain.");
-        result = await detectEvmToken(selectedChainOpt.rpcUrl, addr);
+        result = await detectEvmToken(
+          selectedChainOpt.rpcUrl, addr, undefined, selectedChainOpt.chainId,
+        );
       }
       setPreview(result);
     } catch (e: any) {
@@ -204,7 +207,7 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
       setNetName(""); setNetRpc(""); setNetChainId(null);
       setNetSymbol(""); setNetDecimals("18"); setNetExplorer("");
     } catch (e: any) {
-      setNetAddErr(e?.message || "Failed to save.");
+      setNetAddErr(safeActionError(e, "The network could not be saved. Check the details and try again."));
     } finally { setNetAdding(false); }
   }
 
@@ -323,14 +326,16 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
                           {chainDisplayName(t.chainId, customNetworks)} · {t.address.slice(0, 6)}…{t.address.slice(-4)}
                         </Text>
                       </View>
-                      <Pressable
+                      <Tappable
                         hitSlop={8}
                         onPress={() => { void handleRemoveToken(t.id); }}
                         accessibilityLabel={`Remove ${t.symbol}`}
-                        style={({ pressed }) => [st.removeBtn, pressed && { backgroundColor: colors.dangerTint }]}
+                        feedback="ghost"
+                        borderRadius={radius.iconBtn}
+                        style={st.removeBtn}
                       >
                         <XIcon size={12} color={colors.muted} />
-                      </Pressable>
+                      </Tappable>
                     </View>
                   ))}
                 </Card>
@@ -426,14 +431,16 @@ export function ManageAssetsScreen({ onBack }: { onBack: () => void }) {
                         <Text style={st.listSymbol}>{c.name}</Text>
                         <Text style={st.listMeta}>{c.symbol} · Chain ID {c.chainId}</Text>
                       </View>
-                      <Pressable
+                      <Tappable
                         hitSlop={8}
                         onPress={() => { void handleRemoveNetwork(c.id); }}
                         accessibilityLabel={`Remove ${c.name}`}
-                        style={({ pressed }) => [st.removeBtn, pressed && { backgroundColor: colors.dangerTint }]}
+                        feedback="ghost"
+                        borderRadius={radius.iconBtn}
+                        style={st.removeBtn}
                       >
                         <XIcon size={12} color={colors.muted} />
-                      </Pressable>
+                      </Tappable>
                     </View>
                   ))}
                 </Card>

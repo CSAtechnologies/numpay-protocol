@@ -18,12 +18,14 @@
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  AccessibilityInfo, Animated, BackHandler, Dimensions, Easing, Modal,
+  Animated, BackHandler, Dimensions, Easing, Modal,
   PanResponder, Pressable, ScrollView, StyleSheet, Text, View,
   type StyleProp, type ViewStyle,
 } from "react-native";
-import { colors, radius, SHEET_BOTTOM_INSET, spacing, type as ts, themedStyles } from "./theme";
+import { colors, motion, radius, SHEET_BOTTOM_INSET, spacing, type as ts, themedStyles } from "./theme";
 import { noticeTone, type NoticeTone } from "./notice";
+import { Tappable } from "./components";
+import { useReducedMotion } from "./useReducedMotion";
 
 const SCREEN_H = Dimensions.get("window").height;
 // Far enough that the sheet is fully offscreen before it springs, whatever it
@@ -66,40 +68,34 @@ export function Sheet({
   const [mounted, setMounted] = useState(open);
   const y = useRef(new Animated.Value(HIDDEN_Y)).current;
   const fade = useRef(new Animated.Value(0)).current;
-  const reduceMotion = useRef(false);
-
-  useEffect(() => {
-    AccessibilityInfo.isReduceMotionEnabled()
-      .then((on) => { reduceMotion.current = on; })
-      .catch(() => {});
-  }, []);
+  const reduceMotion = useReducedMotion();
 
   const animateOut = useCallback((after: () => void) => {
     Animated.parallel([
       Animated.timing(y, {
-        toValue: HIDDEN_Y, duration: reduceMotion.current ? 120 : 200,
+        toValue: reduceMotion ? 0 : HIDDEN_Y, duration: reduceMotion ? motion.exit : 200,
         easing: Easing.in(Easing.cubic), useNativeDriver: true,
       }),
       Animated.timing(fade, {
-        toValue: 0, duration: reduceMotion.current ? 120 : 180, useNativeDriver: true,
+        toValue: 0, duration: reduceMotion ? motion.exit : 180, useNativeDriver: true,
       }),
     ]).start(({ finished }) => { if (finished) after(); });
-  }, [fade, y]);
+  }, [fade, reduceMotion, y]);
 
   useEffect(() => {
     if (open) {
       setMounted(true);
-      y.setValue(HIDDEN_Y);
+      y.setValue(reduceMotion ? 0 : HIDDEN_Y);
       fade.setValue(0);
       Animated.parallel([
-        reduceMotion.current
-          ? Animated.timing(y, { toValue: 0, duration: 120, useNativeDriver: true })
+        reduceMotion
+          ? Animated.timing(y, { toValue: 0, duration: motion.exit, useNativeDriver: true })
           : Animated.spring(y, {
               toValue: 0,
               // Tuned by hand: enough damping that it settles without a visible
               // bounce (a bouncy wallet sheet reads as a toy), enough tension
               // that it still feels thrown rather than eased.
-              damping: 26, stiffness: 260, mass: 0.9,
+              ...motion.spring,
               overshootClamping: false, useNativeDriver: true,
             }),
         Animated.timing(fade, { toValue: 1, duration: 180, useNativeDriver: true }),
@@ -130,7 +126,7 @@ export function Sheet({
       onPanResponderRelease: (_e, g) => {
         if (g.dy > DISMISS_TRAVEL || g.vy > DISMISS_VELOCITY) { onClose(); return; }
         Animated.spring(y, {
-          toValue: 0, damping: 26, stiffness: 260, mass: 0.9, useNativeDriver: true,
+          toValue: 0, ...motion.spring, useNativeDriver: true,
         }).start();
       },
     }),
@@ -244,27 +240,30 @@ export function SheetActions({
 }) {
   return (
     <View style={st.actions}>
-      <Pressable
+      <Tappable
         onPress={onConfirm}
         disabled={busy || disabled}
+        feedback="tile"
+        borderRadius={radius.button}
         accessibilityRole="button"
-        style={({ pressed }) => [
+        style={[
           st.primary,
           danger && { backgroundColor: colors.dangerBtn },
           (busy || disabled) && { opacity: 0.45 },
-          pressed && !(busy || disabled) && { transform: [{ scale: 0.985 }] },
         ]}
       >
         <Text style={st.primaryText}>{busy ? "Working…" : confirmLabel}</Text>
-      </Pressable>
-      <Pressable
+      </Tappable>
+      <Tappable
         onPress={onCancel}
         disabled={busy}
+        feedback="row"
+        borderRadius={radius.button}
         accessibilityRole="button"
-        style={({ pressed }) => [st.ghost, pressed && { backgroundColor: colors.surface2 }]}
+        style={st.ghost}
       >
         <Text style={st.ghostText}>{cancelLabel}</Text>
-      </Pressable>
+      </Tappable>
     </View>
   );
 }

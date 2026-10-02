@@ -1,3 +1,4 @@
+import { BPAN_DEPLOYMENT, bpanOwnershipKey } from "@numpay/core/bpanDeployment";
 import { useState, useEffect, useMemo, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchDexPrices, fetchTokenLogos } from "@numpay/core/tokenMarket";
@@ -68,9 +69,10 @@ import { useWallet } from "../hooks/useWallet";
 import { useCurrency } from "../hooks/useCurrency";
 import Layout from "../components/Layout";
 import PasswordPrompt from "../components/PasswordPrompt";
+import { InlineNotice } from "../components/AlertCard";
 import {
   LockIcon, CopyIcon, ReceiveIcon, RefreshIcon,
-  ChevronDownIcon, ChevronRightIcon, ArrowUpRightIcon, ChainIcon, ChainBadge, CheckIcon, AssetIcon,
+  ChevronDownIcon, ArrowUpRightIcon, ChainIcon, ChainBadge, CheckIcon, AssetIcon,
   SwapIcon, LayersIcon, HashIcon,
 } from "../components/Icons";
 
@@ -79,12 +81,13 @@ interface Props {
 }
 
 function getSavedBPANs(address: string): string[] {
-  try { return JSON.parse(localStorage.getItem(`bpan_numbers_${address.toLowerCase()}`) || "[]"); }
+  if (!BPAN_DEPLOYMENT.deployed) return [];
+  try { return JSON.parse(localStorage.getItem(bpanOwnershipKey(address)) || "[]"); }
   catch { return []; }
 }
 
 function saveBPANs(address: string, numbers: string[]) {
-  try { localStorage.setItem(`bpan_numbers_${address.toLowerCase()}`, JSON.stringify(numbers)); }
+  try { localStorage.setItem(bpanOwnershipKey(address), JSON.stringify(numbers)); }
   catch {}
 }
 
@@ -303,18 +306,16 @@ export default function Dashboard({ onLock }: Props) {
   // the per-address cache so future loads are instant.
   useEffect(() => {
     const addr = wallet?.address;
+    if (!BPAN_DEPLOYMENT.deployed) { setBpan(null); return; }
     if (!addr) return;
 
     let cancelled = false;
     (async () => {
       try {
         const owned = await findOwnedBPANs(addr);
-        if (cancelled || owned.length === 0) return;
-
-        const saved = getSavedBPANs(addr);
-        const merged = Array.from(new Set([...saved, ...owned]));
-        if (merged.length !== saved.length) saveBPANs(addr, merged);
-        setBpan((prev) => prev || owned[0]);
+        if (cancelled) return;
+        saveBPANs(addr, owned);
+        setBpan(owned[0] ?? null);
       } catch (e) {
         console.warn("BPAN discovery failed:", e);
       }
@@ -604,7 +605,7 @@ export default function Dashboard({ onLock }: Props) {
 
   return (
     <Layout>
-      {/* ── Hero gradient section ── */}
+      {/* ── Portfolio header ── */}
       <div className="hero-section px-4 pt-5 pb-7">
 
         {/* Top bar: wallet selector + lock */}
@@ -805,7 +806,7 @@ export default function Dashboard({ onLock }: Props) {
               className="input-field"
             />
 
-            {addError && <p className="text-accent-red text-xs">{addError}</p>}
+            {addError && <InlineNotice message={addError} />}
 
             <div className="flex gap-2">
               <button
@@ -996,107 +997,21 @@ export default function Dashboard({ onLock }: Props) {
           </div>
         )}
 
-        {/* Action row — Bold Primary layout */}
-        <div className="px-4 pb-3" style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-          {/* Primary: Send */}
-          <button
-            type="button"
-            onClick={() => navigate("/send")}
-            style={{
-              position: "relative",
-              display: "flex",
-              alignItems: "center",
-              gap: 11,
-              padding: "10px 14px",
-              borderRadius: 14,
-              background: "linear-gradient(135deg, #b5a8ff 0%, #7c6df0 50%, #5b4cdb 100%)",
-              color: "#fff",
-              border: "none",
-              boxShadow: "0 10px 24px -10px rgba(124,109,240,0.85), inset 0 1px 0 rgba(255,255,255,0.22)",
-              overflow: "hidden",
-              width: "100%",
-              cursor: "pointer",
-              transition: "transform 150ms ease, box-shadow 150ms ease",
-              fontFamily: "inherit",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.transform = "translateY(-1px)";
-              e.currentTarget.style.boxShadow = "0 14px 28px -10px rgba(124,109,240,1), inset 0 1px 0 rgba(255,255,255,0.22)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.transform = "translateY(0)";
-              e.currentTarget.style.boxShadow = "0 10px 24px -10px rgba(124,109,240,0.85), inset 0 1px 0 rgba(255,255,255,0.22)";
-            }}
-            onMouseDown={(e) => { e.currentTarget.style.transform = "translateY(0)"; }}
-          >
-            {/* Specular gloss overlay */}
-            <div style={{
-              position: "absolute", inset: 0,
-              background: "radial-gradient(120% 100% at 100% 0%, rgba(255,255,255,0.18), transparent 50%)",
-              pointerEvents: "none",
-            }} />
-            {/* Icon chip */}
-            <div style={{
-              position: "relative",
-              width: 32, height: 32, borderRadius: 9,
-              background: "rgba(255,255,255,0.16)",
-              display: "grid", placeItems: "center",
-              boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.18)",
-              flexShrink: 0,
-            }}>
-              <ArrowUpRightIcon size={15} />
-            </div>
-            {/* Text */}
-            <div style={{ position: "relative", textAlign: "left", flex: 1 }}>
-              <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-0.02em" }}>Send</div>
-              <div style={{ fontSize: 11, opacity: 0.75, marginTop: 1 }}>Pay anyone, any chain</div>
-            </div>
-            {/* Chevron */}
-            <ChevronRightIcon size={16} style={{ position: "relative", opacity: 0.7 }} />
-          </button>
-
-          {/* Secondary row: Receive / Swap / DeFi */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 7 }}>
-            {([
-              { label: "Receive", Ic: ReceiveIcon, path: "/receive" },
-              { label: "Swap",    Ic: SwapIcon,    path: "/swap" },
-              { label: "DeFi",   Ic: LayersIcon,  path: "/defi" },
-            ] as const).map(({ label, Ic, path }) => (
-              <button
-                key={label}
-                type="button"
-                onClick={() => navigate(path)}
-                style={{
-                  display: "flex", flexDirection: "column",
-                  alignItems: "center", gap: 5,
-                  padding: "8px 6px 7px",
-                  borderRadius: 11,
-                  background: "var(--card)",
-                  border: "1px solid var(--border)",
-                  // --text has never been a defined token (the palette spells it
-                  // --text-primary). It resolved to an invalid substitution, so
-                  // the label fell back to whatever it inherited; harmless here
-                  // only because Tailwind's preflight sets color:inherit on
-                  // buttons. Naming the real token makes it deliberate.
-                  color: "var(--text-primary)",
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                  transition: "border-color 150ms ease, background 150ms ease",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = "var(--brand)";
-                  e.currentTarget.style.background = "var(--card-2)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = "var(--border)";
-                  e.currentTarget.style.background = "var(--card)";
-                }}
-              >
-                <div style={{ color: "var(--muted)" }}><Ic size={14} /></div>
-                <span style={{ fontSize: 11, fontWeight: 500 }}>{label}</span>
-              </button>
-            ))}
-          </div>
+        {/* Equal-weight wallet actions. Purple marks the primary action only. */}
+        <div className="dashboard-actions px-4 pb-3">
+          {([
+            { label: "Send",    Ic: ArrowUpRightIcon, path: "/send",    primary: true },
+            { label: "Receive", Ic: ReceiveIcon,      path: "/receive", primary: false },
+            { label: "Swap",    Ic: SwapIcon,         path: "/swap",    primary: false },
+            { label: "DeFi",    Ic: LayersIcon,       path: "/defi",    primary: false },
+          ] as const).map(({ label, Ic, path, primary }) => (
+            <button key={label} type="button" onClick={() => navigate(path)} className="dashboard-action">
+              <span className={`dashboard-action__icon ${primary ? "is-primary" : ""}`}>
+                <Ic size={16} />
+              </span>
+              <span>{label}</span>
+            </button>
+          ))}
         </div>
       </div>
 

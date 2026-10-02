@@ -1081,7 +1081,7 @@ export function parseSwapError(msg: string, kind: "Swap" | "Bridge" = "Swap"): P
   if (/insufficient funds|insufficient balance/i.test(msg)) {
     return {
       title: "Insufficient Balance",
-      body: msg,
+      body: "Your balance does not cover the amount and the network fees required for this transaction.",
       hint: "Fees and rent count against your balance too, so lower the amount slightly.",
       preSend: true,
     };
@@ -1089,7 +1089,7 @@ export function parseSwapError(msg: string, kind: "Swap" | "Bridge" = "Swap"): P
   if (/price moved|slippage/i.test(msg)) {
     return {
       title: "Price Moved",
-      body: msg,
+      body: "The quote moved outside your slippage setting before it could be submitted.",
       hint: "Markets move fast. Review the refreshed rate and confirm again.",
       preSend: true,
     };
@@ -1097,7 +1097,7 @@ export function parseSwapError(msg: string, kind: "Swap" | "Bridge" = "Swap"): P
   if (/quote expired|blockhash/i.test(msg)) {
     return {
       title: "Quote Expired",
-      body: msg,
+      body: "This quote is no longer current and cannot be submitted safely.",
       hint: "Re-enter the amount to fetch a fresh quote.",
       preSend: true,
     };
@@ -1105,7 +1105,7 @@ export function parseSwapError(msg: string, kind: "Swap" | "Bridge" = "Swap"): P
   if (/simulation failed/i.test(msg)) {
     return {
       title: "Transaction Blocked",
-      body: msg,
+      body: "The transaction did not pass the network's pre-flight check.",
       hint: "The pre-flight check stops anything that would fail on-chain before it can cost you fees.",
       preSend: true,
     };
@@ -1113,7 +1113,7 @@ export function parseSwapError(msg: string, kind: "Swap" | "Bridge" = "Swap"): P
   if (/no .*routes? found|no jupiter route|bridge not supported/i.test(msg)) {
     return {
       title: "No Route Found",
-      body: msg,
+      body: "No supported route is available for this token pair and amount right now.",
       hint: "Try a different amount, token pair, or chain.",
       preSend: true,
     };
@@ -1121,7 +1121,7 @@ export function parseSwapError(msg: string, kind: "Swap" | "Bridge" = "Swap"): P
   if (/blocked for safety/i.test(msg)) {
     return {
       title: "Blocked for Safety",
-      body: msg,
+      body: "NumPay rejected the route because its transaction details did not match the quote.",
       hint: "The aggregator response failed a local security check, so it was never signed.",
       preSend: true,
     };
@@ -1129,7 +1129,7 @@ export function parseSwapError(msg: string, kind: "Swap" | "Bridge" = "Swap"): P
   // ethers "could not coalesce error" dumps the whole raw tx + RPC payload into
   // the message when a node returns a nonstandard error (dRPC wraps rejections
   // as code 19 "Temporary internal error"). Never show that blob to the user.
-  if (/could not coalesce error|temporary internal error/i.test(msg)) {
+  if (/could not coalesce error|temporary internal error|jsonrpc|payload\s*[=:]|transaction\s*[=:]|trace-id|0x[0-9a-f]{96,}/i.test(msg)) {
     return {
       title: "Network Node Error",
       body: "The network node reported a temporary error while broadcasting the transaction. This is usually a node-side hiccup, not a problem with the transaction itself.",
@@ -1137,5 +1137,12 @@ export function parseSwapError(msg: string, kind: "Swap" | "Bridge" = "Swap"): P
       preSend: false,
     };
   }
-  return { title: `${kind} Failed`, body: msg, preSend: false };
+  const cleaned = msg.replace(/^error:\s*/i, "").replace(/\s+/g, " ").trim();
+  const readable = cleaned.length > 0 && cleaned.length <= 180 && !/[{}\[\]]/.test(cleaned);
+  return {
+    title: `${kind} Could Not Be Completed`,
+    body: readable ? cleaned : "The provider could not complete this request. No technical transaction data is shown here for your security.",
+    hint: "Check Activity and your balance before retrying. If nothing appears, wait a moment and request a fresh route.",
+    preSend: false,
+  };
 }

@@ -147,12 +147,17 @@ async function fetchAlchemyERC20s(chainId: string, address: string): Promise<Aut
     });
     if (nonZero.length === 0) return [];
 
-    // Provider for on-chain metadata fallback (Alchemy URL also serves eth_call)
-    const provider = new ethers.JsonRpcProvider(url);
+    // Provider for on-chain metadata fallback (Alchemy URL also serves eth_call).
+    // The chain is already known, so do not start ethers' perpetual network-
+    // detection retry loop when a phone briefly loses connectivity.
+    const provider = new ethers.JsonRpcProvider(
+      url, NETWORKS[chainId].chainId, { staticNetwork: true },
+    );
 
-    // Parallel metadata fetch for all non-zero tokens (cap 80)
-    const results = await Promise.all(nonZero.slice(0, 80).map(async (b) => {
-      try {
+    try {
+      // Parallel metadata fetch for all non-zero tokens (cap 80)
+      const results = await Promise.all(nonZero.slice(0, 80).map(async (b) => {
+        try {
         const metaResp = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -201,10 +206,13 @@ async function fetchAlchemyERC20s(chainId: string, address: string): Promise<Aut
           balance,
           logo,
         } as AutoToken;
-      } catch { return null; }
-    }));
+        } catch { return null; }
+      }));
 
-    return results.filter((t): t is AutoToken => t !== null);
+      return results.filter((t): t is AutoToken => t !== null);
+    } finally {
+      provider.destroy?.();
+    }
   } catch (e) {
     console.warn(`[NumPay] Alchemy ${chainId}: token fetch failed`, e);
     return null;
@@ -314,13 +322,14 @@ async function fetchProxyERC20s(chainId: string, address: string): Promise<AutoT
  * Build a networkId → RPC map for all chains that have DEFAULT_TOKENS.
  * Includes Alchemy chains so this acts as a guaranteed fallback when Alchemy 403s.
  */
-function buildChainRpcMap(): Record<string, { rpc: string; tokens: typeof DEFAULT_TOKENS[number]; mc3: string }> {
-  const map: Record<string, { rpc: string; tokens: typeof DEFAULT_TOKENS[number]; mc3: string }> = {};
+function buildChainRpcMap(): Record<string, { rpc: string; chainId: number; tokens: typeof DEFAULT_TOKENS[number]; mc3: string }> {
+  const map: Record<string, { rpc: string; chainId: number; tokens: typeof DEFAULT_TOKENS[number]; mc3: string }> = {};
   for (const [networkId, net] of Object.entries(NETWORKS)) {
     const tokens = DEFAULT_TOKENS[net.chainId];
     if (tokens && tokens.length > 0) {
       map[networkId] = {
         rpc: net.rpcUrl,
+        chainId: net.chainId,
         tokens,
         mc3: networkId === "zksync" ? MC3_ZKSYNC : MC3_ADDR,
       };
@@ -350,9 +359,9 @@ async function sweepTokensByRPC(
   const resolvedChains = new Map<string, RpcChainReads>();
 
   await Promise.all(
-    Object.entries(chainMap).map(async ([networkId, { rpc, tokens, mc3 }]) => {
+    Object.entries(chainMap).map(async ([networkId, { rpc, chainId, tokens, mc3 }]) => {
+      const provider = new ethers.JsonRpcProvider(rpc, chainId, { staticNetwork: true });
       try {
-        const provider = new ethers.JsonRpcProvider(rpc);
         const found: AutoToken[] = [];
         const reads: RpcChainReads = { read: new Set(), held: new Set() };
 
@@ -441,6 +450,10 @@ async function sweepTokensByRPC(
         if (found.length > 0) onUpdate(networkId, found);
       } catch (e) {
         console.warn(`[NumPay] RPC sweep ${networkId} failed`, e);
+      } finally {
+        // These providers are one-shot sweep workers. Without destroy(), every
+        // unreachable RPC leaves a retrying timer behind on the JS thread.
+        provider.destroy?.();
       }
     }),
   );

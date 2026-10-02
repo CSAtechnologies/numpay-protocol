@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, BackHandler, Keyboard, Pressable, ScrollView,
+  ActivityIndicator, BackHandler, Keyboard, ScrollView,
   StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { WebView, type WebViewNavigation } from "react-native-webview";
@@ -596,14 +596,16 @@ function StartPage({ recents, onOpen, onForget }: {
       <SectionLabel text="Popular dApps" />
       <View style={st.grid}>
         {SHORTCUTS.map((s) => (
-          <Pressable
+          <Tappable
             key={s.url}
             onPress={() => onOpen(s.url)}
-            style={({ pressed }) => [st.tile, pressed && { borderColor: colors.brand }]}
+            feedback="tile"
+            borderRadius={radius.tile}
+            style={st.tile}
           >
             <GlobeIcon size={15} color={colors.muted} />
             <Text style={st.tileLabel} numberOfLines={1}>{s.name}</Text>
-          </Pressable>
+          </Tappable>
         ))}
       </View>
 

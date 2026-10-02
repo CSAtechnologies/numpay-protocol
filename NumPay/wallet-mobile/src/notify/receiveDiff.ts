@@ -21,11 +21,21 @@ export interface ReceiveDiff {
   nextSnapshot: Record<string, number>;
 }
 
+export interface ReceiveDiffOptions {
+  /**
+   * Treat a positive, first-seen asset as an incoming deposit. Callers enable
+   * this only after they have stored a complete baseline; the first watcher
+   * pass must never notify for funds that were already in the wallet.
+   */
+  notifyFirstSeen?: boolean;
+}
+
 /**
  * Compare fresh readings against the stored snapshot.
- * - First sighting of a chain (or no snapshot at all) is a BASELINE: stored,
- *   never notified — otherwise the first run after install would "notify"
- *   every existing balance.
+ * - With no snapshot, every reading is a silent BASELINE — otherwise the first
+ *   run after install would "notify" every existing balance.
+ * - A later first-seen asset is normally a baseline too; token-aware callers
+ *   may opt into notifying it after a complete baseline has been stored.
  * - Growth beyond RECEIVE_EPS notifies and updates the snapshot.
  * - A positive-but-lower reading is a spend: accepted silently.
  * - A ~0 reading over a positive snapshot is ignored (see module comment).
@@ -34,8 +44,10 @@ export interface ReceiveDiff {
 export function computeReceiveDiff(
   prev: Record<string, number> | null,
   readings: Record<string, number>,
+  options: ReceiveDiffOptions = {},
 ): ReceiveDiff {
   const base = prev ?? {};
+  const hasBaseline = prev !== null;
   const nextSnapshot: Record<string, number> = { ...base };
   const increased: string[] = [];
 
@@ -43,7 +55,8 @@ export function computeReceiveDiff(
     if (typeof val !== "number" || !Number.isFinite(val) || val < 0) continue;
     const before = base[chain];
     if (before === undefined) {
-      nextSnapshot[chain] = val; // baseline
+      nextSnapshot[chain] = val;
+      if (hasBaseline && options.notifyFirstSeen && val > RECEIVE_EPS) increased.push(chain);
       continue;
     }
     if (val > before + RECEIVE_EPS) {

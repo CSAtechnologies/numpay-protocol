@@ -45,26 +45,32 @@ export function looksLikeTokenAddress(raw: string): boolean {
 }
 
 export async function detectEvmToken(
-  rpcUrl: string, address: string, owner?: string,
+  rpcUrl: string, address: string, owner?: string, chainId?: number,
 ): Promise<TokenPreview> {
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
-  const contract = new ethers.Contract(address, ERC20_ABI, provider);
-  const [symbol, name, decimals] = await Promise.all([
-    contract.symbol(), contract.name(), contract.decimals(),
-  ]);
-  const dec = Number(decimals);
-  const out: TokenPreview = {
-    symbol: String(symbol).trim(), name: String(name).trim(), decimals: dec,
-  };
-  if (owner) {
-    // A missing balance must not sink the import: the metadata read already
-    // proved the contract, and a token you hold zero of is still importable.
-    try {
-      const raw = (await contract.balanceOf(owner)) as bigint;
-      out.balance = ethers.formatUnits(raw, dec);
-    } catch { /* leave undefined */ }
+  const provider = chainId === undefined
+    ? new ethers.JsonRpcProvider(rpcUrl)
+    : new ethers.JsonRpcProvider(rpcUrl, chainId, { staticNetwork: true });
+  try {
+    const contract = new ethers.Contract(address, ERC20_ABI, provider);
+    const [symbol, name, decimals] = await Promise.all([
+      contract.symbol(), contract.name(), contract.decimals(),
+    ]);
+    const dec = Number(decimals);
+    const out: TokenPreview = {
+      symbol: String(symbol).trim(), name: String(name).trim(), decimals: dec,
+    };
+    if (owner) {
+      // A missing balance must not sink the import: the metadata read already
+      // proved the contract, and a token you hold zero of is still importable.
+      try {
+        const raw = (await contract.balanceOf(owner)) as bigint;
+        out.balance = ethers.formatUnits(raw, dec);
+      } catch { /* leave undefined */ }
+    }
+    return out;
+  } finally {
+    provider.destroy?.();
   }
-  return out;
 }
 
 export async function detectSolanaToken(mint: string, owner?: string): Promise<TokenPreview> {
@@ -121,9 +127,9 @@ export async function detectToken(
   opts: { evmAddress?: string; solanaAddress?: string; customNets?: Record<string, Network> } = {},
 ): Promise<TokenPreview> {
   if (chainId === "solana") return detectSolanaToken(address, opts.solanaAddress);
-  const rpcUrl = NETWORKS[chainId]?.rpcUrl ?? opts.customNets?.[chainId]?.rpcUrl;
-  if (!rpcUrl) throw new Error("No RPC for this chain.");
-  return detectEvmToken(rpcUrl, address, opts.evmAddress);
+  const net = NETWORKS[chainId] ?? opts.customNets?.[chainId];
+  if (!net) throw new Error("No RPC for this chain.");
+  return detectEvmToken(net.rpcUrl, address, opts.evmAddress, net.chainId);
 }
 
 /** ethers' revert noise is unreadable; the common case by far is "right

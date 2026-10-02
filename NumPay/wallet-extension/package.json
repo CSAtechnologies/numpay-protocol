@@ -2,14 +2,16 @@
   "name": "numpay-wallet",
   "version": "0.1.0",
   "private": true,
-  "description": "NumPay — Multi-chain crypto wallet with BPAN support",
+  "description": "NumPay \u00e2\u20ac\u201d Multi-chain crypto wallet with BPAN support",
   "scripts": {
     "dev": "vite build --watch",
     "build": "tsc && vite build && vite build -c vite.config.inpage.ts && vite build -c vite.config.inpage-evm.ts && vite build -c vite.config.content.ts",
     "preview": "vite preview",
     "test:vectors": "node test/verify-address-vectors.mjs",
     "test:dapp": "node test/dapp-adversarial.mjs",
-    "test": "node test/verify-address-vectors.mjs && node test/dapp-adversarial.mjs"
+    "test": "node test/verify-address-vectors.mjs && node test/dapp-adversarial.mjs && node test/bpan-base.mjs && node test/bpan-ui.mjs && node test/notice-errors.mjs",
+    "test:bpan": "node test/bpan-base.mjs",
+    "test:ui": "node test/bpan-ui.mjs"
   },
   "dependencies": {
     "@bonfida/spl-name-service": "^3.0.23",

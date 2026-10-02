@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
 import { useCurrency } from "../hooks/useCurrency";
 import Layout from "../components/Layout";
+import AlertCard, { InlineNotice } from "../components/AlertCard";
 import {
   ArrowLeftIcon, SendIcon, ReceiveIcon, ExternalLinkIcon,
   TrendingUpIcon, AssetIcon, RefreshIcon, SwapIcon,
@@ -322,22 +323,13 @@ export default function TokenDetail() {
         if (risks.length === 0) return null;
         return (
           <div className="px-4 mb-3">
-            <div
-              className="rounded-xl px-3 py-2.5 flex gap-2.5"
-              style={{ border: "1px solid rgba(245,158,11,0.4)", background: "rgba(245,158,11,0.10)" }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="flex-shrink-0 mt-0.5" style={{ color: "#f59e0b" }}>
-                <path d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"
-                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              <div className="min-w-0">
-                <p className="text-[12px] font-semibold" style={{ color: "#f59e0b" }}>Caution: this token has risk signals</p>
-                <ul className="text-[11px] text-muted mt-0.5 list-disc pl-4">
-                  {risks.map((r) => <li key={r}>{r}</li>)}
-                </ul>
-                <p className="text-[10px] text-muted mt-1">Scam tokens can mimic real ones. Verify the contract before sending or swapping.</p>
-              </div>
-            </div>
+            <AlertCard
+              title="Review this token"
+              body={risks.join(". ") + "."}
+              hint="Verify the contract address before sending or swapping. Scam tokens can copy a trusted name and symbol."
+              tone="amber"
+              className="mb-0"
+            />
           </div>
         );
       })()}
@@ -473,21 +465,14 @@ export default function TokenDetail() {
             {unwrapping ? "Unwrapping…" : "Unwrap to SOL"}
           </button>
           {unwrapMsg && (
-            <div
-              className="mt-2 rounded-xl px-3 py-2.5 text-[11px]"
-              style={{
-                border: unwrapMsg.ok ? "1px solid rgba(34,197,94,0.35)" : "1px solid rgba(239,68,68,0.35)",
-                background: unwrapMsg.ok ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
-                color: unwrapMsg.ok ? "#4ade80" : "#f87171",
-              }}
-            >
-              <p>{unwrapMsg.text}</p>
+            <div className="mt-2">
+              <InlineNotice message={unwrapMsg.text} tone={unwrapMsg.ok ? "success" : "danger"} />
               {unwrapMsg.ok && unwrapMsg.sig && (
                 <a
                   href={explorerTxUrl("solana", unwrapMsg.sig)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 mt-1 text-brand-400 hover:underline"
+                  className="inline-flex items-center gap-1 mt-1.5 ml-[25px] text-[10.5px] text-brand-400 hover:underline"
                 >
                   View transaction <ExternalLinkIcon size={11} />
                 </a>

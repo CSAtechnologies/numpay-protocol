@@ -8,32 +8,32 @@
 // produced nothing until the whole screen cut to the next one. Two things fix
 // that: the active pill SLIDES between tabs instead of teleporting, and each
 // tab answers the finger while it is still down.
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AccessibilityInfo, Animated, Easing, Pressable, Text, View,
+  Animated, Easing, Pressable, Text,
 } from "react-native";
-import { colors, elevation, motion, press, themedStyles } from "./theme";
+import { colors, motion, press, themedStyles } from "./theme";
+import { useReducedMotion } from "./useReducedMotion";
 import {
-  NavActivityIcon, NavBpanIcon, NavReceiveIcon, NavSendIcon,
+  NavActivityIcon, NavBpanIcon, NavSendIcon,
   NavSettingsIcon, NavWalletIcon,
 } from "./icons";
 
-export type NavTab = "home" | "send" | "receive" | "bpan" | "activity" | "settings";
+export type NavTab = "home" | "send" | "bpan" | "activity" | "settings";
 
 const ITEMS: Array<{
   tab: NavTab;
   label: string;
   Icon: typeof NavWalletIcon;
 }> = [
-  { tab: "home", label: "WALLET", Icon: NavWalletIcon },
-  { tab: "send", label: "SEND", Icon: NavSendIcon },
-  { tab: "receive", label: "RECEIVE", Icon: NavReceiveIcon },
+  { tab: "home", label: "Wallet", Icon: NavWalletIcon },
+  { tab: "send", label: "Pay", Icon: NavSendIcon },
   { tab: "bpan", label: "BPAN", Icon: NavBpanIcon },
-  { tab: "activity", label: "ACTIVITY", Icon: NavActivityIcon },
-  { tab: "settings", label: "SETTINGS", Icon: NavSettingsIcon },
+  { tab: "activity", label: "Activity", Icon: NavActivityIcon },
+  { tab: "settings", label: "Settings", Icon: NavSettingsIcon },
 ];
 
-export const BOTTOM_NAV_CLEARANCE = 80; // nav height + gap the content must clear
+export const BOTTOM_NAV_CLEARANCE = 72;
 
 /** One tab. Owns its own press value so pressing one tab does not re-render
  *  the other five. */
@@ -45,8 +45,10 @@ function NavItem({
   isActive: boolean;
   onPress: () => void;
 }) {
+  const reduceMotion = useReducedMotion();
   const a = useRef(new Animated.Value(0)).current;
   const drive = (to: number) => {
+    if (reduceMotion) return;
     Animated.timing(a, {
       toValue: to, duration: motion.press,
       easing: Easing.out(Easing.quad), useNativeDriver: true,
@@ -80,30 +82,26 @@ function NavItem({
   );
 }
 
-export function BottomNav({ active, onNavigate }: {
+export function BottomNav({ active, onNavigate, visible = true }: {
   active: NavTab;
   onNavigate: (tab: NavTab) => void;
+  visible?: boolean;
 }) {
   // -1 (the nav is visible on a screen that is not itself a tab) would throw
   // the pill off the left edge, so it falls back to the first slot.
   const found = ITEMS.findIndex((i) => i.tab === active);
   const index = found === -1 ? 0 : found;
 
-  // The pill's position animates as a tab INDEX and interpolates to a
-  // percentage, not to a pixel offset. The bar is a flex row spanning the
-  // display minus 12dp a side, so it has no width this file can know; a
-  // percentage survives rotation and any display size.
+  // The pill's position animates as a tab index. Once the bar is measured the
+  // index is multiplied by one slot width and applied as a native transform;
+  // this survives rotation without putting every animation frame on JS.
   const slide = useRef(new Animated.Value(index)).current;
-  const reduceMotion = useRef(false);
+  const reveal = useRef(new Animated.Value(visible ? 1 : 0)).current;
+  const reduceMotion = useReducedMotion();
+  const [barWidth, setBarWidth] = useState(0);
 
   useEffect(() => {
-    AccessibilityInfo.isReduceMotionEnabled()
-      .then((on) => { reduceMotion.current = on; })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (reduceMotion.current) {
+    if (reduceMotion) {
       slide.setValue(index);
       return;
     }
@@ -115,25 +113,69 @@ export function BottomNav({ active, onNavigate }: {
       // A pill that shoots past a tab and comes back reads as sloppy over this
       // short a travel, where a full-height sheet has the distance to carry it.
       overshootClamping: true,
-      // Percentage strings cannot go through the native driver.
-      useNativeDriver: false,
+      useNativeDriver: true,
     }).start();
-  }, [index, slide]);
+  }, [index, reduceMotion, slide]);
+
+  useEffect(() => {
+    if (reduceMotion) {
+      reveal.setValue(visible ? 1 : 0);
+      return;
+    }
+    Animated.timing(reveal, {
+      toValue: visible ? 1 : 0,
+      duration: visible ? motion.screen : motion.exit,
+      easing: visible ? Easing.out(Easing.cubic) : Easing.in(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, [reduceMotion, reveal, visible]);
+
+  const slotWidth = barWidth / ITEMS.length;
+  const indicatorWidth = 28;
+  // Animated.add/multiply create native graph nodes. Rebuilding that graph on
+  // every parent render can detach an input while Android is still processing
+  // a frame, which React Native reports as an illegal animated node ID. The
+  // graph only depends on the measured bar width and the stable slide value.
+  const indicatorTranslateX = useMemo(() => (
+    barWidth > 0
+      ? Animated.add(
+          Animated.multiply(slide, slotWidth),
+          Math.max(0, (slotWidth - indicatorWidth) / 2),
+        )
+      : null
+  ), [barWidth, slide, slotWidth]);
 
   return (
-    <View style={st.bar} accessibilityRole="tablist">
-      <Animated.View
-        pointerEvents="none"
-        style={[
-          st.activePill,
-          {
-            left: slide.interpolate({
-              inputRange: ITEMS.map((_, i) => i),
-              outputRange: ITEMS.map((_, i) => `${(i * 100) / ITEMS.length}%`),
-            }),
-          },
-        ]}
-      />
+    <Animated.View
+      style={[
+        st.bar,
+        {
+          opacity: reveal,
+          transform: [{
+            translateY: reveal.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }),
+          }],
+        },
+      ]}
+      pointerEvents={visible ? "auto" : "none"}
+      accessibilityElementsHidden={!visible}
+      importantForAccessibility={visible ? "auto" : "no-hide-descendants"}
+      accessibilityRole="tablist"
+      onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}
+    >
+      {indicatorTranslateX && (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            st.activePill,
+            {
+              width: indicatorWidth,
+              transform: [{
+                translateX: indicatorTranslateX,
+              }],
+            },
+          ]}
+        />
+      )}
       {ITEMS.map(({ tab, label, Icon }) => (
         <NavItem
           key={tab}
@@ -143,26 +185,22 @@ export function BottomNav({ active, onNavigate }: {
           onPress={() => onNavigate(tab)}
         />
       ))}
-    </View>
+    </Animated.View>
   );
 }
 
 const st = themedStyles((colors) => ({
   bar: {
     position: "absolute",
-    bottom: 12, left: 12, right: 12,
-    height: 56,
-    borderRadius: 20,
+    bottom: 0, left: 0, right: 0,
+    height: 68,
+    paddingBottom: 8,
     backgroundColor: colors.navBg,
-    borderWidth: 1,
+    borderTopWidth: 1,
     borderColor: colors.navBorder,
     flexDirection: "row",
     alignItems: "center",
     overflow: "hidden",
-    // Was a hand-written shadow whose own comment noted that 0.6 reads as a
-    // smudge on a light background. That reasoning now lives in the elevation
-    // tokens, which apply it to every floating surface rather than just here.
-    ...elevation.floating,
     zIndex: 8,
   },
   item: {
@@ -174,23 +212,18 @@ const st = themedStyles((colors) => ({
   },
   activePill: {
     position: "absolute",
-    // One slot wide, inset 5dp a side so consecutive pills never touch.
-    // `left` is ANIMATED in the component and deliberately not set here.
-    width: `${100 / ITEMS.length}%`,
-    top: 6, bottom: 6,
-    marginLeft: 5,
-    marginRight: 5,
-    borderRadius: 16,
-    backgroundColor: colors.brandTint,
-    borderWidth: 1,
-    borderColor: colors.navBorder,
+    left: 0,
+    top: 0, height: 3,
+    borderBottomLeftRadius: 3,
+    borderBottomRightRadius: 3,
+    backgroundColor: colors.brand,
   },
   label: {
     // 8.5 was the popup's caption size: legible at desk distance on a 360px
     // panel, not on a phone at arm's length.
-    fontSize: 9.5,
+    fontSize: 10,
     fontWeight: "600",
-    letterSpacing: 0.7,
+    letterSpacing: 0,
     color: colors.muted,
   },
 }));

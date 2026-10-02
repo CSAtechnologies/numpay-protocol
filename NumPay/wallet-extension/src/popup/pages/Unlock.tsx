@@ -2,6 +2,7 @@ import { useState } from "react";
 import { decryptAllVaults, getActiveId } from "@numpay/core/wallet";
 import { cacheUnlockedWallets } from "../hooks/useWallet";
 import AnimatedLogo from "../components/AnimatedLogo";
+import { InlineNotice } from "../components/AlertCard";
 
 interface Props {
   onUnlock: () => void;
@@ -26,7 +27,7 @@ export default function Unlock({ onUnlock }: Props) {
       await cacheUnlockedWallets(all.map((w) => ({ id: w.id, wallet: w.wallet })), activeId);
       onUnlock();
     } catch {
-      setError("Incorrect password, try again");
+      setError("That password did not unlock this wallet. Try again.");
     } finally {
       setLoading(false);
     }
@@ -82,11 +83,7 @@ export default function Unlock({ onUnlock }: Props) {
             autoFocus
           />
 
-          {error && (
-            <p className="text-[12px] mb-3 animate-fade-in" style={{ color: "#ef4444" }}>
-              {error}
-            </p>
-          )}
+          {error && <InlineNotice message={error} className="mb-3" />}
 
           <button
             onClick={handleUnlock}
